@@ -55,6 +55,16 @@ node dist/launcher.js
 
 If `DATABASE_URL` is unset, the launcher tries to ensure a local Docker-backed PostgreSQL instance is available first. If Docker is not available, startup fails with a user-facing message that tells the user to start Docker Desktop or set `DATABASE_URL`.
 
+Literal first-run flow:
+
+```bash
+git clone https://github.com/kyle-mirich/horizonlayer.git
+cd horizonlayer
+npm ci
+npm run build
+codex mcp add horizondb -- node "$(pwd)/dist/launcher.js"
+```
+
 ### Local HTTP server
 
 Use this when you want a long-running endpoint at `http://127.0.0.1:3000/mcp`:
@@ -68,6 +78,15 @@ Or:
 ```bash
 make db-up
 make dev
+```
+
+Literal first-run flow:
+
+```bash
+git clone https://github.com/kyle-mirich/horizonlayer.git
+cd horizonlayer
+npm ci
+docker compose up --build
 ```
 
 ## 1. Create the application secrets

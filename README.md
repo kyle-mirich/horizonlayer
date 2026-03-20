@@ -59,6 +59,58 @@ For most users, `stdio` is the easiest place to start. The launcher can automati
 make install
 ```
 
+## Full User Flow
+
+### Codex + stdio from a fresh clone
+
+If you want the literal first-run path, use this sequence:
+
+```bash
+git clone https://github.com/kyle-mirich/horizonlayer.git
+cd horizonlayer
+npm ci
+npm run build
+codex mcp add horizondb -- node "$(pwd)/dist/launcher.js"
+```
+
+Then start Codex and use the `horizondb` MCP server. On first launch, the launcher will:
+
+1. use `DATABASE_URL` if you provided one
+2. otherwise check for local PostgreSQL
+3. otherwise start a Docker `pgvector/pgvector:pg17` container
+4. create the `horizon_layer` database if needed
+5. run migrations
+6. start the MCP server over `stdio`
+
+If Docker Desktop is closed, startup fails with a message telling you to start Docker Desktop or set `DATABASE_URL`.
+
+### Claude + stdio from a fresh clone
+
+```bash
+git clone https://github.com/kyle-mirich/horizonlayer.git
+cd horizonlayer
+npm ci
+npm run build
+claude mcp add -s user horizondb -- node "$(pwd)/dist/launcher.js"
+```
+
+### Full local HTTP flow from a fresh clone
+
+Use this when you want a long-running endpoint at `http://127.0.0.1:3000/mcp` instead of `stdio`:
+
+```bash
+git clone https://github.com/kyle-mirich/horizonlayer.git
+cd horizonlayer
+npm ci
+docker compose up --build
+```
+
+Then point your MCP client at:
+
+```text
+http://127.0.0.1:3000/mcp
+```
+
 ### Option A: One-command local stdio
 
 Build the project once, then use the launcher:
