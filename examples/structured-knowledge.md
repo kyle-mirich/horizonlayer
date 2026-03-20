@@ -6,7 +6,7 @@ This example shows how to use `database`, `row`, and `search` together to build 
 
 ## 1. Create a typed database
 
-Databases have named, typed properties (columns). Supported types: `text`, `number`, `date`, `bool`, `json`.
+Databases have named, typed properties (columns). Common property types include `title`, `text`, `number`, `date`, `checkbox`, `select`, `multi_select`, `url`, `email`, `phone`, `relation`, and `files`.
 
 ```json
 {

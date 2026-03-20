@@ -3,7 +3,7 @@ APP_BASE_URL ?= http://127.0.0.1:3000
 HOST ?= 127.0.0.1
 PORT ?= 3000
 
-.PHONY: install db-up db-down db-reset dev dev-http dev-stdio build typecheck lint test verify smoke-live docker-up docker-down codex-mcp claude-mcp
+.PHONY: install db-up db-down db-reset dev dev-http dev-stdio build typecheck lint test verify smoke-live smoke-local docker-up docker-down codex-mcp claude-mcp
 
 install:
 	npm ci
@@ -43,6 +43,9 @@ verify:
 
 smoke-live:
 	npm run test:smoke:live
+
+smoke-local:
+	npm run test:smoke:local
 
 docker-up:
 	docker compose up --build

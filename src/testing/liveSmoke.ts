@@ -334,6 +334,15 @@ async function main(): Promise<void> {
       },
     });
 
+    const taskReclaim = await callTool(client, 'task', {
+      action: 'claim',
+      agent_name: 'agent-b',
+      id: taskPrimaryId,
+      lease_seconds: 300,
+      session_id: sessionId,
+      workspace_id: workspaceId,
+    });
+
     const runStart = await callTool(client, 'run', {
       action: 'start',
       agent_name: 'agent-b',
@@ -396,6 +405,15 @@ async function main(): Promise<void> {
     });
     const taskFailRecord = asRecord(taskFailCreate.result, 'task/create fail result was not an object');
     taskFailId = getString(taskFailRecord, 'id');
+
+    const taskFailClaim = await callTool(client, 'task', {
+      action: 'claim',
+      agent_name: 'agent-c',
+      id: taskFailId,
+      lease_seconds: 300,
+      session_id: sessionId,
+      workspace_id: workspaceId,
+    });
 
     const taskFail = await callTool(client, 'task', {
       action: 'fail',
@@ -695,6 +713,7 @@ async function main(): Promise<void> {
       claim: taskClaim.result,
       complete: taskComplete.result,
       create: taskCreateRecord,
+      fail_claim: taskFailClaim.result,
       fail: taskFail.result,
       get: taskGet.result,
       handoff: taskHandoff.result,
@@ -702,6 +721,7 @@ async function main(): Promise<void> {
       inbox_ack: inboxAck.result,
       inbox_list_count: inboxItems.length,
       list_count: asArray(taskList.result, 'task/list result was not an array').length,
+      reclaim: taskReclaim.result,
     };
     summary.run = {
       cancel: runCancel.result,

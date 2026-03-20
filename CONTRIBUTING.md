@@ -35,6 +35,12 @@ Unit tests (no database required):
 make test
 ```
 
+Repo verification:
+
+```bash
+npm run verify
+```
+
 Live smoke test (requires a running server):
 
 ```bash
@@ -44,6 +50,14 @@ make smoke-live
 ```
 
 `smoke-live` exercises every MCP tool action once against the running server. Set `MCP_URL` to override the default `http://127.0.0.1:3000/mcp`.
+
+One-command local smoke flow:
+
+```bash
+make smoke-local
+```
+
+`smoke-local` starts Docker Postgres, launches the local HTTP server, waits for readiness, runs `smoke-live`, then stops the database container.
 
 ## Code conventions
 

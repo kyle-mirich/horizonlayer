@@ -19,7 +19,7 @@ A workspace is the top-level container. Create one per project or investigation.
 }
 ```
 
-Response: `{ "ok": true, "action": "create", "result": { "id": "ws-uuid", "name": "Auth incident 2026-03-13", ... } }`
+Response: `{ "ok": true, "action": "create", "result": { "id": "ws-uuid", "name": "Ingestion incident 2026-03-13", ... } }`
 
 ---
 
