@@ -57,6 +57,90 @@ For most users, `stdio` is the easiest place to start. The launcher can automati
 
 You only need one MCP client. Pick the one you already use:
 
+### By platform
+
+#### macOS
+
+- Node.js: [Download from nodejs.org](https://nodejs.org/en/download/)
+- Docker: [Docker Desktop for Mac](https://docs.docker.com/desktop/setup/install/mac-install/)
+- Codex CLI:
+
+```bash
+npm install -g @openai/codex
+codex
+```
+
+- Claude Code:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude
+```
+
+Native installer alternative from Anthropic:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+- Claude Desktop: [Install Claude Desktop for macOS](https://support.anthropic.com/en/articles/10065433-installing-claude-for-desktop)
+
+#### Windows
+
+- Node.js: [Download from nodejs.org](https://nodejs.org/en/download/)
+- Docker: [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/)
+- Codex CLI:
+
+```powershell
+npm install -g @openai/codex
+codex
+```
+
+OpenAI's Codex CLI docs currently describe Windows support as experimental and recommend WSL for the best experience.
+
+- Claude Code:
+
+```powershell
+npm install -g @anthropic-ai/claude-code
+claude
+```
+
+Native installer alternative from Anthropic:
+
+```powershell
+irm https://claude.ai/install.ps1 | iex
+```
+
+- Claude Desktop: [Install Claude Desktop for Windows](https://support.anthropic.com/en/articles/10065433-installing-claude-for-desktop)
+
+#### Linux
+
+- Node.js: [Download from nodejs.org](https://nodejs.org/en/download/)
+- Docker:
+  - [Docker Desktop for Linux](https://docs.docker.com/desktop/setup/install/linux/)
+  - [Docker Engine install guides](https://docs.docker.com/engine/install/)
+- Codex CLI:
+
+```bash
+npm install -g @openai/codex
+codex
+```
+
+- Claude Code:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude
+```
+
+Native installer alternative from Anthropic:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+- Claude Desktop: Anthropic's current install docs list macOS and Windows only, so on Linux the practical Anthropic path today is Claude Code.
+
 ### Codex CLI
 
 Official install docs: [OpenAI Codex CLI](https://developers.openai.com/codex/cli)
