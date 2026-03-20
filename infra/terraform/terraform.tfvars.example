@@ -1,0 +1,23 @@
+aws_region   = "us-west-2"
+environment  = "prod"
+app_image_tag = "2026-03-12"
+
+# Leave null for an HTTP-only ALB using the generated DNS name.
+public_base_url = null
+certificate_arn = null
+
+sso_client_id                 = "your-oidc-client-id"
+sso_client_secret_secret_arn  = "arn:aws:secretsmanager:us-west-2:123456789012:secret:horizonsdb/prod/sso-client-secret"
+sso_issuer_url                = "https://accounts.google.com"
+sso_allowed_domains           = ["example.com"]
+cookie_secret_secret_arn      = "arn:aws:secretsmanager:us-west-2:123456789012:secret:horizonsdb/prod/cookie-secret"
+encryption_key_secret_arn     = "arn:aws:secretsmanager:us-west-2:123456789012:secret:horizonsdb/prod/encryption-key"
+control_plane_callback_token_secret_arn = null
+
+billing_enabled                    = false
+stripe_price_id                    = null
+stripe_secret_key_secret_arn       = null
+stripe_webhook_secret_secret_arn   = null
+
+allowed_hosts = []
+

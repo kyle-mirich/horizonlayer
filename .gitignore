@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.js.map
+config.yaml
+.env.docker
+.tmp/
