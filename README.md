@@ -44,6 +44,21 @@ Or:
 claude mcp add -s user horizondb -- node "$(pwd)/dist/launcher.js"
 ```
 
+## Contributor Shortcuts
+
+If you are changing the repo itself rather than just consuming the MCP server:
+
+```bash
+npm ci
+npm run verify
+make smoke-local
+```
+
+- `npm run verify` runs lint, typecheck, and the unit test suite.
+- `make smoke-local` starts local PostgreSQL, boots the HTTP server, waits for `/healthz`, runs the end-to-end smoke test, then shuts the database back down.
+- [docs/agent-playbook.md](docs/agent-playbook.md) maps the repo structure and the recommended edit/verification flow.
+- [docs/configuration.md](docs/configuration.md) explains config precedence and the local dev env surface.
+
 ```
 ┌─────────────────────────────────────────────┐
 │              MCP Clients                    │

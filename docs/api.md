@@ -121,8 +121,8 @@ Manages pages and their block content within a workspace.
 | `id` | uuid | for get/update/delete | — | Page ID |
 | `page_id` | uuid | for append_blocks/append_text | — | Target page ID |
 | `block_id` | uuid | for block_update/block_delete | — | Block ID |
-| `workspace_id` | uuid | for create/list | — | Workspace scope |
-| `session_id` | uuid | no | — | Session scope for create/list |
+| `workspace_id` | uuid | for create/list or journal-style `append_text` | — | Workspace scope |
+| `session_id` | uuid | no | — | Session scope for create/list/get/append actions |
 | `parent_page_id` | uuid | no | — | Parent page for create |
 | `title` | string (max 500) | for create | — | Page title |
 | `content` | string | no | — | Page content (create/append_text) or updated block text (block_update) |
@@ -142,6 +142,10 @@ Manages pages and their block content within a workspace.
 
 ```json
 {"tool":"page","arguments":{"action":"append_text","page_id":"<uuid>","content":"Queued follow-up to drain the ingestion backlog."}}
+```
+
+```json
+{"tool":"page","arguments":{"action":"append_text","workspace_id":"<uuid>","session_id":"<uuid>","title":"Incident journal","content":"Queued follow-up to drain the ingestion backlog."}}
 ```
 
 ---
@@ -179,6 +183,8 @@ Manages structured databases (typed column schemas) within a workspace.
 ```json
 {"tool":"database","arguments":{"action":"create","workspace_id":"<uuid>","name":"Findings","properties":[{"name":"title","type":"text"},{"name":"severity","type":"number"}]}}
 ```
+
+Supported property types: `title`, `text`, `number`, `date`, `checkbox`, `select`, `multi_select`, `url`, `email`, `phone`, `relation`, `files`
 
 ---
 
@@ -293,7 +299,7 @@ cancelled (terminal)
 | `description` | string | no | — | Task description |
 | `priority` | int ≥ 0 | no | — | Task priority |
 | `owner_agent_name` | string (max 255) | no | — | Initial owner for create |
-| `agent_name` | string (max 255) | for claim/heartbeat/ack | — | Acting agent name |
+| `agent_name` | string (max 255) | for claim/heartbeat/complete/fail/ack | — | Acting agent name |
 | `created_by_agent_name` | string (max 255) | no | — | Creator agent name |
 | `target_agent_name` | string (max 255) | no | — | Target for handoff/append_event |
 | `lease_seconds` | int (1–86400) | no | — | Lease duration for claim/heartbeat |
@@ -317,7 +323,7 @@ cancelled (terminal)
 ```
 
 ```json
-{"tool":"task","arguments":{"action":"claim","id":"<uuid>","agent_name":"worker-1","lease_seconds":300}}
+{"tool":"task","arguments":{"action":"claim","workspace_id":"<uuid>","id":"<uuid>","agent_name":"worker-1","lease_seconds":300}}
 ```
 
 ```json
@@ -325,7 +331,7 @@ cancelled (terminal)
 ```
 
 ```json
-{"tool":"task","arguments":{"action":"complete","id":"<uuid>"}}
+{"tool":"task","arguments":{"action":"complete","id":"<uuid>","agent_name":"worker-1"}}
 ```
 
 ---
