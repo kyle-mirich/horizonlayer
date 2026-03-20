@@ -42,14 +42,19 @@ function getString(record: JsonObject, key: string): string {
   return asString(record[key], `Expected ${key} to be a string`);
 }
 
-function parseToolEnvelope(result: unknown): ToolEnvelope {
+function parseToolEnvelope(name: string, result: unknown): ToolEnvelope {
   const response = result as ToolResponseLike;
   const text = response.content?.find((item) => item.type === 'text')?.text;
   if (!text) {
-    throw new Error('Tool result missing text content');
+    throw new Error(`${name} result missing text content`);
   }
 
-  const parsed = JSON.parse(text) as ToolEnvelope;
+  let parsed: ToolEnvelope;
+  try {
+    parsed = JSON.parse(text) as ToolEnvelope;
+  } catch {
+    throw new Error(`${name} returned non-JSON text: ${text}`);
+  }
   if (response.isError && parsed.ok) {
     parsed.ok = false;
   }
@@ -65,7 +70,7 @@ async function callTool(
     name,
     arguments: args,
   });
-  const envelope = parseToolEnvelope(response);
+  const envelope = parseToolEnvelope(name, response);
   if (!envelope.ok) {
     throw new Error(`${name}/${envelope.action} failed: ${envelope.error?.message ?? 'unknown error'}`);
   }
@@ -334,6 +339,15 @@ async function main(): Promise<void> {
       },
     });
 
+    const taskReclaim = await callTool(client, 'task', {
+      action: 'claim',
+      agent_name: 'agent-b',
+      id: taskPrimaryId,
+      lease_seconds: 300,
+      session_id: sessionId,
+      workspace_id: workspaceId,
+    });
+
     const runStart = await callTool(client, 'run', {
       action: 'start',
       agent_name: 'agent-b',
@@ -396,6 +410,15 @@ async function main(): Promise<void> {
     });
     const taskFailRecord = asRecord(taskFailCreate.result, 'task/create fail result was not an object');
     taskFailId = getString(taskFailRecord, 'id');
+
+    const taskFailClaim = await callTool(client, 'task', {
+      action: 'claim',
+      agent_name: 'agent-c',
+      id: taskFailId,
+      lease_seconds: 300,
+      session_id: sessionId,
+      workspace_id: workspaceId,
+    });
 
     const taskFail = await callTool(client, 'task', {
       action: 'fail',
@@ -696,12 +719,14 @@ async function main(): Promise<void> {
       complete: taskComplete.result,
       create: taskCreateRecord,
       fail: taskFail.result,
+      fail_claim: taskFailClaim.result,
       get: taskGet.result,
       handoff: taskHandoff.result,
       heartbeat: taskHeartbeat.result,
       inbox_ack: inboxAck.result,
       inbox_list_count: inboxItems.length,
       list_count: asArray(taskList.result, 'task/list result was not an array').length,
+      reclaim: taskReclaim.result,
     };
     summary.run = {
       cancel: runCancel.result,

@@ -62,6 +62,7 @@ Worker agents claim ready tasks. The lease prevents two agents from grabbing the
   "tool": "task",
   "arguments": {
     "action": "claim",
+    "workspace_id": "ws-uuid",
     "id": "task-a-uuid",
     "agent_name": "worker-1",
     "lease_seconds": 300
@@ -98,7 +99,8 @@ When done, the worker marks the task complete. This unblocks dependent tasks aut
   "tool": "task",
   "arguments": {
     "action": "complete",
-    "id": "task-a-uuid"
+    "id": "task-a-uuid",
+    "agent_name": "worker-1"
   }
 }
 ```
@@ -117,6 +119,7 @@ If the worker can't finish, it hands off to a specific agent. Optionally require
   "arguments": {
     "action": "handoff",
     "id": "task-b-uuid",
+    "agent_name": "worker-1",
     "target_agent_name": "analyst",
     "require_ack": true,
     "payload": { "reason": "Needs domain expertise for anomaly detection" }

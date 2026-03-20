@@ -1,104 +1,97 @@
 # Architecture
 
-Horizon Layer is a single Node.js service with a PostgreSQL backing store.
+Horizon Layer is a single TypeScript service backed by PostgreSQL.
 
-## Runtime shape
+## Runtime Shape
 
-At runtime the system has three major parts:
+There are three main layers:
 
-1. An optional launcher that bootstraps local PostgreSQL for stdio users
-2. The FastMCP server and tool registration layer
-3. The PostgreSQL-backed query and auth layers
+1. A launcher for local stdio users
+2. A FastMCP server and tool registration layer
+3. A PostgreSQL query layer that owns persistence, access control, and search
 
-## Key modules
+## Entrypoints
 
-### Entrypoint
-
+- `src/launcher.ts`
 - `src/index.ts`
 - `src/runServer.ts`
-- `src/launcher.ts`
 
 Responsibilities:
 
-- `src/index.ts`: direct server entrypoint used by dev scripts and HTTP mode
-- `src/runServer.ts`: shared startup path that runs migrations, starts FastMCP, and handles shutdown
-- `src/launcher.ts`: public stdio launcher that can ensure a local Docker-backed PostgreSQL instance before delegating into `runServer()`
+- `src/launcher.ts`: optional bootstrap path for stdio clients; it can start a local Docker-backed Postgres instance when `DATABASE_URL` is not set
+- `src/index.ts`: direct process entrypoint for HTTP or stdio mode when you already control the environment
+- `src/runServer.ts`: shared startup path that runs migrations, starts the MCP server, and handles shutdown
 
-### Server assembly
+## Server Assembly
 
 - `src/server.ts`
+- `src/mcp.ts`
+- `src/config.ts`
 
 Responsibilities:
 
-- create the FastMCP instance
-- apply auth checks
-- register tools
-- apply host allowlist checks for HTTP traffic
+- load YAML and environment configuration
+- assemble the FastMCP server
+- register all 8 tools
+- expose HTTP transport and `/healthz` when running in HTTP mode
 
-### Tool layer
+## Tool Layer
 
 - `src/tools/*.ts`
 
-Each tool follows a similar pattern:
+Each tool:
 
-- validate input with Zod
-- infer or require an action
-- translate tool actions to query-layer calls
-- normalize results into a standard success/error envelope
+- validates inputs with Zod
+- resolves the requested action
+- calls into the query layer
+- returns the standard response envelope
 
-The tools are intentionally consolidated rather than one-file-per-action.
+The tool layer is intentionally thin. SQL and persistence rules stay below it.
 
-### Query layer
+## Query Layer
 
 - `src/db/queries/*.ts`
+- `src/db/client.ts`
+- `src/db/migrate.ts`
+- `src/db/access.ts`
+- `src/db/localUser.ts`
 
 Responsibilities:
 
-- enforce workspace/resource access
-- execute SQL
-- shape records for tool responses
-- maintain embeddings and coordination state
+- run migrations
+- manage the shared Postgres pool
+- enforce access boundaries
+- execute SQL for content, search, tasks, links, and runs
+- shape records returned to the tool layer
 
-This layer is the real application core.
+This is the main application core.
 
-### Auth layer
+## Storage Model
 
-- `src/auth/*.ts`
+The database stores both knowledge and workflow state:
 
-Responsibilities:
+- content: workspaces, pages, blocks, databases, rows, links
+- identity and tenancy: users, organizations, memberships, sessions, identities
+- coordination: tasks, dependencies, acknowledgements, inbox items
+- execution: runs and checkpoints
+- search: pgvector embeddings and full-text indexes
 
-- FastMCP auth provider wiring
-- OIDC user info lookup
-- local user provisioning/upsert
-- session-to-access-context translation
+That shared persistence model is what makes resumable agent workflows possible without separate coordination infrastructure.
 
-## Data model shape
+## Deployment Shapes
 
-The database is used for both content and workflow state.
+The repo supports:
 
-Broadly:
+- local stdio via `dist/launcher.js`
+- local HTTP via Node or Docker Compose
+- AWS deployment via Terraform in `infra/terraform`
 
-- content graph: workspaces, pages, blocks, databases, rows, links
-- identity: users, orgs, OAuth, sessions
-- coordination: tasks, dependencies, events, inbox
-- resumability: runs and checkpoints
-
-This is why the project works well for long-lived agent workflows: both the knowledge graph and the execution state live in the same consistency boundary.
-
-## Deployment shape
-
-The repo includes:
-
-- launcher-backed local stdio workflow
-- local container workflow with Docker Compose
-- AWS baseline deployment in Terraform
-
-The AWS path is:
+The AWS shape in this repo is:
 
 - ECR for the image
 - ECS Fargate for the app
 - ALB for ingress
-- EFS for runtime state and model/auth cache persistence
+- EFS for runtime state persistence
 - RDS PostgreSQL for storage
 
-See `docs/deployment.md` for the operational details.
+See `docs/deployment.md` for deployment details.

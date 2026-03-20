@@ -6,7 +6,7 @@ This example shows how to use `database`, `row`, and `search` together to build 
 
 ## 1. Create a typed database
 
-Databases have named, typed properties (columns). Supported types: `text`, `number`, `date`, `bool`, `json`.
+Databases have named, typed properties (columns). Common property types include `title`, `text`, `number`, `date`, `checkbox`, `select`, and `multi_select`.
 
 ```json
 {
@@ -17,10 +17,10 @@ Databases have named, typed properties (columns). Supported types: `text`, `numb
     "name": "Vulnerability findings",
     "description": "Structured security findings from the audit",
     "properties": [
-      { "name": "title", "type": "text" },
+      { "name": "title", "type": "title" },
       { "name": "severity", "type": "number" },
       { "name": "component", "type": "text" },
-      { "name": "resolved", "type": "bool" },
+      { "name": "resolved", "type": "checkbox" },
       { "name": "details", "type": "text" }
     ]
   }
@@ -151,12 +151,11 @@ Use `link` to connect structured rows to free-text page content for cross-refere
   "tool": "link",
   "arguments": {
     "action": "create",
-    "workspace_id": "ws-uuid",
-    "source_type": "row",
-    "source_id": "row-uuid",
-    "target_type": "page",
-    "target_id": "page-uuid",
-    "relation": "documented_in"
+    "from_type": "row",
+    "from_id": "row-uuid",
+    "to_type": "page",
+    "to_id": "page-uuid",
+    "link_type": "documented_in"
   }
 }
 ```
@@ -168,8 +167,9 @@ Then list all links from that row:
   "tool": "link",
   "arguments": {
     "action": "list",
-    "workspace_id": "ws-uuid",
-    "filter_source_id": "row-uuid"
+    "item_type": "row",
+    "item_id": "row-uuid",
+    "direction": "both"
   }
 }
 ```

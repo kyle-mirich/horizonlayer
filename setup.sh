@@ -107,21 +107,25 @@ if command -v npm >/dev/null 2>&1; then
   echo "npm: $(npm -v)"
 fi
 
-if ! command -v docker >/dev/null 2>&1; then
-  issues+=("Missing required tool: docker")
-  issues+=("  $(platform_install_hint docker "$PLATFORM")")
+if [ -n "${DATABASE_URL:-}" ]; then
+  echo "DATABASE_URL detected; Docker is optional for setup."
 else
-  echo "docker: $(docker --version)"
-  if ! docker info >/dev/null 2>&1; then
-    issues+=("Docker is installed but not running.")
-    case "$PLATFORM" in
-      macOS|Windows|Windows\ \(WSL\))
-        issues+=("  Start Docker Desktop, then rerun ./setup.sh")
-        ;;
-      *)
-        issues+=("  Start your Docker daemon, then rerun ./setup.sh")
-        ;;
-    esac
+  if ! command -v docker >/dev/null 2>&1; then
+    issues+=("Missing required tool: docker")
+    issues+=("  $(platform_install_hint docker "$PLATFORM")")
+  else
+    echo "docker: $(docker --version)"
+    if ! docker info >/dev/null 2>&1; then
+      issues+=("Docker is installed but not running.")
+      case "$PLATFORM" in
+        macOS|Windows|Windows\ \(WSL\))
+          issues+=("  Start Docker Desktop, then rerun ./setup.sh")
+          ;;
+        *)
+          issues+=("  Start your Docker daemon, then rerun ./setup.sh")
+          ;;
+      esac
+    fi
   fi
 fi
 
@@ -132,17 +136,17 @@ fi
 
 echo ""
 echo "Installing dependencies..."
-make install
+npm ci
 
 echo ""
 echo "Building project..."
-make build
+npm run build
 
 echo ""
 echo "Setup complete."
 echo ""
 echo "Add to Codex:"
-echo "  codex mcp add horizondb -- node $PROJECT_DIR/dist/launcher.js"
+printf '  codex mcp add horizondb -- node "%s"\n' "$PROJECT_DIR/dist/launcher.js"
 echo ""
 echo "Add to Claude:"
-echo "  claude mcp add -s user horizondb -- node $PROJECT_DIR/dist/launcher.js"
+printf '  claude mcp add -s user horizondb -- node "%s"\n' "$PROJECT_DIR/dist/launcher.js"
