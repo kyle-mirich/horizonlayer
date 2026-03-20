@@ -12,6 +12,8 @@ It gives agents one durable place for:
 - run/checkpoint state
 - hybrid semantic and keyword search
 
+The current runtime is local and system-only. The repo does not include application-layer auth or SSO wiring.
+
 ## Quickstart
 
 For most users on macOS, Linux, or WSL, this is the shortest working path from clone to a usable MCP server:
@@ -39,6 +41,65 @@ claude mcp add -s user horizondb -- node "$(pwd)/dist/launcher.js"
 ```
 
 Windows note: `setup.sh` is a Bash script. Use WSL for the one-command flow, or use the manual commands below from PowerShell.
+
+## Contributor Shortcuts
+
+If you are changing the repo itself rather than just consuming the MCP server:
+
+```bash
+npm ci
+npm run verify
+make smoke-local
+```
+
+- `npm run verify` runs lint, typecheck, and the unit test suite.
+- `make smoke-local` starts local PostgreSQL, boots the HTTP server, waits for `/healthz`, runs the end-to-end smoke test, then shuts the database back down.
+- [docs/agent-playbook.md](docs/agent-playbook.md) maps the repo structure and the recommended edit/verification flow.
+- [docs/configuration.md](docs/configuration.md) explains config precedence and the local dev env surface.
+
+```
+┌─────────────────────────────────────────────┐
+│              MCP Clients                    │
+│         (Claude, Codex, agents)             │
+└──────────────────┬──────────────────────────┘
+                   │  MCP over stdio or HTTP
+┌──────────────────▼──────────────────────────┐
+│            Tool Layer (8 tools)             │
+│  workspace · page · database · row          │
+│  search · task · run · link                 │
+└──────────────────┬──────────────────────────┘
+                   │  typed query calls
+┌──────────────────▼──────────────────────────┐
+│         Query Layer (src/db/queries)        │
+│   access control · SQL · embeddings         │
+└──────────────────┬──────────────────────────┘
+                   │
+┌──────────────────▼──────────────────────────┐
+│     PostgreSQL + pgvector (local or RDS)    │
+└─────────────────────────────────────────────┘
+```
+
+## What it exposes
+
+| Tool | Actions |
+|------|---------|
+| `workspace` | create, list, get, update, delete, start_session, list_sessions, get_session, resume_session_context, close_session |
+| `page` | create, get, update, delete, list, append_blocks, append_text, block_update, block_delete |
+| `database` | create, get, update, delete, list, add_property |
+| `row` | create, get, update, delete, query, count, bulk_create, cleanup_expired |
+| `search` | hybrid, similarity, similarity_recency, similarity_importance, full_text, grep, regex |
+| `task` | create, get, list, claim, heartbeat, complete, fail, handoff, ack, append_event, inbox_list, inbox_ack |
+| `run` | start, get, checkpoint, list, complete, fail, cancel |
+| `link` | create, list, delete |
+
+## Install modes
+
+There are two supported ways to run Horizon Layer:
+
+1. `stdio` for local MCP clients such as Codex and Claude
+2. HTTP for a long-running local or hosted server
+
+For most users, `stdio` is the easiest place to start. The launcher can automatically provision a local Docker-backed PostgreSQL container when `DATABASE_URL` is not set.
 
 ## Prerequisites
 

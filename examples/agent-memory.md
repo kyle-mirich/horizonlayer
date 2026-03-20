@@ -13,13 +13,13 @@ A workspace is the top-level container. Create one per project or investigation.
   "tool": "workspace",
   "arguments": {
     "action": "create",
-    "name": "Auth incident 2026-03-13",
-    "description": "Track the authentication failure investigation"
+    "name": "Ingestion incident 2026-03-13",
+    "description": "Track the queue backlog investigation"
   }
 }
 ```
 
-Response: `{ "ok": true, "action": "create", "result": { "id": "ws-uuid", "name": "Auth incident 2026-03-13", ... } }`
+Response: `{ "ok": true, "action": "create", "result": { "id": "ws-uuid", "name": "Ingestion incident 2026-03-13", ... } }`
 
 ---
 
@@ -34,7 +34,7 @@ A session is a named slice of time within a workspace. It scopes pages and tasks
     "action": "start_session",
     "workspace_id": "ws-uuid",
     "title": "Initial triage",
-    "summary": "First look at the auth logs"
+    "summary": "First look at the ingestion backlog"
   }
 }
 ```
@@ -54,7 +54,7 @@ Append text blocks to a session journal page. Each call extends the page.
     "action": "append_text",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
-    "content": "Error rate spiked at 14:32 UTC. Affects /api/login only. OAuth callback returning 500."
+    "content": "Queue lag spiked at 14:32 UTC. Batch ingestion is delayed by roughly 18 minutes."
   }
 }
 ```
@@ -66,7 +66,7 @@ Append text blocks to a session journal page. Each call extends the page.
     "action": "append_text",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
-    "content": "Root cause: expired RSA key in the JWKS endpoint. Key rotation failed silently at 14:30."
+    "content": "Root cause: one worker pool was pinned after a bad deploy. Jobs are retrying but not draining."
   }
 }
 ```
@@ -81,7 +81,7 @@ Search finds relevant pages and rows by semantic similarity, recency, or hybrid 
 {
   "tool": "search",
   "arguments": {
-    "query": "OAuth login failure root cause",
+    "query": "ingestion queue lag root cause",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
     "mode": "hybrid",
@@ -103,7 +103,7 @@ Search will surface the pages written above, ranked by relevance to the query.
     "action": "create",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
-    "title": "Rotate the RSA key and re-test OAuth login",
+    "title": "Recycle the stuck worker pool and verify queue drain",
     "priority": 0,
     "owner_agent_name": "ops-agent"
   }

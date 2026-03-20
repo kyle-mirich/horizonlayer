@@ -103,6 +103,30 @@ describe('page tool', () => {
     expect(payload.result[0]?.id).toBe('block-1');
   });
 
+  it('creates a journal page when append_text does not target an existing page', async () => {
+    createPageMock.mockResolvedValue({ id: 'page-2', title: 'Journal' });
+    const tool = await buildTool();
+
+    const response = await tool.execute(
+      {
+        action: 'append_text',
+        content: 'journal entry',
+        session_id: '00000000-0000-0000-0000-0000000000af',
+        workspace_id: '00000000-0000-0000-0000-000000000003',
+      },
+      { session: undefined }
+    );
+
+    const payload = JSON.parse(response.content[0].text) as { result: { id: string } };
+    expect(createPageMock).toHaveBeenCalledWith(expect.objectContaining({
+      title: expect.stringMatching(/^Journal /),
+      blocks: [{ block_type: 'text', content: 'journal entry' }],
+      session_id: '00000000-0000-0000-0000-0000000000af',
+      workspace_id: '00000000-0000-0000-0000-000000000003',
+    }));
+    expect(payload.result.id).toBe('page-2');
+  });
+
   it('rejects removed keys and requires explicit action', async () => {
     const tool = await buildTool();
     expect(tool.parameters.safeParse({}).success).toBe(false);

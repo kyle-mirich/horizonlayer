@@ -84,6 +84,34 @@ const PageSchema = z.object({
   offset: z.number().int().min(0).optional().describe('Pagination offset for list'),
 }).strict();
 
+type PageParams = z.infer<typeof PageSchema>;
+
+function textBlocks(content: string) {
+  return [{ block_type: 'text' as const, content }];
+}
+
+function buildPageCreateParams(
+  params: PageParams,
+  access: ReturnType<typeof accessFromSession>,
+  title: string,
+  blocks?: ReturnType<typeof normalizeBlocks>
+) {
+  return {
+    title,
+    workspace_id: params.workspace_id,
+    session_id: params.session_id,
+    parent_page_id: params.parent_page_id,
+    icon: params.icon,
+    cover_url: params.cover_url,
+    tags: params.tags,
+    source: params.source,
+    importance: params.importance,
+    expires_in_days: params.expires_in_days,
+    blocks,
+    access,
+  };
+}
+
 export function registerPageTools(server: AppServer): void {
   server.addTool({
     name: 'page',
@@ -97,22 +125,9 @@ export function registerPageTools(server: AppServer): void {
         case 'create': {
           const blocks = normalizeBlocks(params.blocks)
             ?? (params.content != null
-              ? [{ block_type: 'text', content: params.content }]
+              ? textBlocks(params.content)
               : undefined);
-          const page = await createPage({
-            title: params.title ?? 'Untitled',
-            workspace_id: params.workspace_id,
-            session_id: params.session_id,
-            parent_page_id: params.parent_page_id,
-            icon: params.icon,
-            cover_url: params.cover_url,
-            tags: params.tags,
-            source: params.source,
-            importance: params.importance,
-            expires_in_days: params.expires_in_days,
-            blocks,
-            access,
-          });
+          const page = await createPage(buildPageCreateParams(params, access, params.title ?? 'Untitled', blocks));
           return successEnvelope({ action, result: page });
         }
 
@@ -163,7 +178,7 @@ export function registerPageTools(server: AppServer): void {
           if (params.page_id) {
             const inserted = await appendPageBlocks(
               params.page_id,
-              [{ block_type: 'text', content: params.content }],
+              textBlocks(params.content),
               access,
               undefined,
               params.session_id
@@ -175,20 +190,14 @@ export function registerPageTools(server: AppServer): void {
             return errorEnvelope(action, 'workspace_id is required when append_text does not target an existing page');
           }
 
-          const page = await createPage({
-            title: params.title ?? `Journal ${new Date().toISOString()}`,
-            workspace_id: params.workspace_id,
-            session_id: params.session_id,
-            parent_page_id: params.parent_page_id,
-            icon: params.icon,
-            cover_url: params.cover_url,
-            tags: params.tags,
-            source: params.source,
-            importance: params.importance,
-            expires_in_days: params.expires_in_days,
-            blocks: [{ block_type: 'text', content: params.content }],
-            access,
-          });
+          const page = await createPage(
+            buildPageCreateParams(
+              params,
+              access,
+              params.title ?? `Journal ${new Date().toISOString()}`,
+              textBlocks(params.content)
+            )
+          );
           return successEnvelope({ action, result: page });
         }
 

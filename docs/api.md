@@ -1,338 +1,413 @@
 # API Reference
 
-Horizon Layer exposes 8 MCP tools. Every tool returns the same success/error envelope.
+Horizon Layer exposes 8 MCP tools. All tools follow the same response envelope and share common patterns for pagination, optimistic concurrency, and result projection.
+
+---
 
 ## Response Envelope
 
-Success:
+Every tool call returns:
 
 ```json
 {
   "ok": true,
-  "action": "create",
-  "result": {},
+  "action": "<action-name>",
+  "result": { ... },
   "error": null,
-  "meta": {}
+  "meta": { ... }
 }
 ```
 
-Error:
+On error:
 
 ```json
 {
   "ok": false,
-  "action": "create",
+  "action": "<action-name>",
   "result": null,
-  "error": {
-    "message": "name is required"
-  },
-  "meta": null
+  "error": { "message": "<message>" },
+  "meta": {}
 }
 ```
 
-## Common Patterns
+### Cursor Pagination
 
-### Pagination
+Paginated responses include a `meta.next_cursor` field. Pass it as `cursor` on the next call. Cursors are base64-encoded offset pointers.
 
-- `workspace`, `page`, `task`, and `run` use `limit` and `offset`
-- `database` and `row` also support cursor-style pagination through `meta.next_cursor`
+```json
+{
+  "meta": {
+    "limit": 50,
+    "offset": 0,
+    "next_cursor": "eyJvZmZzZXQiOjUwfQ==",
+    "total": 120
+  }
+}
+```
 
-### Preview-only writes
+### Optimistic Concurrency
 
-`database`, `row`, and `link` support:
+Update and delete operations accept `expected_updated_at` (ISO 8601 datetime). The server rejects the write if the record has been modified since that timestamp.
 
-- `dry_run: true`
-- `validate_only: true`
+### Result Projection
 
-### Result shaping
+Most list/query tools accept:
 
-`database`, `row`, and `link` support:
+- `return`: `"minimal"` (id, name, type, timestamps) or `"full"` (default, all fields)
+- `fields`: `["id", "title", "tags"]` — explicit field list (overrides `return`)
 
-- `return: "minimal" | "full"`
-- `fields: ["id", "name"]`
+### Dry Run / Validate Only
 
-## Tool Summary
+Mutation tools accept `dry_run: true` or `validate_only: true` to preview the operation without writing to the database.
 
-| Tool | Actions |
-| --- | --- |
-| `workspace` | `create`, `create_session`, `list`, `get`, `update`, `delete`, `start_session`, `list_sessions`, `get_session`, `resume_session_context`, `close_session` |
-| `page` | `create`, `get`, `update`, `append_blocks`, `append_text`, `delete`, `list`, `block_update`, `block_delete` |
-| `database` | `create`, `get`, `list`, `add_property`, `update`, `delete` |
-| `row` | `create`, `get`, `update`, `delete`, `query`, `count`, `bulk_create`, `cleanup_expired` |
-| `search` | `search` |
-| `task` | `create`, `get`, `list`, `claim`, `heartbeat`, `complete`, `fail`, `handoff`, `ack`, `append_event`, `inbox_list`, `inbox_ack` |
-| `run` | `start`, `get`, `list`, `checkpoint`, `complete`, `fail`, `cancel` |
-| `link` | `create`, `list`, `delete` |
+---
 
 ## `workspace`
 
-Use `workspace` for top-level containers and workspace-scoped sessions.
+Manages workspaces (top-level containers) and workspace-scoped sessions.
 
-Important fields:
+**Actions:** `create`, `list`, `get`, `update`, `delete`, `start_session`, `list_sessions`, `get_session`, `resume_session_context`, `close_session`
 
-- `id`: workspace id for `get`, `update`, `delete`
-- `workspace_id`: workspace id for session actions
-- `session_id`: session id for `get_session`, `resume_session_context`, `close_session`
-- `name`: required for `create`
-- `title`: session title for `start_session` or `create_session`
+**Note:** `create_session` is a compatibility alias that creates a workspace and starts a session in one call.
 
-Example:
+### Parameters
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `action` | enum | yes | — | Workspace action |
+| `id` | uuid | for get/update/delete | — | Workspace ID |
+| `workspace_id` | uuid | for session actions | — | Workspace ID (session actions) |
+| `session_id` | uuid | for get_session/resume/close | — | Session ID |
+| `name` | string (1–500) | for create | — | Workspace name |
+| `title` | string (1–500) | for start_session | — | Session title |
+| `description` | string | no | — | Workspace or session description |
+| `icon` | string (max 100) | no | — | Workspace icon |
+| `summary` | string | no | — | Session summary |
+| `metadata` | object | no | — | Session metadata |
+| `expected_updated_at` | datetime | no | — | Optimistic concurrency guard |
+| `expires_in_days` | number | no | — | Workspace TTL in days |
+| `limit` | int (max 500) | no | 50 | List page size |
+| `offset` | int | no | 0 | List offset |
+| `max_items` | int (max 100) | no | — | Per-section cap for resume_session_context |
+| `max_bytes` | int (max 1 000 000) | no | — | Max inline payload for resume_session_context |
+
+### Example
 
 ```json
-{
-  "tool": "workspace",
-  "arguments": {
-    "action": "create",
-    "name": "Incident 2026-03-19",
-    "description": "Investigate OAuth failure"
-  }
-}
+{"tool":"workspace","arguments":{"action":"create","name":"Customer rollout","description":"Track investigation"}}
 ```
+
+```json
+{"tool":"workspace","arguments":{"action":"start_session","workspace_id":"<uuid>","title":"Sprint 12"}}
+```
+
+```json
+{"tool":"workspace","arguments":{"action":"resume_session_context","workspace_id":"<uuid>","session_id":"<uuid>","max_items":10,"max_bytes":32768}}
+```
+
+---
 
 ## `page`
 
-Use `page` for free-form notes and structured block content.
+Manages pages and their block content within a workspace.
 
-Important fields:
+**Actions:** `create`, `get`, `update`, `delete`, `list`, `append_blocks`, `append_text`, `block_update`, `block_delete`
 
-- `id`: page id for `get`, `update`, `delete`
-- `page_id`: target page for `append_blocks` or appending text to an existing page
-- `block_id`: target block for `block_update` or `block_delete`
-- `workspace_id`: required when `append_text` creates a new journal page
-- `session_id`: optional scope for create/list/get/append actions
-- `blocks`: array of block objects for `create` and `append_blocks`
+### Parameters
 
-Supported block types:
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `action` | enum | yes | — | Page action |
+| `id` | uuid | for get/update/delete | — | Page ID |
+| `page_id` | uuid | for append_blocks/append_text | — | Target page ID |
+| `block_id` | uuid | for block_update/block_delete | — | Block ID |
+| `workspace_id` | uuid | for create/list or journal-style `append_text` | — | Workspace scope |
+| `session_id` | uuid | no | — | Session scope for create/list/get/append actions |
+| `parent_page_id` | uuid | no | — | Parent page for create |
+| `title` | string (max 500) | for create | — | Page title |
+| `content` | string | no | — | Page content (create/append_text) or updated block text (block_update) |
+| `blocks` | Block[] | no | — | Block payload for create/append_blocks |
+| `metadata` | object | no | — | Block metadata for block_update |
+| `tags` | string[] | no | — | Tags for create/update |
+| `importance` | number (0–1) | no | — | Importance score |
+| `expires_in_days` | number | no | — | Page TTL |
+| `limit` | int (max 500) | no | 50 | List page size |
+| `offset` | int | no | 0 | List offset |
 
-- `paragraph`
-- `text`
-- `heading1`
-- `heading2`
-- `heading3`
-- `code`
-- `bulleted_list`
-- `numbered_list`
-- `quote`
-- `callout`
-- `divider`
-- `image`
-- `bookmark`
-- `embed`
-
-Example:
+### Example
 
 ```json
-{
-  "tool": "page",
-  "arguments": {
-    "action": "append_text",
-    "workspace_id": "workspace-uuid",
-    "session_id": "session-uuid",
-    "content": "Initial investigation notes."
-  }
-}
+{"tool":"page","arguments":{"action":"create","workspace_id":"<uuid>","title":"Incident notes","content":"Initial observations."}}
 ```
+
+```json
+{"tool":"page","arguments":{"action":"append_text","page_id":"<uuid>","content":"Queued follow-up to drain the ingestion backlog."}}
+```
+
+```json
+{"tool":"page","arguments":{"action":"append_text","workspace_id":"<uuid>","session_id":"<uuid>","title":"Incident journal","content":"Queued follow-up to drain the ingestion backlog."}}
+```
+
+---
 
 ## `database`
 
-Use `database` for typed schemas within a workspace or page.
+Manages structured databases (typed column schemas) within a workspace.
 
-Property types:
+**Actions:** `create`, `get`, `update`, `delete`, `list`, `add_property`
 
-- `title`
-- `text`
-- `number`
-- `date`
-- `checkbox`
-- `select`
-- `multi_select`
-- `url`
-- `email`
-- `phone`
-- `relation`
-- `files`
+### Parameters
 
-Important fields:
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `action` | enum | yes | — | Database action |
+| `id` | uuid | for get/update/delete | — | Database ID |
+| `database_id` | uuid | for add_property | — | Database ID |
+| `workspace_id` | uuid | for create/list | — | Workspace scope |
+| `name` | string (1–500) | for create | — | Database name |
+| `description` | string | no | — | Database description |
+| `properties` | PropertyDef[] | no | — | Column definitions for create |
+| `type` | enum | for add_property | — | Property type |
+| `options` | object | no | — | Property options |
+| `is_required` | bool | no | false | Property required flag |
+| `expected_updated_at` | datetime | no | — | Optimistic concurrency guard |
+| `limit` | int (max 500) | no | 50 | List page size |
+| `cursor` | string | no | — | Cursor for list pagination |
+| `return` | `"minimal"` \| `"full"` | no | `"full"` | Result shape |
+| `fields` | string[] | no | — | Explicit field projection |
+| `dry_run` | bool | no | false | Preview without writing |
+| `validate_only` | bool | no | false | Validate without writing |
 
-- `id`: database id for `get`, `update`, `delete`
-- `database_id`: database id for `add_property`
-- `workspace_id`: create/list scope
-- `parent_page_id`: optional page parent
-- `properties`: required for `create`
-
-Example:
+### Example
 
 ```json
-{
-  "tool": "database",
-  "arguments": {
-    "action": "create",
-    "workspace_id": "workspace-uuid",
-    "name": "Findings",
-    "properties": [
-      { "name": "title", "type": "title" },
-      { "name": "severity", "type": "number" },
-      { "name": "resolved", "type": "checkbox" }
-    ]
-  }
-}
+{"tool":"database","arguments":{"action":"create","workspace_id":"<uuid>","name":"Findings","properties":[{"name":"title","type":"text"},{"name":"severity","type":"number"}]}}
 ```
+
+Supported property types: `title`, `text`, `number`, `date`, `checkbox`, `select`, `multi_select`, `url`, `email`, `phone`, `relation`, `files`
+
+---
 
 ## `row`
 
-Use `row` for records inside a database.
+Manages rows within a database. Supports typed filtering, sorting, bulk insert, and expiry.
 
-Important fields:
+**Actions:** `create`, `get`, `update`, `delete`, `query`, `count`, `bulk_create`, `cleanup_expired`
 
-- `id`: row id for `get`, `update`, `delete`
-- `database_id`: required for `create`, `query`, `count`, and `bulk_create`
-- `values`: property values keyed by property name
-- `filters`: typed query filters
+### Parameters
 
-Filter operators:
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `action` | enum | no | inferred | Row action |
+| `op` | enum | no | — | Alias for `action` |
+| `id` | uuid | for get/update/delete | — | Row ID |
+| `database_id` | uuid | for create/query/count/bulk_create | — | Database ID |
+| `values` | object | for create/update | — | Property values keyed by name |
+| `tags` | string[] | no | — | Row tags |
+| `source` | string (max 500) | no | — | Source label for create |
+| `importance` | number (0–1) | no | — | Importance score |
+| `expires_in_days` | number | no | — | Row TTL |
+| `expected_updated_at` | datetime | no | — | Optimistic concurrency guard for update/delete |
+| `filters` | Filter[] | no | — | Filters for query/count |
+| `sort_by` | string | no | — | Sort property name |
+| `limit` | int (max 500) | no | 50 | Page size for query |
+| `offset` | int | no | 0 | Offset for query |
+| `cursor` | string | no | — | Pagination cursor for query |
+| `rows` | RowInput[] | for bulk_create | — | Array of rows (max 100) |
+| `return` | `"minimal"` \| `"full"` | no | `"full"` | Result shape |
+| `fields` | string[] | no | — | Field projection |
+| `dry_run` | bool | no | false | Preview without writing |
+| `validate_only` | bool | no | false | Validate without writing |
 
-- `eq`
-- `neq`
-- `gt`
-- `lt`
-- `contains`
-- `is_empty`
-- `equals` and `not_equals` as aliases
-
-Example:
+#### Filter shape
 
 ```json
-{
-  "tool": "row",
-  "arguments": {
-    "action": "query",
-    "database_id": "database-uuid",
-    "filters": [
-      { "property": "severity", "operator": "gt", "value": 7 }
-    ],
-    "limit": 20
-  }
-}
+{"property": "severity", "operator": "gt", "value": 3}
 ```
+
+Operators: `eq`, `neq`, `gt`, `lt`, `contains`, `is_empty` (also `equals`, `not_equals` as aliases)
+
+### Example
+
+```json
+{"tool":"row","arguments":{"action":"create","database_id":"<uuid>","values":{"title":"Queue lag spike","severity":4},"tags":["bug"]}}
+```
+
+```json
+{"tool":"row","arguments":{"action":"query","database_id":"<uuid>","filters":[{"property":"severity","operator":"gt","value":3}],"limit":20}}
+```
+
+---
 
 ## `search`
 
-Use `search` to query pages and rows.
+Searches pages and database rows with vector, full-text, and hybrid modes.
 
-Important fields:
+**Actions:** (single action — no `action` param required)
 
-- `query` or `q`: required search text
-- `mode`: `similarity`, `similarity_recency`, `similarity_importance`, `full_text`, `grep`, `regex`, or `hybrid`
-- `type`: shortcut of `all`, `page`, or `row`
-- `content_types`: explicit override of `["pages"]`, `["rows"]`, or both
-- `workspace_id`: optional workspace filter
-- `session_id`: optional page-session filter
-- `database_id`: restrict row results to one database
+### Parameters
 
-Example:
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `query` | string | yes | — | Search query (alias: `q`) |
+| `q` | string | no | — | Alias for `query` |
+| `mode` | enum | no | `hybrid` | Search mode: `similarity`, `similarity_recency`, `similarity_importance`, `full_text`, `grep`, `regex`, `hybrid` |
+| `type` | enum | no | `all` | Shorthand content filter: `all`, `page`, `row` |
+| `content_types` | enum[] | no | — | Explicit types: `pages`, `rows` (overrides `type`) |
+| `workspace_id` | uuid | no | — | Scope to a workspace |
+| `session_id` | uuid | no | — | Scope to a session (pages only) |
+| `database_id` | uuid | no | — | Scope to a database (rows only, sets content_types=rows) |
+| `tags` | string[] | no | — | Filter by tags (any match) |
+| `min_importance` | number (0–1) | no | — | Minimum importance threshold |
+| `limit` | int (max 100) | no | 20 | Results per page |
+| `offset` | int | no | 0 | Offset |
+
+### Example
 
 ```json
-{
-  "tool": "search",
-  "arguments": {
-    "query": "oauth key rotation",
-    "workspace_id": "workspace-uuid",
-    "mode": "hybrid",
-    "limit": 10
-  }
-}
+{"tool":"search","arguments":{"query":"queue lag root cause","workspace_id":"<uuid>","mode":"hybrid","limit":10}}
 ```
+
+---
 
 ## `task`
 
-Use `task` for durable agent coordination.
+Durable task coordination with leases, heartbeats, dependencies, handoffs, and an agent inbox.
 
-Important fields:
+**Actions:** `create`, `get`, `list`, `claim`, `heartbeat`, `complete`, `fail`, `handoff`, `ack`, `append_event`, `inbox_list`, `inbox_ack`
 
-- `workspace_id`: required for `create`, `list`, `claim`, and `inbox_list`
-- `id`: task id for `get`, `heartbeat`, `complete`, `fail`, `handoff`, `ack`, `append_event`
-- `agent_name`: required for `claim`, `heartbeat`, `complete`, `fail`, `ack`, and inbox actions
-- `target_agent_name`: handoff target or event target
-- `depends_on_task_ids`: dependency edges for `create`
-- `required_ack_agent_names`: ack requirements for `create`
+### Task State Machine
 
-Example:
+```
+pending → ready → claimed → done
+                           → failed
+                           → handoff_pending → claimed (by new agent)
+blocked (waiting on dependencies or acks) → ready (when resolved)
+cancelled (terminal)
+```
+
+### Parameters
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `action` | enum | yes | — | Task action |
+| `id` | uuid | for most actions | — | Task ID |
+| `workspace_id` | uuid | for create/list/claim/inbox_list | — | Workspace scope |
+| `session_id` | uuid | no | — | Session scope |
+| `inbox_id` | uuid | for inbox_ack | — | Inbox item ID |
+| `title` | string (1–500) | for create | — | Task title |
+| `description` | string | no | — | Task description |
+| `priority` | int ≥ 0 | no | — | Task priority |
+| `owner_agent_name` | string (max 255) | no | — | Initial owner for create |
+| `agent_name` | string (max 255) | for claim/heartbeat/complete/fail/ack | — | Acting agent name |
+| `created_by_agent_name` | string (max 255) | no | — | Creator agent name |
+| `target_agent_name` | string (max 255) | no | — | Target for handoff/append_event |
+| `lease_seconds` | int (1–86400) | no | — | Lease duration for claim/heartbeat |
+| `max_attempts` | int ≥ 0 | no | — | Max retry attempts |
+| `unread_only` | bool | no | — | Inbox filter: unread items only |
+| `depends_on_task_ids` | uuid[] | no | — | Dependencies for create |
+| `required_ack_agent_names` | string[] | no | — | Agents that must ack before ready |
+| `require_ack` | bool | no | — | Whether handoff requires ack before ready |
+| `status` | enum[] | no | — | Status filter for list |
+| `event_type` | string (max 64) | for append_event | — | Event type label |
+| `blocker_reason` | string | for fail | — | Failure reason |
+| `metadata` | object | no | — | Task metadata |
+| `payload` | object | no | — | Structured payload for fail/handoff/ack/append_event |
+| `limit` | int (max 500) | no | 50 | List page size |
+| `offset` | int | no | 0 | Offset |
+
+### Example
 
 ```json
-{
-  "tool": "task",
-  "arguments": {
-    "action": "claim",
-    "workspace_id": "workspace-uuid",
-    "id": "task-uuid",
-    "agent_name": "worker-1",
-    "lease_seconds": 300
-  }
-}
+{"tool":"task","arguments":{"action":"create","workspace_id":"<uuid>","title":"Verify queue drain fix","priority":1,"owner_agent_name":"reviewer"}}
 ```
+
+```json
+{"tool":"task","arguments":{"action":"claim","workspace_id":"<uuid>","id":"<uuid>","agent_name":"worker-1","lease_seconds":300}}
+```
+
+```json
+{"tool":"task","arguments":{"action":"heartbeat","id":"<uuid>","agent_name":"worker-1","lease_seconds":300}}
+```
+
+```json
+{"tool":"task","arguments":{"action":"complete","id":"<uuid>","agent_name":"worker-1"}}
+```
+
+---
 
 ## `run`
 
-Use `run` for long-lived execution attempts and checkpoints.
+Models an actual agent execution attempt. Supports checkpoints for resumable execution state.
 
-Important fields:
+**Actions:** `start`, `get`, `list`, `checkpoint`, `complete`, `fail`, `cancel`
 
-- `workspace_id`: required for `start` and `list`
-- `id`: run id for `get`, `checkpoint`, `complete`, `fail`, `cancel`
-- `agent_name`: required for `start`
-- `task_id`: optional task association
-- `state`: checkpoint payload
-- `result`: completion or failure payload
+### Parameters
 
-Example:
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `action` | enum | yes | — | Run action |
+| `id` | uuid | for get/checkpoint/complete/fail/cancel | — | Run ID |
+| `workspace_id` | uuid | for start/list | — | Workspace scope |
+| `session_id` | uuid | no | — | Session scope |
+| `task_id` | uuid | no | — | Associated task ID |
+| `parent_run_id` | uuid | no | — | Parent run ID |
+| `agent_name` | string (max 255) | for start | — | Agent name |
+| `title` | string (max 500) | no | — | Run title |
+| `summary` | string | no | — | Checkpoint summary |
+| `metadata` | object | no | — | Run or checkpoint metadata |
+| `state` | object | no | — | Checkpoint state payload |
+| `result` | object | no | — | Completion/failure result |
+| `error_message` | string | for fail | — | Failure message |
+| `status` | enum[] | no | — | Status filter for list: `running`, `completed`, `failed`, `cancelled` |
+| `limit` | int (max 500) | no | 50 | List page size |
+| `offset` | int | no | 0 | Offset |
+
+### Example
 
 ```json
-{
-  "tool": "run",
-  "arguments": {
-    "action": "checkpoint",
-    "id": "run-uuid",
-    "summary": "Finished schema migration",
-    "state": {
-      "step": "migrations"
-    }
-  }
-}
+{"tool":"run","arguments":{"action":"start","workspace_id":"<uuid>","agent_name":"planner","title":"Triage run","session_id":"<uuid>"}}
 ```
+
+```json
+{"tool":"run","arguments":{"action":"checkpoint","id":"<uuid>","summary":"Completed phase 1","state":{"phase":1,"items_processed":42}}}
+```
+
+```json
+{"tool":"run","arguments":{"action":"complete","id":"<uuid>","result":{"summary":"Done"}}}
+```
+
+---
 
 ## `link`
 
-Use `link` for typed relationships between entities.
+Creates and queries explicit typed edges between any two entities.
 
-Important fields:
+**Actions:** `create`, `list`, `delete`
 
-- `from_type`, `from_id`, `to_type`, `to_id`: required for `create`
-- `link_type`: optional relation label
-- `item_type`, `item_id`: required for `list`
-- `direction`: `from`, `to`, or `both`
-- `link_id`: required for `delete`
+### Parameters
 
-Supported item types:
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `action` | enum | yes | — | Link action |
+| `from_type` | enum | for create | — | Source entity type: `workspace`, `page`, `database`, `row`, `block`, `database_row` |
+| `from_id` | uuid | for create | — | Source entity ID |
+| `to_type` | enum | for create | — | Target entity type |
+| `to_id` | uuid | for create | — | Target entity ID |
+| `link_type` | string (max 100) | no | — | Relation label (for example `"references"`) |
+| `item_type` | enum | for list | — | Anchor entity type for list |
+| `item_id` | uuid | for list | — | Anchor entity ID for list |
+| `direction` | enum | no | `both` | `from`, `to`, or `both` |
+| `link_id` | uuid | for delete | — | Link ID |
+| `return` | `"minimal"` \| `"full"` | no | `"full"` | Result shape |
+| `fields` | string[] | no | — | Explicit field projection |
 
-- `workspace`
-- `page`
-- `row`
-- `database`
-- `block`
-- `database_row`
-
-Example:
+### Example
 
 ```json
-{
-  "tool": "link",
-  "arguments": {
-    "action": "create",
-    "from_type": "row",
-    "from_id": "row-uuid",
-    "to_type": "page",
-    "to_id": "page-uuid",
-    "link_type": "documented_in"
-  }
-}
+{"tool":"link","arguments":{"action":"create","from_type":"page","from_id":"<uuid>","to_type":"row","to_id":"<uuid>","link_type":"references"}}
+```
+
+```json
+{"tool":"link","arguments":{"action":"list","item_type":"page","item_id":"<page-uuid>","direction":"both"}}
 ```

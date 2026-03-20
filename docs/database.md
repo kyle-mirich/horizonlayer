@@ -6,7 +6,7 @@ The schema is migration-driven and organized into five main layers:
 
 1. Base extensions and content graph
 2. Session/expiry support
-3. Authentication, multitenancy, and enterprise identity
+3. Legacy identity and tenancy tables
 4. Coordination primitives for agents
 5. Billing and run/checkpoint state
 
@@ -15,8 +15,8 @@ The schema is migration-driven and organized into five main layers:
 - `001_extensions.sql`: enables `vector` and `uuid-ossp`
 - `002_schema.sql`: content graph tables and vector/search indexes
 - `003_workspace_sessions.sql`: workspace expiry support
-- `004_auth_and_multitenancy.sql`: users, orgs, memberships, OAuth state
-- `005_enterprise_identity.sql`: enterprise identity and refresh-token support
+- `004_auth_and_multitenancy.sql`: legacy users, orgs, memberships, and OAuth-era tables
+- `005_enterprise_identity.sql`: legacy enterprise identity and refresh-token tables
 - `006_coordination_primitives.sql`: tasks, dependencies, events, acknowledgements, inbox
 - `007_schema_hardening.sql`: integrity checks, unique indexes, trigger hardening
 - `008_billing.sql`: subscriptions and Stripe webhook ledger
@@ -36,7 +36,7 @@ Important fields:
 - `sharing_scope`
 - `expires_at`
 
-Workspaces are the access-control boundary for most tool operations.
+Workspaces are the main content and coordination boundary for most tool operations.
 
 ### Pages and blocks
 
@@ -81,9 +81,9 @@ This supports:
 - title full-text search
 - grep/regex search across page blocks and row values
 
-## Auth and identity tables
+## Legacy identity tables
 
-Authentication and tenancy state lives in:
+The database still contains identity- and tenancy-related tables from earlier iterations:
 
 - `users`
 - `organizations`
@@ -99,7 +99,7 @@ Authentication and tenancy state lives in:
 - `invitations`
 - `audit_logs`
 
-The current runtime uses these tables primarily for OAuth-backed user provisioning and workspace access checks.
+The current local runtime does not use application-layer auth. These tables remain in the schema for compatibility with existing migrations and historical data.
 
 ## Billing tables
 

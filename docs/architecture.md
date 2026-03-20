@@ -6,9 +6,9 @@ Horizon Layer is a single TypeScript service backed by PostgreSQL.
 
 There are three main layers:
 
-1. A launcher for local stdio users
-2. A FastMCP server and tool registration layer
-3. A PostgreSQL query layer that owns persistence, access control, and search
+1. An optional launcher that bootstraps local PostgreSQL for stdio users
+2. The FastMCP server and tool registration layer
+3. The PostgreSQL-backed query layer that owns persistence, access control, and search
 
 ## Entrypoints
 
@@ -31,8 +31,9 @@ Responsibilities:
 Responsibilities:
 
 - load YAML and environment configuration
-- assemble the FastMCP server
-- register all 8 tools
+- create the FastMCP instance
+- register tools
+- apply host allowlist checks for HTTP traffic
 - expose HTTP transport and `/healthz` when running in HTTP mode
 
 ## Tool Layer
@@ -70,9 +71,9 @@ This is the main application core.
 
 The database stores both knowledge and workflow state:
 
-- content: workspaces, pages, blocks, databases, rows, links
-- identity and tenancy: users, organizations, memberships, sessions, identities
-- coordination: tasks, dependencies, acknowledgements, inbox items
+- content graph: workspaces, pages, blocks, databases, rows, links
+- legacy identity and tenancy: users, organizations, memberships, sessions, identities, and OAuth-era records
+- coordination: tasks, dependencies, acknowledgements, events, and inbox items
 - execution: runs and checkpoints
 - search: pgvector embeddings and full-text indexes
 
@@ -86,12 +87,12 @@ The repo supports:
 - local HTTP via Node or Docker Compose
 - AWS deployment via Terraform in `infra/terraform`
 
-The AWS shape in this repo is:
+The AWS path is:
 
 - ECR for the image
 - ECS Fargate for the app
 - ALB for ingress
-- EFS for runtime state persistence
+- EFS for runtime state and model cache persistence
 - RDS PostgreSQL for storage
 
 See `docs/deployment.md` for deployment details.

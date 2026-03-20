@@ -6,7 +6,7 @@ This example shows how to use `database`, `row`, and `search` together to build 
 
 ## 1. Create a typed database
 
-Databases have named, typed properties (columns). Common property types include `title`, `text`, `number`, `date`, `checkbox`, `select`, and `multi_select`.
+Databases have named, typed properties (columns). Common property types include `title`, `text`, `number`, `date`, `checkbox`, `select`, `multi_select`, `url`, `email`, `phone`, `relation`, and `files`.
 
 ```json
 {
@@ -14,8 +14,8 @@ Databases have named, typed properties (columns). Common property types include 
   "arguments": {
     "action": "create",
     "workspace_id": "ws-uuid",
-    "name": "Vulnerability findings",
-    "description": "Structured security findings from the audit",
+    "name": "Reliability findings",
+    "description": "Structured reliability findings from the audit",
     "properties": [
       { "name": "title", "type": "title" },
       { "name": "severity", "type": "number" },
@@ -27,7 +27,7 @@ Databases have named, typed properties (columns). Common property types include 
 }
 ```
 
-Response: `{ "result": { "id": "db-uuid", "name": "Vulnerability findings", ... } }`
+Response: `{ "result": { "id": "db-uuid", "name": "Reliability findings", ... } }`
 
 ---
 
@@ -42,13 +42,13 @@ Each row is a record with typed values keyed by property name.
     "action": "create",
     "database_id": "db-uuid",
     "values": {
-      "title": "JWKS key rotation failure",
+      "title": "Stuck ingestion worker",
       "severity": 9,
-      "component": "auth-service",
+      "component": "ingestion-service",
       "resolved": false,
-      "details": "RSA key in JWKS endpoint expired silently. OAuth login returns 500."
+      "details": "One worker pool stopped draining queued jobs after a deploy. Retries kept the backlog growing."
     },
-    "tags": ["auth", "critical"],
+    "tags": ["ingestion", "critical"],
     "importance": 0.9
   }
 }
@@ -68,12 +68,12 @@ Insert up to 100 rows in a single call.
     "database_id": "db-uuid",
     "rows": [
       {
-        "values": { "title": "Unrotated session cookies", "severity": 6, "component": "session-service", "resolved": false, "details": "Session cookies use 90-day TTL. Compliance policy requires 30-day max." },
-        "tags": ["session", "compliance"]
+        "values": { "title": "Missing queue depth alert", "severity": 6, "component": "ops-monitoring", "resolved": false, "details": "Backlog alerting only triggers on error rate. Queue depth can climb for 20 minutes before paging." },
+        "tags": ["monitoring", "ops"]
       },
       {
-        "values": { "title": "SQL injection in search endpoint", "severity": 8, "component": "search-api", "resolved": true, "details": "Fixed in v1.4.2. Parameterized queries applied." },
-        "tags": ["sql", "resolved"]
+        "values": { "title": "Slow reindex path", "severity": 8, "component": "search-api", "resolved": true, "details": "Fixed in v1.4.2. Batch writes now run with bounded concurrency." },
+        "tags": ["search", "resolved"]
       }
     ]
   }
@@ -112,7 +112,7 @@ The `search` tool searches both page content and database rows simultaneously, r
 {
   "tool": "search",
   "arguments": {
-    "query": "authentication key rotation failure",
+    "query": "stuck ingestion worker",
     "workspace_id": "ws-uuid",
     "mode": "hybrid",
     "limit": 10
@@ -120,7 +120,7 @@ The `search` tool searches both page content and database rows simultaneously, r
 }
 ```
 
-This surfaces both the row for "JWKS key rotation failure" and any pages where the same topic was discussed.
+This surfaces both the row for "Stuck ingestion worker" and any pages where the same topic was discussed.
 
 ---
 
@@ -130,7 +130,7 @@ This surfaces both the row for "JWKS key rotation failure" and any pages where t
 {
   "tool": "search",
   "arguments": {
-    "query": "unresolved critical auth issues",
+    "query": "unresolved critical ingestion issues",
     "workspace_id": "ws-uuid",
     "database_id": "db-uuid",
     "mode": "similarity_importance",
