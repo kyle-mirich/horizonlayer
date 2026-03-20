@@ -50,8 +50,46 @@ For most users, `stdio` is the easiest place to start. The launcher can automati
 
 ## Prerequisites
 
-- Node.js 22
-- Docker
+- [Node.js](https://nodejs.org/en/download/) 22 or newer
+- [Docker Desktop](https://docs.docker.com/get-started/get-docker/) or another local Docker runtime
+
+## Install the client you want to use
+
+You only need one MCP client. Pick the one you already use:
+
+### Codex CLI
+
+Official install docs: [OpenAI Codex CLI](https://developers.openai.com/codex/cli)
+
+Install:
+
+```bash
+npm install -g @openai/codex
+codex
+```
+
+The first time you run `codex`, OpenAI prompts you to sign in.
+
+### Claude Code
+
+Official install docs: [Set up Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started)
+
+Install:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude
+```
+
+Anthropic currently documents Node.js 18+ for Claude Code. This repo itself targets Node.js 22.
+
+### Claude Desktop
+
+Official install docs: [Installing Claude Desktop](https://support.anthropic.com/en/articles/10065433-installing-claude-for-desktop)
+
+Official local MCP docs: [Getting Started with Local MCP Servers on Claude Desktop](https://support.anthropic.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop)
+
+Install Claude Desktop first, sign in, then read the Claude Desktop setup section below. Anthropic's current local MCP flow is centered on desktop extensions.
 
 ## Quickstart
 
@@ -93,6 +131,31 @@ npm ci
 npm run build
 claude mcp add -s user horizondb -- node "$(pwd)/dist/launcher.js"
 ```
+
+### Claude Desktop from a fresh clone
+
+1. Install Claude Desktop using Anthropic's official guide:
+   [Installing Claude Desktop](https://support.anthropic.com/en/articles/10065433-installing-claude-for-desktop)
+2. Read Anthropic's local MCP guide:
+   [Getting Started with Local MCP Servers on Claude Desktop](https://support.anthropic.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop)
+3. Clone and build this repo:
+
+```bash
+git clone https://github.com/kyle-mirich/horizonlayer.git
+cd horizonlayer
+npm ci
+npm run build
+```
+
+4. Today, the smooth Anthropic path for this repo is still Claude Code, because this repository currently ships a raw `stdio` launcher, not a packaged Claude Desktop extension (`.mcpb`).
+5. If you want native Claude Desktop installation, package this server as a desktop extension and install it through Claude Desktop's extension flow:
+   Settings > Extensions > Advanced settings > Install Extension…
+
+Notes:
+
+- The launcher will still auto-start Docker-backed PostgreSQL when `DATABASE_URL` is not set.
+- This repo does not yet include a published `.mcpb` desktop extension bundle.
+- Exact Claude Desktop menus can change by version, so use Anthropic's local MCP guide above as the source of truth.
 
 ### Full local HTTP flow from a fresh clone
 
@@ -189,6 +252,14 @@ codex mcp add horizondb --env DATABASE_URL=postgres://postgres:postgres@db.examp
 ```bash
 make build
 claude mcp add -s user horizondb -- node "$(pwd)/dist/launcher.js"
+```
+
+### Claude Desktop via local MCP config
+
+Anthropic's current official local MCP flow for Claude Desktop is desktop-extension-based. This repo does not yet ship a `.mcpb` extension bundle, so Claude Code is the recommended Anthropic client today. If you want true Claude Desktop installation, package the server as an extension and install it from:
+
+```text
+Settings > Extensions > Advanced settings > Install Extension…
 ```
 
 ### HTTP MCP setup
