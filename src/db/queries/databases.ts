@@ -273,19 +273,25 @@ export async function addDatabaseProperty(
     await assertDatabaseWriteAccess(databaseId, access);
   }
 
-  if (params.expected_updated_at) {
-    const { rows } = await pool.query<{ id: string }>(
+  const touchResult = params.expected_updated_at
+    ? await pool.query<{ id: string }>(
       `UPDATE databases
        SET updated_at = NOW()
        WHERE id = $1 AND updated_at = $2
        RETURNING id`,
       [databaseId, params.expected_updated_at]
+    )
+    : await pool.query<{ id: string }>(
+      `UPDATE databases
+       SET updated_at = NOW()
+       WHERE id = $1
+       RETURNING id`,
+      [databaseId]
     );
-    if (!rows[0]) {
-      await assertDatabaseConflict(databaseId, params.expected_updated_at);
-    }
-  } else {
-    await pool.query('UPDATE databases SET updated_at = NOW() WHERE id = $1', [databaseId]);
+
+  if (!touchResult.rows[0]) {
+    await assertDatabaseConflict(databaseId, params.expected_updated_at);
+    throw new Error(`Database ${databaseId} not found`);
   }
 
   // Get current max position

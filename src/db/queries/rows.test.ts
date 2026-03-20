@@ -155,4 +155,94 @@ describe('row query and indexing', () => {
     expect(embedMock).toHaveBeenCalledWith('Updated title\nExisting body');
     expect(releaseMock).toHaveBeenCalled();
   });
+
+  it('rejects stale optimistic updates before mutating row values', async () => {
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'ROLLBACK') {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.startsWith('UPDATE database_rows SET')) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes('INSERT INTO database_row_values')) {
+        throw new Error('row values should not be written after a stale update');
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    poolQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'SELECT updated_at FROM database_rows WHERE id = $1') {
+        return {
+          rows: [{ updated_at: '2026-01-03T00:00:00.000Z' }],
+        };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const { updateRow } = await import('./rows.js');
+    await expect(updateRow('row-1', {
+      values: {
+        Title: 'Updated title',
+      },
+      properties: [
+        {
+          id: 'title-prop',
+          database_id: 'db-1',
+          name: 'Title',
+          options: {},
+          position: 0,
+          property_type: 'title',
+          is_required: true,
+          created_at: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      expected_updated_at: '2026-01-02T00:00:00.000Z',
+    })).rejects.toThrow('Conflict: row row-1 was modified by another agent');
+
+    expect(releaseMock).toHaveBeenCalled();
+  });
+
+  it('returns null without mutating values when the row no longer exists', async () => {
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'ROLLBACK') {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.startsWith('UPDATE database_rows SET')) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes('INSERT INTO database_row_values')) {
+        throw new Error('row values should not be written after a missing-row update');
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    poolQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'SELECT updated_at FROM database_rows WHERE id = $1') {
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const { updateRow } = await import('./rows.js');
+    await expect(updateRow('row-1', {
+      values: {
+        Title: 'Updated title',
+      },
+      properties: [
+        {
+          id: 'title-prop',
+          database_id: 'db-1',
+          name: 'Title',
+          options: {},
+          position: 0,
+          property_type: 'title',
+          is_required: true,
+          created_at: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      expected_updated_at: '2026-01-02T00:00:00.000Z',
+    })).resolves.toBeNull();
+
+    expect(releaseMock).toHaveBeenCalled();
+  });
 });

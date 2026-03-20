@@ -132,14 +132,6 @@ function truncate(text: string, max = 400): string {
   return `${text.slice(0, cut > 0 ? cut : max)}...`;
 }
 
-async function getSessionRowById(client: Queryable, sessionId: string): Promise<Session | null> {
-  const { rows } = await client.query<Session>(
-    'SELECT * FROM sessions WHERE id = $1 LIMIT 1',
-    [sessionId]
-  );
-  return rows[0] ?? null;
-}
-
 export async function createSession(params: {
   workspace_id: string;
   title?: string;

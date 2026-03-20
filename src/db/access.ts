@@ -1,4 +1,12 @@
-import type { AuthMethod, AuthenticatedPrincipal, OrganizationRole } from '../auth/types.js';
+type OrganizationRole = 'owner' | 'admin' | 'member';
+
+type AuthenticatedPrincipal = {
+  email: string | null;
+  organizationId: string | null;
+  organizationRole: OrganizationRole | null;
+  scopes?: string[];
+  userId: string;
+};
 
 export type AccessContext =
   | { kind: 'system' }

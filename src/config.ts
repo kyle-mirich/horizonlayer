@@ -40,49 +40,10 @@ const ServerSchema = z.object({
   allowed_hosts: z.array(z.string()).default([]),
 });
 
-const SecuritySchema = z.object({
-  cookie_secret: z.string().min(32).default('local-horizon-layer-cookie-secret-01234'),
-  encryption_key: z.string().min(32).default('local-horizon-layer-encryption-key-01'),
-  secure_cookies: z.boolean().optional(),
-  session_cookie_name: z.string().default('horizon_layer_session'),
-  session_ttl_hours: z.number().int().positive().default(24 * 7),
-  session_absolute_ttl_hours: z.number().int().positive().default(24 * 14),
-  refresh_token_ttl_days: z.number().int().positive().default(30),
-  auth_code_ttl_minutes: z.number().int().positive().default(10),
-});
-
-const LocalAuthSchema = z.object({
-  enabled: z.boolean().default(false),
-});
-
-const SsoSchema = z.object({
-  enabled: z.boolean().default(false),
-  default_scopes: z.array(z.string()).default(['openid', 'profile', 'email']),
-  provider_type: z.enum(['google_oidc', 'microsoft_oidc', 'generic_oidc']).optional(),
-  client_id: z.string().min(1).optional(),
-  client_secret: z.string().min(1).optional(),
-  issuer_url: z.string().url().optional(),
-  tenant_id: z.string().min(1).optional(),
-  authorization_endpoint: z.string().url().optional(),
-  token_endpoint: z.string().url().optional(),
-  token_endpoint_auth_method: z.enum(['client_secret_basic', 'client_secret_post']).optional(),
-  allowed_domains: z.array(z.string()).default([]),
-  token_storage_dir: z.string().min(1).optional(),
-});
-
-const AuthSchema = z.object({
-  enabled: z.boolean().default(false),
-  scopes_supported: z.array(z.string().min(1)).default(['mcp:tools']),
-  local: LocalAuthSchema.default({}),
-  sso: SsoSchema.default({}),
-  security: SecuritySchema.default({}),
-});
-
 const ConfigSchema = z.object({
   database: DatabaseSchema,
   embedding: EmbeddingSchema.default({}),
   server: ServerSchema,
-  auth: AuthSchema,
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -125,9 +86,6 @@ function parseCsv(value: string | undefined): string[] | undefined {
 
 function buildEnvConfig(): Record<string, unknown> {
   const allowedHosts = parseCsv(process.env.ALLOWED_HOSTS);
-  const scopesSupported = parseCsv(process.env.OAUTH_SCOPES_SUPPORTED);
-  const ssoScopes = parseCsv(process.env.SSO_DEFAULT_SCOPES);
-  const allowedDomains = parseCsv(process.env.SSO_ALLOWED_DOMAINS);
 
   return {
     database: {
@@ -157,37 +115,6 @@ function buildEnvConfig(): Record<string, unknown> {
       public_url: process.env.APP_BASE_URL,
       resource_path: process.env.MCP_RESOURCE_PATH,
       allowed_hosts: allowedHosts,
-    },
-    auth: {
-      enabled: parseBoolean(process.env.AUTH_ENABLED),
-      scopes_supported: scopesSupported,
-      local: {
-        enabled: parseBoolean(process.env.LOCAL_AUTH_ENABLED),
-      },
-      sso: {
-        enabled: parseBoolean(process.env.SSO_ENABLED),
-        default_scopes: ssoScopes,
-        provider_type: process.env.SSO_PROVIDER_TYPE,
-        client_id: process.env.SSO_CLIENT_ID,
-        client_secret: process.env.SSO_CLIENT_SECRET,
-        issuer_url: process.env.SSO_ISSUER_URL,
-        tenant_id: process.env.SSO_TENANT_ID,
-        authorization_endpoint: process.env.SSO_AUTHORIZATION_ENDPOINT,
-        token_endpoint: process.env.SSO_TOKEN_ENDPOINT,
-        token_endpoint_auth_method: process.env.SSO_TOKEN_ENDPOINT_AUTH_METHOD,
-        allowed_domains: allowedDomains,
-        token_storage_dir: process.env.SSO_TOKEN_STORAGE_DIR,
-      },
-      security: {
-        cookie_secret: process.env.COOKIE_SECRET,
-        encryption_key: process.env.ENCRYPTION_KEY,
-        secure_cookies: parseBoolean(process.env.SECURE_COOKIES),
-        session_cookie_name: process.env.SESSION_COOKIE_NAME,
-        session_ttl_hours: parseNumber(process.env.SESSION_TTL_HOURS),
-        session_absolute_ttl_hours: parseNumber(process.env.SESSION_ABSOLUTE_TTL_HOURS),
-        refresh_token_ttl_days: parseNumber(process.env.REFRESH_TOKEN_TTL_DAYS),
-        auth_code_ttl_minutes: parseNumber(process.env.AUTH_CODE_TTL_MINUTES),
-      },
     },
   };
 }
