@@ -14,7 +14,6 @@ import {
 } from './access.js';
 
 const userAccess: AccessContext = {
-  authMethod: 'google_oidc',
   email: 'user@example.com',
   kind: 'user',
   organizationId: null,

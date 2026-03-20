@@ -20,9 +20,6 @@ export default defineConfig({
         'src/tools/workspaces.ts',
       ],
       include: [
-        'src/auth/context.ts',
-        'src/auth/fastmcp.ts',
-        'src/auth/users.ts',
         'src/db/access.ts',
         'src/tools/common.ts',
       ],

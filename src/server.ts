@@ -8,18 +8,10 @@ import { registerSearchTools } from './tools/search.js';
 import { registerLinkTools } from './tools/links.js';
 import { registerTaskTools } from './tools/tasks.js';
 import { registerRunTools } from './tools/runs.js';
-import { createFastMcpAuth } from './auth/fastmcp.js';
 import type { AppServer, AppSessionData } from './mcp.js';
 
 export function createAppServer(): AppServer {
-  const auth = createFastMcpAuth();
   const server = new FastMCP<AppSessionData>({
-    ...(auth
-      ? {
-          authenticate: auth.authenticate,
-          oauth: auth.oauth,
-        }
-      : {}),
     health: {
       path: '/healthz',
     },

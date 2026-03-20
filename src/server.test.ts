@@ -9,7 +9,6 @@ const registerSearchTools = vi.fn();
 const registerLinkTools = vi.fn();
 const registerTaskTools = vi.fn();
 const registerRunTools = vi.fn();
-const createFastMcpAuth = vi.fn();
 
 vi.mock('fastmcp', () => ({
   FastMCP: class FastMCP {
@@ -42,10 +41,6 @@ vi.mock('./config.js', () => ({
       version: '1.0.0',
     },
   },
-}));
-
-vi.mock('./auth/fastmcp.js', () => ({
-  createFastMcpAuth,
 }));
 
 vi.mock('./tools/workspaces.js', () => ({
@@ -83,8 +78,6 @@ vi.mock('./tools/runs.js', () => ({
 describe('createAppServer local runtime', () => {
   beforeEach(() => {
     fastMcpInstances.length = 0;
-    createFastMcpAuth.mockReset();
-    createFastMcpAuth.mockReturnValue(null);
     registerWorkspaceTools.mockClear();
     registerPageTools.mockClear();
     registerDatabaseTools.mockClear();
@@ -106,22 +99,7 @@ describe('createAppServer local runtime', () => {
       name: 'Horizon Layer',
       version: '1.0.0',
     });
-    expect(fastMcpInstances[0].options).not.toHaveProperty('authenticate');
-    expect(fastMcpInstances[0].options).not.toHaveProperty('oauth');
     expect(registerWorkspaceTools).toHaveBeenCalledTimes(1);
     expect(registerRunTools).toHaveBeenCalledTimes(1);
-  });
-
-  it('wires auth into FastMCP when configured', async () => {
-    createFastMcpAuth.mockReturnValue({
-      authenticate: vi.fn(),
-      oauth: { enabled: true },
-    });
-
-    const { createAppServer } = await import('./server.js');
-    createAppServer();
-
-    expect(fastMcpInstances[0].options).toHaveProperty('authenticate');
-    expect(fastMcpInstances[0].options).toHaveProperty('oauth');
   });
 });

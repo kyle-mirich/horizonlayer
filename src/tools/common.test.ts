@@ -43,21 +43,6 @@ describe('tool common helpers', () => {
   it('maps sessions through accessFromSession', () => {
     expect(accessFromSession()).toEqual(SYSTEM_ACCESS);
     expect(accessFromSession({})).toEqual(SYSTEM_ACCESS);
-    expect(
-      accessFromSession({
-        authMethod: 'google_oidc',
-        email: 'user@example.com',
-        scopes: ['openid', 'email'],
-        userId: 'user-1',
-      })
-    ).toEqual({
-      authMethod: 'google_oidc',
-      email: 'user@example.com',
-      kind: 'user',
-      organizationId: null,
-      organizationRole: null,
-      scopes: ['openid', 'email'],
-      userId: 'user-1',
-    });
+    expect(accessFromSession({ userId: 'user-1' })).toEqual(SYSTEM_ACCESS);
   });
 });

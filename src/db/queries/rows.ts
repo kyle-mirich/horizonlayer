@@ -299,10 +299,16 @@ export async function updateRow(
     if (params.expected_updated_at) {
       setValues.push(params.expected_updated_at);
     }
-    await client.query(
+    const updateResult = await client.query(
       `UPDATE database_rows SET ${sets.join(', ')} WHERE id = $${idx}${params.expected_updated_at ? ` AND updated_at = $${idx + 1}` : ''}`,
       setValues
     );
+    if ((updateResult.rowCount ?? 0) === 0) {
+      await client.query('ROLLBACK');
+      committed = true;
+      await assertRowConflict(id, params.expected_updated_at);
+      return null;
+    }
 
     if (params.values) {
       for (const prop of params.properties) {
