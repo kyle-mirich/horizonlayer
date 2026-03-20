@@ -4,6 +4,44 @@ A self-hosted, local-first MCP server for agent memory backed by PostgreSQL and 
 
 Horizon Layer gives agents a persistent knowledge and coordination layer: workspaces, pages, structured databases, tasks, runs, links, and hybrid vector search in one PostgreSQL-backed MCP server.
 
+## Quickstart
+
+If you want the shortest path from `git clone` to a working local setup:
+
+```bash
+git clone https://github.com/kyle-mirich/horizonlayer.git
+cd horizonlayer
+./setup.sh
+```
+
+What `./setup.sh` does:
+
+- detects your operating system
+- checks whether `node`, `npm`, and `docker` are installed
+- checks whether Docker is actually running
+- installs project dependencies
+- builds the project
+- prints the exact MCP setup command for Codex and Claude
+
+If it cannot continue, it prints:
+
+- the operating system it detected
+- which required tools are missing
+- what version of Node.js you have, if it is too old
+- where to install the missing tools
+
+After `./setup.sh` succeeds, add the MCP server to your client:
+
+```bash
+codex mcp add horizondb -- node "$(pwd)/dist/launcher.js"
+```
+
+Or:
+
+```bash
+claude mcp add -s user horizondb -- node "$(pwd)/dist/launcher.js"
+```
+
 ```
 ┌─────────────────────────────────────────────┐
 │              MCP Clients                    │
@@ -174,12 +212,6 @@ Official install docs: [Installing Claude Desktop](https://support.anthropic.com
 Official local MCP docs: [Getting Started with Local MCP Servers on Claude Desktop](https://support.anthropic.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop)
 
 Install Claude Desktop first, sign in, then read the Claude Desktop setup section below. Anthropic's current local MCP flow is centered on desktop extensions.
-
-## Quickstart
-
-```bash
-make install
-```
 
 ## Full User Flow
 
