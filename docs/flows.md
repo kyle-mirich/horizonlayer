@@ -23,7 +23,6 @@ There are two startup paths:
 
 On HTTP transport, the server:
 
-- enforces OAuth-backed auth when enabled
 - exposes `/healthz`
 - registers all MCP tools
 
@@ -95,8 +94,8 @@ Typical flow:
 
 Runs are useful when tasks represent the durable unit of work, and checkpoints represent resumable execution state inside that unit.
 
-## 6. Auth
+## 6. Local access model
 
-The HTTP server supports optional OAuth-backed auth via the FastMCP auth provider.
+The current runtime is local and system-only.
 
-When `auth.enabled = true`, the server enforces OIDC-backed access at the MCP endpoint. Local auth (username/password) is available for single-user self-hosted deployments without an external identity provider.
+Tool execution always runs with system access, and the HTTP server relies on deployment controls such as host allowlists, local networking, reverse-proxy policy, or private infrastructure rather than application-layer login flows.

@@ -10,7 +10,7 @@ For AWS, the practical production path in this repo is:
 
 1. Build and push the app image to Terraform-managed ECR.
 2. Provision networking, ECS Fargate, an ALB, EFS-backed runtime state, and RDS PostgreSQL with Terraform.
-3. Store application secrets in AWS Secrets Manager and wire their ARNs into Terraform inputs.
+3. Store infrastructure or application secrets in AWS Secrets Manager when needed and wire their ARNs into Terraform inputs.
 4. Deploy the ECS service revision that points at the pushed image tag.
 
 The Terraform entrypoint lives in [`infra/terraform`](../infra/terraform).
@@ -30,7 +30,7 @@ The Terraform entrypoint lives in [`infra/terraform`](../infra/terraform).
 
 - The application image built from the existing `Dockerfile` is the deployable artifact.
 - The app should run as a single ECS service behind an ALB.
-- FastMCP disk-backed auth state should persist across task replacements, so ECS mounts EFS for `.fastmcp-auth` and cache data.
+- Runtime state and model/cache artifacts should persist across task replacements, so ECS mounts EFS for runtime-state data.
 - PostgreSQL is provided by RDS, and the existing startup flow runs migrations on process boot.
 - Secrets stay in Secrets Manager rather than Terraform state.
 
@@ -89,19 +89,15 @@ npm ci
 docker compose up --build
 ```
 
-## 1. Create the application secrets
+## 1. Create supporting secrets if your environment needs them
 
-Create these secrets in Secrets Manager before the first deploy:
-
-- `SSO_CLIENT_SECRET`
-- `COOKIE_SECRET`
-- `ENCRYPTION_KEY`
+This repo no longer requires app-layer OAuth or cookie secrets. Depending on your deployment, you may still choose to store values such as `DATABASE_URL` overrides or other operational secrets in Secrets Manager.
 
 Example:
 
 ```bash
 aws secretsmanager create-secret \
-  --name horizon-layer/prod/cookie-secret \
+  --name horizon-layer/prod/example-secret \
   --secret-string 'replace-with-64-random-bytes'
 ```
 
@@ -116,15 +112,10 @@ cd infra/terraform
 cp terraform.tfvars.example terraform.tfvars
 ```
 
-Required inputs for a normal OAuth-backed deployment:
+Required inputs for a normal deployment:
 
 - `aws_region`
 - `app_image_tag`
-- `sso_client_id`
-- `sso_client_secret_secret_arn`
-- `sso_issuer_url`
-- `cookie_secret_secret_arn`
-- `encryption_key_secret_arn`
 
 Optional but common:
 
@@ -188,13 +179,13 @@ Terraform will register a new ECS task definition revision and update the servic
 - Open the ALB DNS name or your configured `public_base_url`.
 - Verify `GET /healthz` returns `200`.
 - Verify the app can reach PostgreSQL and complete migrations on boot.
-- If OAuth is enabled, confirm the OIDC redirect URLs match the deployed `public_base_url`.
+- Verify your MCP client can reach the deployed `/mcp` endpoint over the expected transport.
 
 ## Operational notes
 
 - ECS tasks run in public subnets with a public IP to avoid NAT-gateway overhead. Security groups still limit inbound traffic to the ALB only.
 - RDS stays private and only accepts traffic from the ECS service security group.
-- EFS stores FastMCP auth state and cache data so task replacement does not wipe local provider state.
+- EFS stores runtime state and cache data so task replacement does not wipe downloaded model artifacts or other persisted local files.
 - The ECS task now sets `DB_SSL_MODE=require` for RDS and auto-populates `ALLOWED_HOSTS` from the ALB/public base URL unless you override it.
 - The app still downloads and initializes the embedding model at runtime. The first healthy deployment will be slower than subsequent task starts.
 - The current stack deploys one ECS service and one RDS instance. Add autoscaling, Route 53, WAF, and CI/CD only when you need them.

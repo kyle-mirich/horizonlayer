@@ -25,8 +25,8 @@ On error:
   "ok": false,
   "action": "<action-name>",
   "result": null,
-  "error": "<message>",
-  "meta": null
+  "error": { "message": "<message>" },
+  "meta": {}
 }
 ```
 
@@ -111,27 +111,28 @@ Manages workspaces (top-level containers) and workspace-scoped sessions.
 
 Manages pages and their block content within a workspace.
 
-**Actions:** `create`, `get`, `update`, `delete`, `list`, `append_text`, `list_blocks`
+**Actions:** `create`, `get`, `update`, `delete`, `list`, `append_blocks`, `append_text`, `block_update`, `block_delete`
 
 ### Parameters
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `action` | enum | yes | — | Page action |
-| `id` | uuid | for get/update/delete/append_text/list_blocks | — | Page ID |
+| `id` | uuid | for get/update/delete | — | Page ID |
+| `page_id` | uuid | for append_blocks/append_text | — | Target page ID |
+| `block_id` | uuid | for block_update/block_delete | — | Block ID |
 | `workspace_id` | uuid | for create/list | — | Workspace scope |
 | `session_id` | uuid | no | — | Session scope for create/list |
 | `parent_page_id` | uuid | no | — | Parent page for create |
 | `title` | string (max 500) | for create | — | Page title |
-| `content` | string | no | — | Page content (create) or appended text (append_text) |
+| `content` | string | no | — | Page content (create/append_text) or updated block text (block_update) |
+| `blocks` | Block[] | no | — | Block payload for create/append_blocks |
+| `metadata` | object | no | — | Block metadata for block_update |
 | `tags` | string[] | no | — | Tags for create/update |
 | `importance` | number (0–1) | no | — | Importance score |
 | `expires_in_days` | number | no | — | Page TTL |
-| `expected_updated_at` | datetime | no | — | Optimistic concurrency guard |
 | `limit` | int (max 500) | no | 50 | List page size |
 | `offset` | int | no | 0 | List offset |
-| `return` | `"minimal"` \| `"full"` | no | `"full"` | Result shape |
-| `fields` | string[] | no | — | Explicit field projection |
 
 ### Example
 
@@ -140,7 +141,7 @@ Manages pages and their block content within a workspace.
 ```
 
 ```json
-{"tool":"page","arguments":{"action":"append_text","id":"<uuid>","content":"Found root cause in auth layer."}}
+{"tool":"page","arguments":{"action":"append_text","page_id":"<uuid>","content":"Queued follow-up to drain the ingestion backlog."}}
 ```
 
 ---
@@ -149,23 +150,29 @@ Manages pages and their block content within a workspace.
 
 Manages structured databases (typed column schemas) within a workspace.
 
-**Actions:** `create`, `get`, `update`, `delete`, `list`, `add_property`, `remove_property`
+**Actions:** `create`, `get`, `update`, `delete`, `list`, `add_property`
 
 ### Parameters
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `action` | enum | yes | — | Database action |
-| `id` | uuid | for get/update/delete/add_property/remove_property | — | Database ID |
+| `id` | uuid | for get/update/delete | — | Database ID |
+| `database_id` | uuid | for add_property | — | Database ID |
 | `workspace_id` | uuid | for create/list | — | Workspace scope |
 | `name` | string (1–500) | for create | — | Database name |
 | `description` | string | no | — | Database description |
 | `properties` | PropertyDef[] | no | — | Column definitions for create |
-| `property_name` | string | for add_property/remove_property | — | Property name |
-| `property_type` | enum | for add_property | — | `text`, `number`, `date`, `bool`, `json` |
+| `type` | enum | for add_property | — | Property type |
+| `options` | object | no | — | Property options |
+| `is_required` | bool | no | false | Property required flag |
 | `expected_updated_at` | datetime | no | — | Optimistic concurrency guard |
 | `limit` | int (max 500) | no | 50 | List page size |
-| `offset` | int | no | 0 | Offset |
+| `cursor` | string | no | — | Cursor for list pagination |
+| `return` | `"minimal"` \| `"full"` | no | `"full"` | Result shape |
+| `fields` | string[] | no | — | Explicit field projection |
+| `dry_run` | bool | no | false | Preview without writing |
+| `validate_only` | bool | no | false | Validate without writing |
 
 ### Example
 
@@ -217,7 +224,7 @@ Operators: `eq`, `neq`, `gt`, `lt`, `contains`, `is_empty` (also `equals`, `not_
 ### Example
 
 ```json
-{"tool":"row","arguments":{"action":"create","database_id":"<uuid>","values":{"title":"Auth failure","severity":4},"tags":["bug"]}}
+{"tool":"row","arguments":{"action":"create","database_id":"<uuid>","values":{"title":"Queue lag spike","severity":4},"tags":["bug"]}}
 ```
 
 ```json
@@ -252,7 +259,7 @@ Searches pages and database rows with vector, full-text, and hybrid modes.
 ### Example
 
 ```json
-{"tool":"search","arguments":{"query":"auth failure root cause","workspace_id":"<uuid>","mode":"hybrid","limit":10}}
+{"tool":"search","arguments":{"query":"queue lag root cause","workspace_id":"<uuid>","mode":"hybrid","limit":10}}
 ```
 
 ---
@@ -306,7 +313,7 @@ cancelled (terminal)
 ### Example
 
 ```json
-{"tool":"task","arguments":{"action":"create","workspace_id":"<uuid>","title":"Verify auth fix","priority":1,"owner_agent_name":"reviewer"}}
+{"tool":"task","arguments":{"action":"create","workspace_id":"<uuid>","title":"Verify queue drain fix","priority":1,"owner_agent_name":"reviewer"}}
 ```
 
 ```json
@@ -368,34 +375,33 @@ Models an actual agent execution attempt. Supports checkpoints for resumable exe
 
 ## `link`
 
-Creates and queries explicit typed edges between any two entities (workspaces, pages, databases, rows, blocks).
+Creates and queries explicit typed edges between any two entities.
 
-**Actions:** `create`, `get`, `delete`, `list`
+**Actions:** `create`, `list`, `delete`
 
 ### Parameters
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `action` | enum | yes | — | Link action |
-| `id` | uuid | for get/delete | — | Link ID |
-| `workspace_id` | uuid | for create/list | — | Workspace scope |
-| `source_type` | enum | for create | — | Source entity type: `workspace`, `page`, `database`, `row`, `block` |
-| `source_id` | uuid | for create | — | Source entity ID |
-| `target_type` | enum | for create | — | Target entity type |
-| `target_id` | uuid | for create | — | Target entity ID |
-| `relation` | string (max 100) | no | — | Relation label (e.g. `"references"`, `"blocks"`) |
-| `filter_source_id` | uuid | no | — | Filter list by source entity |
-| `filter_target_id` | uuid | no | — | Filter list by target entity |
-| `filter_relation` | string | no | — | Filter list by relation |
-| `limit` | int (max 500) | no | 50 | List page size |
-| `offset` | int | no | 0 | Offset |
+| `from_type` | enum | for create | — | Source entity type: `workspace`, `page`, `database`, `row`, `block`, `database_row` |
+| `from_id` | uuid | for create | — | Source entity ID |
+| `to_type` | enum | for create | — | Target entity type |
+| `to_id` | uuid | for create | — | Target entity ID |
+| `link_type` | string (max 100) | no | — | Relation label (for example `"references"`) |
+| `item_type` | enum | for list | — | Anchor entity type for list |
+| `item_id` | uuid | for list | — | Anchor entity ID for list |
+| `direction` | enum | no | `both` | `from`, `to`, or `both` |
+| `link_id` | uuid | for delete | — | Link ID |
+| `return` | `"minimal"` \| `"full"` | no | `"full"` | Result shape |
+| `fields` | string[] | no | — | Explicit field projection |
 
 ### Example
 
 ```json
-{"tool":"link","arguments":{"action":"create","workspace_id":"<uuid>","source_type":"page","source_id":"<uuid>","target_type":"row","target_id":"<uuid>","relation":"references"}}
+{"tool":"link","arguments":{"action":"create","from_type":"page","from_id":"<uuid>","to_type":"row","to_id":"<uuid>","link_type":"references"}}
 ```
 
 ```json
-{"tool":"link","arguments":{"action":"list","workspace_id":"<uuid>","filter_source_id":"<page-uuid>"}}
+{"tool":"link","arguments":{"action":"list","item_type":"page","item_id":"<page-uuid>","direction":"both"}}
 ```

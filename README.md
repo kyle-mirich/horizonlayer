@@ -4,6 +4,8 @@ A self-hosted, local-first MCP server for agent memory backed by PostgreSQL and 
 
 Horizon Layer gives agents a persistent knowledge and coordination layer: workspaces, pages, structured databases, tasks, runs, links, and hybrid vector search in one PostgreSQL-backed MCP server.
 
+The current runtime is local and system-only. The repo does not include application-layer auth or SSO wiring.
+
 ## Quickstart
 
 If you want the shortest path from `git clone` to a working local setup:
@@ -69,13 +71,13 @@ claude mcp add -s user horizondb -- node "$(pwd)/dist/launcher.js"
 | Tool | Actions |
 |------|---------|
 | `workspace` | create, list, get, update, delete, start_session, list_sessions, get_session, resume_session_context, close_session |
-| `page` | create, get, update, delete, list, append_text, list_blocks |
-| `database` | create, get, update, delete, list, add_property, remove_property |
+| `page` | create, get, update, delete, list, append_blocks, append_text, block_update, block_delete |
+| `database` | create, get, update, delete, list, add_property |
 | `row` | create, get, update, delete, query, count, bulk_create, cleanup_expired |
 | `search` | hybrid, similarity, similarity_recency, similarity_importance, full_text, grep, regex |
-| `task` | create, get, update, delete, list, claim, heartbeat, complete, fail, handoff, acknowledge, list_events, add_event, list_inbox |
-| `run` | start, get, update, list, complete, fail, cancel, add_checkpoint, list_checkpoints |
-| `link` | create, get, delete, list |
+| `task` | create, get, list, claim, heartbeat, complete, fail, handoff, ack, append_event, inbox_list, inbox_ack |
+| `run` | start, get, checkpoint, list, complete, fail, cancel |
+| `link` | create, list, delete |
 
 ## Install modes
 

@@ -8,7 +8,7 @@ At runtime the system has three major parts:
 
 1. An optional launcher that bootstraps local PostgreSQL for stdio users
 2. The FastMCP server and tool registration layer
-3. The PostgreSQL-backed query and auth layers
+3. The PostgreSQL-backed query layer
 
 ## Key modules
 
@@ -31,7 +31,6 @@ Responsibilities:
 Responsibilities:
 
 - create the FastMCP instance
-- apply auth checks
 - register tools
 - apply host allowlist checks for HTTP traffic
 
@@ -61,17 +60,6 @@ Responsibilities:
 
 This layer is the real application core.
 
-### Auth layer
-
-- `src/auth/*.ts`
-
-Responsibilities:
-
-- FastMCP auth provider wiring
-- OIDC user info lookup
-- local user provisioning/upsert
-- session-to-access-context translation
-
 ## Data model shape
 
 The database is used for both content and workflow state.
@@ -79,7 +67,7 @@ The database is used for both content and workflow state.
 Broadly:
 
 - content graph: workspaces, pages, blocks, databases, rows, links
-- identity: users, orgs, OAuth, sessions
+- legacy identity/tenancy tables: users, orgs, memberships, OAuth-era records
 - coordination: tasks, dependencies, events, inbox
 - resumability: runs and checkpoints
 
@@ -98,7 +86,7 @@ The AWS path is:
 - ECR for the image
 - ECS Fargate for the app
 - ALB for ingress
-- EFS for runtime state and model/auth cache persistence
+- EFS for runtime state and model cache persistence
 - RDS PostgreSQL for storage
 
 See `docs/deployment.md` for the operational details.
