@@ -1,0 +1,20 @@
+database:
+  url: postgres://postgres:postgres@localhost:5432/horizon_layer
+  host: localhost
+  port: 5432
+  database: horizon_layer
+  user: postgres
+  password: postgres
+  ssl_mode: disable
+  ssl_reject_unauthorized: true
+  pool_max: 10
+  idle_timeout_ms: 30000
+  connection_timeout_ms: 10000
+
+embedding:
+  model: Xenova/all-MiniLM-L6-v2
+  dimensions: 384
+
+server:
+  name: Horizon Layer
+  version: 1.0.0

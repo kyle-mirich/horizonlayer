@@ -1,0 +1,10 @@
+node_modules
+dist
+.git
+.gitignore
+.tmp
+.playwright-cli
+.fastmcp-auth
+output
+config.yaml
+*.log

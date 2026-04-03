@@ -1,0 +1,44 @@
+name: Bug report
+description: Report a reproducible defect in Horizon Layer
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please include the smallest reproducible case you can.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken?
+      placeholder: A concise description of the defect.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Exact steps, commands, or MCP calls needed to reproduce the issue.
+      placeholder: |
+        1. Run ...
+        2. Call tool ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include Node version, OS, database setup, and relevant config details.
+      placeholder: Node 22.x, macOS/Linux/WSL, Docker-managed Postgres or external DATABASE_URL, etc.
+    validations:
+      required: true

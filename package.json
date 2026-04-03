@@ -1,0 +1,83 @@
+{
+  "name": "horizonlayer",
+  "version": "1.0.0",
+  "description": "Self-hosted, local-first MCP server for agent memory backed by PostgreSQL + pgvector",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kyle-mirich/horizonlayer.git"
+  },
+  "homepage": "https://github.com/kyle-mirich/horizonlayer#readme",
+  "bugs": {
+    "url": "https://github.com/kyle-mirich/horizonlayer/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "postgres",
+    "pgvector",
+    "agent-memory",
+    "workflow",
+    "search"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "bin": {
+    "horizonlayer": "dist/launcher.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/testing",
+    "migrations",
+    "config.example.yaml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose stop db",
+    "db:reset": "docker compose down -v",
+    "lint": "eslint . --max-warnings=0",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:docs": "vitest run src/testing/markdownExamples.test.ts",
+    "test:smoke:live": "tsx src/testing/liveSmoke.ts",
+    "test:smoke:local": "bash scripts/smoke-local.sh",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run lint && npm run typecheck && npm test",
+    "prepack": "npm run build",
+    "start": "node dist/launcher.js",
+    "start:stdio": "DATABASE_URL=${DATABASE_URL:-postgres://postgres:postgres@localhost:5432/horizon_layer} APP_NAME=${APP_NAME:-Horizon Layer} node dist/index.js",
+    "dev": "npm run dev:stdio",
+    "dev:stdio": "DATABASE_URL=${DATABASE_URL:-postgres://postgres:postgres@localhost:5432/horizon_layer} APP_NAME=${APP_NAME:-Horizon Layer} tsx src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@xenova/transformers": "^2.17.2",
+    "fastmcp": "^3.34.0",
+    "js-yaml": "^4.1.0",
+    "pg": "^8.20.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.23.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22",
+    "@types/pg": "^8.18.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "eslint": "^9.23.0",
+    "globals": "^16.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.27.0",
+    "vitest": "^4.0.18"
+  }
+}
