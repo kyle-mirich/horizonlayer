@@ -1,6 +1,6 @@
 {
   "name": "horizonlayer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Self-hosted, local-first MCP server for agent memory backed by PostgreSQL + pgvector",
   "license": "MIT",
   "repository": {
