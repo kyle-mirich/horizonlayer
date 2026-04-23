@@ -9,6 +9,21 @@ Horizon Layer is a self-hosted, local-first MCP server for durable agent memory 
 
 The current runtime is deliberately local and system-only. This repository focuses on the MCP server, persistence model, and query layer. It does not include application-layer auth or SSO wiring.
 
+## Why An Agent Uses It
+
+Horizon Layer is meant to be mounted as an MCP server by an agent, not browsed as a human app.
+
+The core agent loop is:
+
+1. open a workspace and session for the current job
+2. store notes, findings, and structured records as work progresses
+3. create and claim durable tasks with leases, handoffs, and inboxes
+4. checkpoint runs so execution can resume after interruption
+5. search prior context across notes and rows
+6. resume the session later from one bundled context payload
+
+If you want one file that shows the intended MCP story end to end, start with [examples/mcp-agent-loop.md](examples/mcp-agent-loop.md).
+
 ## Why This Project Exists
 
 Most agent workflows need more than a vector store or a chat transcript. They need:
@@ -58,6 +73,28 @@ Prerequisites for the package path:
 - Docker Desktop or another Docker runtime, unless `DATABASE_URL` points to an existing PostgreSQL instance
 
 If you are developing the server itself rather than consuming it as a package, use the clone-based flow in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Quick Agent Demo
+
+If you want a fast proof that the MCP server supports the full agent loop, run:
+
+```bash
+npm ci
+npm run build
+npm run demo:agent
+```
+
+The demo connects through MCP over stdio and exercises the canonical flow:
+
+- create workspace
+- start session
+- write notes
+- create and claim a task
+- start and checkpoint a run
+- search memory
+- resume session context
+
+By default it launches `dist/launcher.js`, so it follows the same package-style startup path as a real MCP client.
 
 ## Runtime Model
 
@@ -160,6 +197,7 @@ make smoke-local
 
 - `npm run verify` runs lint, typecheck, and the unit test suite.
 - `make smoke-local` starts local PostgreSQL, builds the launcher, and runs the end-to-end smoke test over stdio.
+- `npm run demo:agent` runs a narrative MCP workflow that shows the intended agent-facing product surface.
 - GitHub Actions runs both verification and local smoke coverage on pushes and pull requests.
 
 ## MCP Client Setup
@@ -217,6 +255,7 @@ More detail: [docs/configuration.md](docs/configuration.md)
 - [docs/flows.md](docs/flows.md): main application flows
 - [docs/agent-playbook.md](docs/agent-playbook.md): contributor navigation and verification flow
 - [examples/](examples/): copy-pasteable example workflows
+- [examples/mcp-agent-loop.md](examples/mcp-agent-loop.md): canonical end-to-end agent workflow
 - [CONTRIBUTING.md](CONTRIBUTING.md): contributor workflow
 - [SECURITY.md](SECURITY.md): vulnerability reporting policy
 

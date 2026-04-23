@@ -45,6 +45,7 @@
     "db:up": "docker compose up -d db",
     "db:down": "docker compose stop db",
     "db:reset": "docker compose down -v",
+    "demo:agent": "tsx src/testing/agentDemo.ts",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
