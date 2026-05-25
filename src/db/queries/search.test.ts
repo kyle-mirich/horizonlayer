@@ -170,4 +170,32 @@ describe('search query layer', () => {
     expect(vectorToSqlMock).toHaveBeenCalledWith([0.1, 0.2, 0.3]);
     expect(results).toHaveLength(1);
   });
+
+  it('rejects invalid regex searches before querying Postgres', async () => {
+    const { search } = await import('./search.js');
+
+    await expect(
+      search({
+        query: '[',
+        mode: 'regex',
+        content_types: ['pages'],
+      })
+    ).rejects.toThrow('Invalid regex query');
+
+    expect(poolQueryMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized regex searches before querying Postgres', async () => {
+    const { search } = await import('./search.js');
+
+    await expect(
+      search({
+        query: 'x'.repeat(513),
+        mode: 'regex',
+        content_types: ['rows'],
+      })
+    ).rejects.toThrow('Regex query cannot exceed 512 characters');
+
+    expect(poolQueryMock).not.toHaveBeenCalled();
+  });
 });

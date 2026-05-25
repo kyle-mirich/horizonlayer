@@ -151,8 +151,9 @@ describe('session query layer', () => {
     const result = await getSessionResumeBundle({ session_id: 'session-1', max_bytes: 100 });
 
     expect(result?.truncated).toBe(true);
+    expect(result?.bytes).toBeLessThanOrEqual(100);
     expect(result?.file_path).toBeUndefined();
     expect(writeFileMock).not.toHaveBeenCalled();
-    expect(result?.bundle?.recent_pages[0]?.content_preview.length).toBeLessThan(5000);
+    expect(result?.bundle?.recent_pages[0]?.content_preview.length ?? 0).toBeLessThan(5000);
   });
 });

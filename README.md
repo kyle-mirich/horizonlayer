@@ -98,14 +98,14 @@ By default it launches `dist/launcher.js`, so it follows the same package-style 
 
 ## Runtime Model
 
-Horizon Layer is stdio-only. It is intended to be launched directly by MCP clients such as Codex and Claude.
+Horizon Layer defaults to stdio and is intended to be launched directly by MCP clients such as Codex and Claude. It can also run FastMCP's HTTP Stream transport for deliberately hosted deployments.
 
 ```
 ┌─────────────────────────────────────────────┐
 │              MCP Clients                    │
 │         (Claude, Codex, agents)             │
 └──────────────────┬──────────────────────────┘
-                   │  MCP over stdio
+                   │  MCP over stdio or HTTP Stream
 ┌──────────────────▼──────────────────────────┐
 │            Tool Layer (8 tools)             │
 │  workspace · page · database · row          │

@@ -379,7 +379,7 @@ async function getTaskForMutation(
   taskId: string
 ): Promise<Task | null> {
   const { rows } = await client.query<Task>(
-    'SELECT * FROM tasks WHERE id = $1 LIMIT 1',
+    'SELECT * FROM tasks WHERE id = $1 LIMIT 1 FOR UPDATE',
     [taskId]
   );
   return rows[0] ?? null;

@@ -86,7 +86,7 @@ describe('task query coordination', () => {
         expect(releasedExpiredClaims).toBe(true);
         return { rows: [{ id: 'task-1' }] };
       }
-      if (sql === 'SELECT * FROM tasks WHERE id = $1 LIMIT 1') {
+      if (sql === 'SELECT * FROM tasks WHERE id = $1 LIMIT 1 FOR UPDATE') {
         return { rows: [buildTask()] };
       }
       if (sql.includes("SET status = 'claimed'")) {
@@ -274,7 +274,7 @@ describe('task query coordination', () => {
       if (sql === 'BEGIN' || sql === 'ROLLBACK') {
         return { rows: [], rowCount: 0 };
       }
-      if (sql === 'SELECT * FROM tasks WHERE id = $1 LIMIT 1') {
+      if (sql === 'SELECT * FROM tasks WHERE id = $1 LIMIT 1 FOR UPDATE') {
         return {
           rows: [
             buildTask({
@@ -300,6 +300,89 @@ describe('task query coordination', () => {
         task_id: 'task-1',
       })
     ).rejects.toThrow('Task task-1 is not actively leased by worker-a');
+    expect(releaseMock).toHaveBeenCalled();
+  });
+
+  it('locks the task row before applying terminal task transitions', async () => {
+    let completed = false;
+    poolQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'SELECT * FROM tasks WHERE id = $1 LIMIT 1') {
+        if (completed) {
+          return {
+            rows: [
+              buildTask({
+                revision: 2,
+                status: 'done',
+              }),
+            ],
+          };
+        }
+        return {
+          rows: [
+            buildTask({
+              status: 'claimed',
+              lease_owner_agent_name: 'worker-a',
+              owner_agent_name: 'worker-a',
+              lease_expires_at: '2099-01-01T00:00:00.000Z',
+            }),
+          ],
+        };
+      }
+      if (sql.includes('SELECT agent_name FROM task_acknowledgements')) {
+        return { rows: [] };
+      }
+      if (sql.includes('SELECT depends_on_task_id FROM task_dependencies')) {
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected pool query: ${sql}`);
+    });
+
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes('SELECT * FROM tasks WHERE id = $1') && sql.includes('FOR UPDATE')) {
+        return {
+          rows: [
+            buildTask({
+              status: 'claimed',
+              lease_owner_agent_name: 'worker-a',
+              owner_agent_name: 'worker-a',
+              lease_expires_at: '2099-01-01T00:00:00.000Z',
+            }),
+          ],
+        };
+      }
+      if (sql.includes('UPDATE tasks')) {
+        completed = true;
+        return {
+          rows: [
+            buildTask({
+              revision: 2,
+              status: 'done',
+            }),
+          ],
+        };
+      }
+      if (
+        sql.includes("t.status = 'claimed'") ||
+        sql.includes("t.status IN ('pending', 'handoff_pending')") ||
+        sql.includes("SET status = 'blocked'") ||
+        sql.includes('INSERT INTO task_events')
+      ) {
+        return { rows: [], rowCount: 1 };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const { completeTask } = await import('./tasks.js');
+    const task = await completeTask({
+      agent_name: 'worker-a',
+      task_id: 'task-1',
+    });
+
+    expect(task?.status).toBe('done');
+    expect(clientQueryMock.mock.calls.some(([sql]) => String(sql).includes('FOR UPDATE'))).toBe(true);
     expect(releaseMock).toHaveBeenCalled();
   });
 

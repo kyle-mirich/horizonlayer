@@ -115,8 +115,8 @@ export function registerRowTools(server: AppServer): void {
 
       filters: z.array(RowFilterSchema).optional().describe('Filters for query/count'),
       sort_by: z.string().optional().describe('Sort property for query'),
-      limit: z.number().positive().max(500).optional().describe('Limit for query'),
-      offset: z.number().min(0).optional().describe('Offset for query'),
+      limit: z.number().int().positive().max(500).optional().describe('Limit for query'),
+      offset: z.number().int().min(0).optional().describe('Offset for query'),
       cursor: z.string().optional().describe('Cursor for query pagination'),
 
       rows: z.array(RowCreateInputSchema).optional().describe('Rows for bulk_create (max 100)'),

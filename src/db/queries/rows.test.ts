@@ -375,4 +375,187 @@ describe('row query and indexing', () => {
 
     expect(releaseMock).toHaveBeenCalled();
   });
+
+  it('rejects unknown query filters before issuing SQL', async () => {
+    const { queryRows } = await import('./rows.js');
+
+    await expect(
+      queryRows({
+        database_id: 'db-1',
+        filters: [{ property: 'Missing', operator: 'eq', value: 'ready' }],
+        properties: [
+          {
+            id: 'title-prop',
+            database_id: 'db-1',
+            name: 'Title',
+            options: {},
+            position: 0,
+            property_type: 'title',
+            is_required: false,
+            created_at: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      })
+    ).rejects.toThrow('Unknown filter properties: Missing');
+
+    expect(poolQueryMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown sort properties before issuing SQL', async () => {
+    const { queryRows } = await import('./rows.js');
+
+    await expect(
+      queryRows({
+        database_id: 'db-1',
+        properties: [
+          {
+            id: 'title-prop',
+            database_id: 'db-1',
+            name: 'Title',
+            options: {},
+            position: 0,
+            property_type: 'title',
+            is_required: false,
+            created_at: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+        sort_by: 'Missing',
+      })
+    ).rejects.toThrow('Unknown sort property: Missing');
+
+    expect(poolQueryMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects fractional query pagination before issuing SQL', async () => {
+    const { queryRows } = await import('./rows.js');
+
+    await expect(
+      queryRows({
+        database_id: 'db-1',
+        limit: 1.5,
+        offset: 0,
+        properties: [],
+      })
+    ).rejects.toThrow('limit must be a non-negative integer');
+
+    expect(poolQueryMock).not.toHaveBeenCalled();
+  });
+
+  it('validates every bulk row before opening a transaction', async () => {
+    const { bulkCreateRows } = await import('./rows.js');
+
+    await expect(
+      bulkCreateRows({
+        database_id: 'db-1',
+        rows: [
+          { values: { Title: 'Valid' } },
+          { values: { Missing: 'Invalid' } },
+        ],
+        properties: [
+          {
+            id: 'title-prop',
+            database_id: 'db-1',
+            name: 'Title',
+            options: {},
+            position: 0,
+            property_type: 'title',
+            is_required: true,
+            created_at: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      })
+    ).rejects.toThrow('Unknown properties: Missing');
+
+    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the entire bulk insert when any row insert fails', async () => {
+    let nextRow = 1;
+    clientQueryMock.mockImplementation(async (sql: string, values?: unknown[]) => {
+      if (sql === 'BEGIN' || sql === 'ROLLBACK') {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql === 'COMMIT') {
+        throw new Error('bulk insert should not commit after one row fails');
+      }
+      if (sql.includes('INSERT INTO database_rows')) {
+        const rowId = `row-${nextRow++}`;
+        return {
+          rows: [{
+            id: rowId,
+            database_id: 'db-1',
+            tags: [],
+            source: null,
+            importance: 0.5,
+            expires_at: null,
+            created_at: '2026-01-01T00:00:00.000Z',
+            updated_at: '2026-01-01T00:00:00.000Z',
+            last_accessed_at: '2026-01-01T00:00:00.000Z',
+          }],
+        };
+      }
+      if (sql.includes('INSERT INTO database_row_values')) {
+        if (values?.[0] === 'row-2') {
+          throw new Error('value insert failed');
+        }
+        return { rows: [], rowCount: 1 };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const { bulkCreateRows } = await import('./rows.js');
+    await expect(
+      bulkCreateRows({
+        database_id: 'db-1',
+        rows: [
+          { values: { Title: 'One' } },
+          { values: { Title: 'Two' } },
+        ],
+        properties: [
+          {
+            id: 'title-prop',
+            database_id: 'db-1',
+            name: 'Title',
+            options: {},
+            position: 0,
+            property_type: 'title',
+            is_required: true,
+            created_at: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      })
+    ).rejects.toThrow('value insert failed');
+
+    expect(clientQueryMock.mock.calls.map(([sql]) => sql)).toContain('ROLLBACK');
+    expect(clientQueryMock.mock.calls.map(([sql]) => sql)).not.toContain('COMMIT');
+    expect(releaseMock).toHaveBeenCalled();
+  });
+
+  it('deletes links that point at expired pages and rows before deleting the records', async () => {
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT') {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes('DELETE FROM links')) {
+        return { rows: [], rowCount: 4 };
+      }
+      if (sql.includes('DELETE FROM pages')) {
+        return { rows: [], rowCount: 2 };
+      }
+      if (sql.includes('DELETE FROM database_rows')) {
+        return { rows: [], rowCount: 3 };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const { cleanupExpired } = await import('./rows.js');
+    const result = await cleanupExpired();
+
+    expect(result).toEqual({ pages_deleted: 2, rows_deleted: 3 });
+    const calls = clientQueryMock.mock.calls.map(([sql]) => String(sql));
+    expect(calls.findIndex((sql) => sql.includes('DELETE FROM links'))).toBeLessThan(
+      calls.findIndex((sql) => sql.includes('DELETE FROM pages'))
+    );
+    expect(releaseMock).toHaveBeenCalled();
+  });
 });

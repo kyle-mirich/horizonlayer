@@ -53,6 +53,11 @@ make dev
 
 - `APP_NAME`
 - `APP_VERSION`
+- `SERVER_TRANSPORT` (`stdio` or `httpStream`; `http` is accepted as a compatibility alias)
+- `HOST`
+- `PORT`
+- `MCP_ENDPOINT`
+- `HEALTH_CHECK_PATH`
 
 ### Embeddings and runtime cache
 

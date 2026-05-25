@@ -1,14 +1,26 @@
 import { runMigrations } from './db/migrate.js';
 import { closePool } from './db/client.js';
 import { createAppServer } from './server.js';
+import { config } from './config.js';
 
 export async function runServer(): Promise<void> {
   await runMigrations();
 
   const server = createAppServer();
-  await server.start({
-    transportType: 'stdio',
-  });
+  if (config.server.transport === 'httpStream') {
+    await server.start({
+      transportType: 'httpStream',
+      httpStream: {
+        endpoint: config.server.endpoint as `/${string}`,
+        host: config.server.host,
+        port: config.server.port,
+      },
+    });
+  } else {
+    await server.start({
+      transportType: 'stdio',
+    });
+  }
 
   const shutdown = async (): Promise<void> => {
     await server.stop();

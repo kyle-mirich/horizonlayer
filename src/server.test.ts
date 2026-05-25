@@ -26,6 +26,7 @@ vi.mock('fastmcp', () => ({
 vi.mock('./config.js', () => ({
   config: {
     server: {
+      health_path: '/healthz',
       name: 'Horizon Layer',
       version: '1.0.0',
     },
@@ -82,6 +83,10 @@ describe('createAppServer local runtime', () => {
     createAppServer();
 
     expect(fastMcpInstances[0].options).toMatchObject({
+      health: {
+        enabled: true,
+        path: '/healthz',
+      },
       name: 'Horizon Layer',
       version: '1.0.0',
     });

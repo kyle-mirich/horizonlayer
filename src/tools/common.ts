@@ -52,6 +52,11 @@ export function errorEnvelope(action: string, message: string, meta?: Record<str
   };
 }
 
+export function errorEnvelopeFromUnknown(action: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return errorEnvelope(action, message);
+}
+
 export function accessFromSession(_session?: unknown) {
   return SYSTEM_ACCESS;
 }

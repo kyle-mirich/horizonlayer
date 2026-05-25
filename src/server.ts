@@ -12,6 +12,10 @@ import type { AppServer, AppSessionData } from './mcp.js';
 
 export function createAppServer(): AppServer {
   const server = new FastMCP<AppSessionData>({
+    health: {
+      enabled: true,
+      path: config.server.health_path,
+    },
     name: config.server.name,
     version: config.server.version as `${number}.${number}.${number}`,
   });

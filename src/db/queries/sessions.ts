@@ -131,6 +131,20 @@ function truncate(text: string, max = 400): string {
   return `${text.slice(0, cut > 0 ? cut : max)}...`;
 }
 
+function jsonBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value, null, 2), 'utf8');
+}
+
+function resumePreview(bundle: SessionResumeBundle): NonNullable<SessionResumeBundleResult['preview']> {
+  return {
+    recent_page_count: bundle.recent_pages.length,
+    recent_run_count: bundle.recent_runs.length,
+    search_hit_count: bundle.search_hits.length,
+    session: bundle.session,
+    task_count: bundle.open_and_recent_tasks.length,
+  };
+}
+
 export async function createSession(params: {
   workspace_id: string;
   title?: string;
@@ -426,17 +440,28 @@ export async function getSessionResumeBundle(params: {
     };
     serialized = JSON.stringify(compactBundle, null, 2);
     bytes = Buffer.byteLength(serialized, 'utf8');
+    const preview = resumePreview(compactBundle);
+    if (bytes > maxBytes) {
+      const previewBytes = jsonBytes(preview);
+      if (previewBytes <= maxBytes) {
+        return {
+          bytes: previewBytes,
+          max_bytes: maxBytes,
+          preview,
+          truncated: true,
+        };
+      }
+      return {
+        bytes: 0,
+        max_bytes: maxBytes,
+        truncated: true,
+      };
+    }
     return {
       bundle: compactBundle,
       bytes,
       max_bytes: maxBytes,
-      preview: {
-        recent_page_count: compactBundle.recent_pages.length,
-        recent_run_count: compactBundle.recent_runs.length,
-        search_hit_count: compactBundle.search_hits.length,
-        session: compactBundle.session,
-        task_count: compactBundle.open_and_recent_tasks.length,
-      },
+      preview,
       truncated: true,
     };
   }

@@ -31,7 +31,7 @@ vi.mock('../db/queries/sessions.js', () => ({
 function buildTool() {
   let definition:
     | {
-        execute: (params: Record<string, unknown>, context: { session?: unknown }) => Promise<{ content: Array<{ text: string }> }>;
+        execute: (params: Record<string, unknown>, context: { session?: unknown }) => Promise<{ content: Array<{ text: string }>; isError?: boolean }>;
         parameters: { safeParse: (value: unknown) => { success: boolean } };
       }
     | null = null;
@@ -139,5 +139,17 @@ describe('workspace tool', () => {
     expect(tool.parameters.safeParse({ action: 'create', dry_run: true }).success).toBe(false);
     expect(tool.parameters.safeParse({ action: 'list', op: 'list' }).success).toBe(false);
     expect(tool.parameters.safeParse({ action: 'cleanup_expired' }).success).toBe(false);
+  });
+
+  it('returns an error envelope when workspace queries throw', async () => {
+    listWorkspacesMock.mockRejectedValue(new Error('database unavailable'));
+    const tool = await buildTool();
+
+    const response = await tool.execute({ action: 'list' }, { session: undefined });
+    const payload = JSON.parse(response.content[0].text) as { ok: boolean; error: { message: string } };
+
+    expect(response.isError).toBe(true);
+    expect(payload.ok).toBe(false);
+    expect(payload.error.message).toBe('database unavailable');
   });
 });

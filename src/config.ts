@@ -25,9 +25,23 @@ const EmbeddingSchema = z.object({
   dimensions: z.number().int().positive().default(384),
 });
 
+const TransportSchema = z.preprocess((value) => {
+  if (value === 'http') {
+    return 'httpStream';
+  }
+  return value;
+}, z.enum(['stdio', 'httpStream']).default('stdio'));
+
+const HttpPathSchema = z.string().regex(/^\//);
+
 const ServerSchema = z.object({
   name: z.string().default('Horizon Layer'),
   version: z.string().default('1.0.0'),
+  transport: TransportSchema,
+  host: z.string().default('127.0.0.1'),
+  port: z.number().int().positive().default(3000),
+  endpoint: HttpPathSchema.default('/mcp'),
+  health_path: HttpPathSchema.default('/healthz'),
 });
 
 const ConfigSchema = z.object({
@@ -88,6 +102,11 @@ function buildEnvConfig(): Record<string, unknown> {
     server: {
       name: process.env.APP_NAME,
       version: process.env.APP_VERSION,
+      transport: process.env.SERVER_TRANSPORT,
+      host: process.env.HOST,
+      port: parseNumber(process.env.PORT),
+      endpoint: process.env.MCP_ENDPOINT,
+      health_path: process.env.HEALTH_CHECK_PATH,
     },
   };
 }

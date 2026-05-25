@@ -18,3 +18,8 @@ embedding:
 server:
   name: Horizon Layer
   version: 1.0.0
+  transport: stdio
+  host: 127.0.0.1
+  port: 3000
+  endpoint: /mcp
+  health_path: /healthz

@@ -11,6 +11,7 @@ import {
 import {
   accessFromSession,
   errorEnvelope,
+  errorEnvelopeFromUnknown,
   successEnvelope,
 } from './common.js';
 import {
@@ -107,7 +108,6 @@ export function registerDatabaseTools(server: AppServer): void {
       validate_only: z.boolean().optional().describe('Validate request without writing'),
     }),
     execute: async (params, context) => {
-      const access = accessFromSession(context.session);
       const returnMode = params.return ?? 'full';
       const action: DatabaseAction =
         params.action ??
@@ -122,42 +122,45 @@ export function registerDatabaseTools(server: AppServer): void {
               ? 'create'
               : 'list');
 
-      switch (action) {
-        case 'create': {
-          if (!params.name) return errorEnvelope(action, 'name is required for database action=create');
-          if (!params.properties || params.properties.length === 0) {
-            return errorEnvelope(action, 'properties (non-empty array) are required for database action=create');
-          }
-          if (isPreview(params)) {
-            return respond(
-              action,
-              { preview: true, values: params },
-              returnMode,
-              params.fields
-            );
-          }
-          const db = await createDatabase({
-            name: params.name,
-            properties: params.properties,
-            workspace_id: params.workspace_id,
-            parent_page_id: params.parent_page_id,
-            description: params.description,
-            icon: params.icon,
-            tags: params.tags,
-            source: params.source,
-            access,
-          });
-          return respond(action, db, returnMode, params.fields);
-        }
+      try {
+        const access = accessFromSession(context.session);
 
-        case 'get': {
+        switch (action) {
+          case 'create': {
+            if (!params.name) return errorEnvelope(action, 'name is required for database action=create');
+            if (!params.properties || params.properties.length === 0) {
+              return errorEnvelope(action, 'properties (non-empty array) are required for database action=create');
+            }
+            if (isPreview(params)) {
+              return respond(
+                action,
+                { preview: true, values: params },
+                returnMode,
+                params.fields
+              );
+            }
+            const db = await createDatabase({
+              name: params.name,
+              properties: params.properties,
+              workspace_id: params.workspace_id,
+              parent_page_id: params.parent_page_id,
+              description: params.description,
+              icon: params.icon,
+              tags: params.tags,
+              source: params.source,
+              access,
+            });
+            return respond(action, db, returnMode, params.fields);
+          }
+
+          case 'get': {
           if (!params.id) return errorEnvelope(action, 'id is required for database action=get');
           const db = await getDatabase(params.id, access);
           if (!db) return errorEnvelope(action, `Database ${params.id} not found`);
           return respond(action, db, returnMode, params.fields);
         }
 
-        case 'list': {
+          case 'list': {
           const offset = decodeCursor(params.cursor);
           const limit = params.limit ?? 50;
           const databases = await listDatabases({
@@ -174,7 +177,7 @@ export function registerDatabaseTools(server: AppServer): void {
           });
         }
 
-        case 'add_property': {
+          case 'add_property': {
           if (!params.database_id) {
             return errorEnvelope(action, 'database_id is required for database action=add_property');
           }
@@ -203,7 +206,7 @@ export function registerDatabaseTools(server: AppServer): void {
           return respond(action, prop, returnMode, params.fields);
         }
 
-        case 'update': {
+          case 'update': {
           if (!params.id) return errorEnvelope(action, 'id is required for database action=update');
           if (isPreview(params)) {
             return respond(
@@ -228,7 +231,7 @@ export function registerDatabaseTools(server: AppServer): void {
           return respond(action, db, returnMode, params.fields);
         }
 
-        case 'delete': {
+          case 'delete': {
           if (!params.id) return errorEnvelope(action, 'id is required for database action=delete');
           if (isPreview(params)) {
             return respond(
@@ -242,6 +245,9 @@ export function registerDatabaseTools(server: AppServer): void {
           if (!deleted) return errorEnvelope(action, `Database ${params.id} not found`);
           return respond(action, { success: true, id: params.id }, returnMode, params.fields);
         }
+        }
+      } catch (error) {
+        return errorEnvelopeFromUnknown(action, error);
       }
     },
   });
