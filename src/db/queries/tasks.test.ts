@@ -158,6 +158,62 @@ describe('task query coordination', () => {
     expect(clientQueryMock.mock.calls.some(([sql]) => String(sql).includes("SET status = 'claimed'"))).toBe(false);
   });
 
+  it('lets the current lease owner reclaim without consuming another attempt', async () => {
+    const activeClaim = buildTask({
+      attempt_count: 1,
+      lease_expires_at: '2099-01-01T00:10:00.000Z',
+      lease_owner_agent_name: 'planner',
+      owner_agent_name: 'planner',
+      status: 'claimed',
+    });
+
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') {
+        return { rowCount: 0, rows: [] };
+      }
+      if (
+        sql.includes("t.status = 'claimed'") ||
+        sql.includes("t.status IN ('pending', 'handoff_pending')") ||
+        sql.includes("SET status = 'blocked'")
+      ) {
+        return { rowCount: 0, rows: [] };
+      }
+      if (sql.includes('FROM tasks') && sql.includes('workspace_id = $2') && sql.includes('FOR UPDATE')) {
+        return { rows: [activeClaim] };
+      }
+      if (sql.includes("SET status = 'claimed'")) {
+        expect(sql).not.toContain('attempt_count = attempt_count + 1');
+        return { rows: [activeClaim] };
+      }
+      if (sql.includes('INSERT INTO task_events')) {
+        return { rowCount: 1, rows: [] };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    poolQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'SELECT * FROM tasks WHERE id = $1 LIMIT 1') {
+        return { rows: [activeClaim] };
+      }
+      if (sql.includes('SELECT agent_name FROM task_acknowledgements')) {
+        return { rows: [] };
+      }
+      if (sql.includes('SELECT depends_on_task_id FROM task_dependencies')) {
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected pool query: ${sql}`);
+    });
+
+    const { claimTask } = await import('./tasks.js');
+    const task = await claimTask({
+      agent_name: 'planner',
+      task_id: 'task-1',
+      workspace_id: 'ws-1',
+    });
+
+    expect(task?.attempt_count).toBe(1);
+  });
+
   it('requires the active lease owner to complete a task', async () => {
     poolQueryMock.mockImplementation(async (sql: string) => {
       if (sql === 'SELECT * FROM tasks WHERE id = $1 LIMIT 1') {
@@ -364,6 +420,62 @@ describe('task query coordination', () => {
         workspace_id: 'ws-1',
       })
     ).rejects.toThrow('depends_on_task_ids cannot include tasks that participate in dependency cycles');
+    expect(releaseMock).toHaveBeenCalled();
+  });
+
+  it('rolls back task event appends when the task state touch fails', async () => {
+    poolQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'SELECT * FROM tasks WHERE id = $1 LIMIT 1') {
+        return {
+          rows: [buildTask()],
+        };
+      }
+      if (sql.includes('SELECT agent_name FROM task_acknowledgements')) {
+        return { rows: [] };
+      }
+      if (sql.includes('SELECT depends_on_task_id FROM task_dependencies')) {
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected pool query: ${sql}`);
+    });
+
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'ROLLBACK') {
+        return { rowCount: 0, rows: [] };
+      }
+      if (sql.includes('INSERT INTO task_events')) {
+        return {
+          rows: [
+            {
+              id: 'event-1',
+              workspace_id: 'ws-1',
+              task_id: 'task-1',
+              event_type: 'task.note',
+              actor_agent_name: 'worker-a',
+              target_agent_name: null,
+              task_revision: 1,
+              payload: {},
+              created_at: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        };
+      }
+      if (sql.startsWith('UPDATE tasks')) {
+        throw new Error('task event append should not commit when the task touch fails');
+      }
+      if (sql === 'COMMIT') {
+        throw new Error('task event append should not commit after a failed task touch');
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const { appendTaskEvent } = await import('./tasks.js');
+    await expect(appendTaskEvent({
+      task_id: 'task-1',
+      event_type: 'task.note',
+      actor_agent_name: 'worker-a',
+    })).rejects.toThrow('task event append should not commit when the task touch fails');
+
     expect(releaseMock).toHaveBeenCalled();
   });
 });

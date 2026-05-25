@@ -1,4 +1,3 @@
-import { writeFile } from 'node:fs/promises';
 import { getPool, type PoolClient } from '../client.js';
 import type { AccessContext } from '../access.js';
 import {
@@ -398,21 +397,45 @@ export async function getSessionResumeBundle(params: {
     search_hits: searchHits,
   };
 
-  const serialized = JSON.stringify(bundle, null, 2);
-  const bytes = Buffer.byteLength(serialized, 'utf8');
+  let serialized = JSON.stringify(bundle, null, 2);
+  let bytes = Buffer.byteLength(serialized, 'utf8');
   if (bytes > maxBytes) {
-    const filePath = `/tmp/horizonlayer-session-${params.session_id}-${Date.now()}.txt`;
-    await writeFile(filePath, serialized, 'utf8');
+    const compactBundle: SessionResumeBundle = {
+      ...bundle,
+      recent_pages: bundle.recent_pages.map((page) => ({
+        ...page,
+        content_preview: truncate(page.content_preview, 200),
+      })),
+      recent_runs: bundle.recent_runs.map((run) => ({
+        ...run,
+        latest_checkpoint: run.latest_checkpoint
+          ? {
+            ...run.latest_checkpoint,
+            summary: run.latest_checkpoint.summary
+              ? truncate(run.latest_checkpoint.summary, 200)
+              : null,
+            state: {},
+            metadata: {},
+          }
+          : null,
+      })),
+      search_hits: bundle.search_hits.map((hit) => ({
+        ...hit,
+        snippet: truncate(hit.snippet, 200),
+      })),
+    };
+    serialized = JSON.stringify(compactBundle, null, 2);
+    bytes = Buffer.byteLength(serialized, 'utf8');
     return {
+      bundle: compactBundle,
       bytes,
-      file_path: filePath,
       max_bytes: maxBytes,
       preview: {
-        recent_page_count: bundle.recent_pages.length,
-        recent_run_count: bundle.recent_runs.length,
-        search_hit_count: bundle.search_hits.length,
-        session: bundle.session,
-        task_count: bundle.open_and_recent_tasks.length,
+        recent_page_count: compactBundle.recent_pages.length,
+        recent_run_count: compactBundle.recent_runs.length,
+        search_hit_count: compactBundle.search_hits.length,
+        session: compactBundle.session,
+        task_count: compactBundle.open_and_recent_tasks.length,
       },
       truncated: true,
     };

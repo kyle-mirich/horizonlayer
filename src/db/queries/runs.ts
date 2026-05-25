@@ -76,6 +76,15 @@ function assertRunIsRunning(run: AgentRun, action: 'checkpoint' | 'complete' | '
   }
 }
 
+function assertRunOwnedByAgent(run: AgentRun, agentName?: string): void {
+  if (!agentName) {
+    throw new Error('agent_name is required for run mutation');
+  }
+  if (run.agent_name !== agentName) {
+    throw new Error(`Run ${run.id} is owned by ${run.agent_name}, not ${agentName}`);
+  }
+}
+
 async function getRunById(client: Queryable, runId: string): Promise<AgentRun | null> {
   const { rows } = await client.query<AgentRun>(
     'SELECT * FROM agent_runs WHERE id = $1 LIMIT 1',
@@ -286,6 +295,7 @@ export async function listRuns(params: {
 
 export async function checkpointRun(params: {
   run_id: string;
+  agent_name?: string;
   summary?: string;
   state?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
@@ -307,6 +317,7 @@ export async function checkpointRun(params: {
       return null;
     }
     assertRunIsRunning(run, 'checkpoint');
+    assertRunOwnedByAgent(run, params.agent_name);
     if (!isSystemAccess(access)) {
       await ensureWorkspaceAccess(run.workspace_id, access, 'write');
     }
@@ -353,6 +364,7 @@ export async function checkpointRun(params: {
 
 async function updateRunStatus(params: {
   run_id: string;
+  agent_name?: string;
   status: Exclude<RunStatus, 'running'>;
   result?: Record<string, unknown>;
   error_message?: string;
@@ -372,6 +384,7 @@ async function updateRunStatus(params: {
         ? 'fail'
         : 'cancel'
   );
+  assertRunOwnedByAgent(run, params.agent_name);
   await ensureWorkspaceAccess(run.workspace_id, access, 'write');
 
   const { rows } = await pool.query<AgentRun>(
@@ -400,6 +413,7 @@ async function updateRunStatus(params: {
 
 export async function completeRun(params: {
   run_id: string;
+  agent_name?: string;
   result?: Record<string, unknown>;
   access?: AccessContext;
 }): Promise<AgentRunDetails | null> {
@@ -411,6 +425,7 @@ export async function completeRun(params: {
 
 export async function failRun(params: {
   run_id: string;
+  agent_name?: string;
   result?: Record<string, unknown>;
   error_message?: string;
   access?: AccessContext;
@@ -423,6 +438,7 @@ export async function failRun(params: {
 
 export async function cancelRun(params: {
   run_id: string;
+  agent_name?: string;
   result?: Record<string, unknown>;
   access?: AccessContext;
 }): Promise<AgentRunDetails | null> {

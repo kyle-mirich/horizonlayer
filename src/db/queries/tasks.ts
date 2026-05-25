@@ -642,6 +642,12 @@ export async function claimTask(params: {
       return null;
     }
 
+    const shouldConsumeAttempt = !(task.status === 'claimed'
+      && task.lease_owner_agent_name === params.agent_name
+      && !leaseExpired);
+    const attemptUpdate = shouldConsumeAttempt
+      ? 'attempt_count = attempt_count + 1,'
+      : 'attempt_count = attempt_count,';
     const { rows } = await client.query<Task>(
       `UPDATE tasks
        SET status = 'claimed',
@@ -649,7 +655,7 @@ export async function claimTask(params: {
            lease_owner_agent_name = $2,
            lease_expires_at = NOW() + ($3 * INTERVAL '1 second'),
            heartbeat_at = NOW(),
-           attempt_count = attempt_count + 1,
+           ${attemptUpdate}
            revision = revision + 1,
            updated_at = NOW(),
            last_event_at = NOW()
@@ -956,37 +962,52 @@ export async function appendTaskEvent(params: {
   }
   await ensureWorkspaceAccess(task.workspace_id, access, 'write');
   const pool = getPool();
-  const { rows } = await pool.query<TaskEvent>(
-    `INSERT INTO task_events (
-       workspace_id,
-       task_id,
-       event_type,
-       actor_agent_name,
-       target_agent_name,
-       task_revision,
-       payload
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING *`,
-    [
-      task.workspace_id,
-      task.id,
-      params.event_type,
-      params.actor_agent_name ?? null,
-      params.target_agent_name ?? null,
-      task.revision,
-      JSON.stringify(params.payload ?? {}),
-    ]
-  );
-  await pool.query(
-    `UPDATE tasks
-     SET last_event_at = NOW(),
-         updated_at = NOW()
-     WHERE id = $1`,
-    [task.id]
-  );
-  await touchSession(task.session_id);
-  return rows[0];
+  const client = await pool.connect();
+  let finished = false;
+
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query<TaskEvent>(
+      `INSERT INTO task_events (
+         workspace_id,
+         task_id,
+         event_type,
+         actor_agent_name,
+         target_agent_name,
+         task_revision,
+         payload
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [
+        task.workspace_id,
+        task.id,
+        params.event_type,
+        params.actor_agent_name ?? null,
+        params.target_agent_name ?? null,
+        task.revision,
+        JSON.stringify(params.payload ?? {}),
+      ]
+    );
+    await client.query(
+      `UPDATE tasks
+       SET last_event_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [task.id]
+    );
+    await touchSession(task.session_id, client);
+    await client.query('COMMIT');
+    finished = true;
+    return rows[0];
+  } catch (error) {
+    if (!finished) {
+      await client.query('ROLLBACK');
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function listInbox(params: {

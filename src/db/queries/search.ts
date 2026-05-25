@@ -67,7 +67,7 @@ export async function search(params: {
     results.push(...pageResults);
   }
 
-  if (contentTypes.includes('rows') && !params.session_id) {
+  if (contentTypes.includes('rows')) {
     const rowResults = await searchRows({
       query: params.query,
       mode: params.mode,

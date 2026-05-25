@@ -148,4 +148,59 @@ describe('run query state machine', () => {
     ).rejects.toThrow('parent_run_id must belong to the requested session');
     expect(connectMock).not.toHaveBeenCalled();
   });
+
+  it('rejects checkpoints from an agent that does not own the run', async () => {
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'ROLLBACK') {
+        return { rowCount: 0, rows: [] };
+      }
+      if (sql.includes('SELECT * FROM agent_runs WHERE id = $1 LIMIT 1 FOR UPDATE')) {
+        return {
+          rows: [
+            buildRun({
+              agent_name: 'planner',
+            }),
+          ],
+        };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const { checkpointRun } = await import('./runs.js');
+    await expect(
+      checkpointRun({
+        agent_name: 'worker',
+        run_id: 'run-1',
+        summary: 'not mine',
+      })
+    ).rejects.toThrow('Run run-1 is owned by planner, not worker');
+    expect(releaseMock).toHaveBeenCalled();
+  });
+
+  it('rejects terminal transitions from an agent that does not own the run', async () => {
+    poolQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'SELECT * FROM agent_runs WHERE id = $1 LIMIT 1') {
+        return {
+          rows: [
+            buildRun({
+              agent_name: 'planner',
+            }),
+          ],
+        };
+      }
+      if (sql.includes('SELECT *') && sql.includes('FROM run_checkpoints')) {
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const { completeRun } = await import('./runs.js');
+    await expect(
+      completeRun({
+        agent_name: 'worker',
+        run_id: 'run-1',
+      })
+    ).rejects.toThrow('Run run-1 is owned by planner, not worker');
+    expect(connectMock).not.toHaveBeenCalled();
+  });
 });

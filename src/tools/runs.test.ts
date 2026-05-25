@@ -89,6 +89,7 @@ describe('run tool', () => {
     const response = await tool.execute(
       {
         action: 'checkpoint',
+        agent_name: 'planner',
         id: '00000000-0000-0000-0000-000000000020',
         state: { step: 'done' },
         summary: 'checkpoint',
@@ -98,10 +99,27 @@ describe('run tool', () => {
 
     const payload = JSON.parse(response.content[0].text) as { result: { latest_checkpoint_sequence: number } };
     expect(checkpointRunMock).toHaveBeenCalledWith(expect.objectContaining({
+      agent_name: 'planner',
       run_id: '00000000-0000-0000-0000-000000000020',
       summary: 'checkpoint',
     }));
     expect(payload.result.latest_checkpoint_sequence).toBe(1);
+  });
+
+  it('requires agent_name for run mutations', async () => {
+    const tool = await buildTool();
+    const response = await tool.execute(
+      {
+        action: 'checkpoint',
+        id: '00000000-0000-0000-0000-000000000020',
+        summary: 'checkpoint',
+      },
+      { session: undefined }
+    );
+
+    const payload = JSON.parse(response.content[0].text) as { error: { message: string } };
+    expect(payload.error.message).toContain('agent_name is required');
+    expect(checkpointRunMock).not.toHaveBeenCalled();
   });
 
   it('lists runs with offset pagination metadata', async () => {
