@@ -186,4 +186,56 @@ describe('page query concurrency', () => {
     expect(clientQueryMock.mock.calls.some(([sql]) => String(sql).includes('UPDATE sessions'))).toBe(true);
     expect(releaseMock).toHaveBeenCalled();
   });
+
+  it('rolls back page creation when block insertion fails', async () => {
+    poolQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'SELECT id FROM workspaces WHERE id = $1') {
+        return { rows: [{ id: 'ws-1' }] };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'ROLLBACK') {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes('INSERT INTO pages')) {
+        return {
+          rows: [
+            {
+              id: 'page-1',
+              workspace_id: 'ws-1',
+              session_id: null,
+              parent_page_id: null,
+              title: 'Page title',
+              icon: null,
+              cover_url: null,
+              tags: [],
+              source: null,
+              importance: 0.5,
+              expires_at: null,
+              created_at: '2026-01-01T00:00:00.000Z',
+              updated_at: '2026-01-01T00:00:00.000Z',
+              last_accessed_at: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        };
+      }
+      if (sql === 'COMMIT') {
+        throw new Error('page creation should not commit after block insertion fails');
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    appendBlocksMock.mockRejectedValue(new Error('block insert failed'));
+
+    const { createPage } = await import('./pages.js');
+    await expect(createPage({
+      title: 'Page title',
+      workspace_id: 'ws-1',
+      blocks: [{ block_type: 'text', content: 'body' }],
+    })).rejects.toThrow('block insert failed');
+
+    expect(clientQueryMock.mock.calls.some(([sql]) => sql === 'ROLLBACK')).toBe(true);
+    expect(releaseMock).toHaveBeenCalled();
+  });
 });
