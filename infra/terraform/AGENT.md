@@ -15,8 +15,8 @@ This folder contains the Terraform configuration for the AWS-hosted version of H
 
 - VPC, subnets, route tables, and internet gateway
 - security groups for ALB, ECS service, RDS, and EFS
-- ALB and target group with `/healthz` checks
-- ECS cluster, task definition, and Fargate service
+- ALB and target group with `/healthz` checks against the FastMCP HTTP Stream health route
+- ECS cluster, task definition, and Fargate service running `SERVER_TRANSPORT=httpStream`
 - ECR repository for the app image
 - RDS PostgreSQL instance
 - EFS for runtime state such as auth/cache directories

@@ -89,8 +89,8 @@ Typical flow:
 
 Runs are useful when tasks represent the durable unit of work, and checkpoints represent resumable execution state inside that unit.
 
-## 6. Local access model
+## 6. Access model
 
-The current runtime is local and system-only.
+The current runtime is system-only.
 
-Tool execution always runs with system access over a local stdio transport rather than application-layer login flows.
+Tool execution maps MCP sessions to system access for both local stdio and the optional HTTP Stream transport. Hosted deployments must rely on trusted network boundaries until application-layer login flows are added.

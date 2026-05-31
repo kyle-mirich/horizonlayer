@@ -9,6 +9,21 @@ Horizon Layer is a self-hosted, local-first MCP server for durable agent memory 
 
 The current runtime is deliberately local and system-only. This repository focuses on the MCP server, persistence model, and query layer. It does not include application-layer auth or SSO wiring.
 
+## Why An Agent Uses It
+
+Horizon Layer is meant to be mounted as an MCP server by an agent, not browsed as a human app.
+
+The core agent loop is:
+
+1. open a workspace and session for the current job
+2. store notes, findings, and structured records as work progresses
+3. create and claim durable tasks with leases, handoffs, and inboxes
+4. checkpoint runs so execution can resume after interruption
+5. search prior context across notes and rows
+6. resume the session later from one bundled context payload
+
+If you want one file that shows the intended MCP story end to end, start with [examples/mcp-agent-loop.md](examples/mcp-agent-loop.md).
+
 ## Why This Project Exists
 
 Most agent workflows need more than a vector store or a chat transcript. They need:
@@ -37,38 +52,82 @@ Horizon Layer puts those primitives behind a single MCP server so clients like C
 
 ## Quickstart
 
-For most users on macOS, Linux, or WSL, this is the shortest path to a usable MCP server without cloning the repo:
+For most users on macOS, Linux, or WSL, the recommended setup is the repo-backed Codex plugin:
+
+```bash
+git clone https://github.com/kyle-mirich/horizonlayer.git
+cd horizonlayer
+bash scripts/install-codex-plugin.sh
+```
+
+The installer:
+
+- installs package dependencies
+- builds the HorizonLayer launcher
+- registers the HorizonLayer Codex plugin for the current user
+- refreshes Codex's installed plugin cache
+- removes any older global HorizonLayer MCP entry to avoid duplicate servers
+
+Restart Codex after installation so the plugin skills and MCP server are loaded from the updated plugin cache.
+
+If you only want the published MCP server without the plugin skills, use:
 
 ```bash
 codex mcp add horizonlayer -- npx -y --package=horizonlayer horizonlayer
 ```
 
-What happens on first launch:
+On first launch, HorizonLayer prepares its database automatically:
 
-- `npx` downloads the published package and runs the `horizonlayer` launcher
-- if `DATABASE_URL` is set, the launcher uses it directly
-- otherwise it tries `127.0.0.1:5432`
-- if Postgres is still unavailable, it starts a local `pgvector/pgvector:pg17` Docker container
-- it creates the `horizon_layer` database if needed
-- it runs migrations before starting the server
+- if `DATABASE_URL` is set, HorizonLayer uses it directly
+- otherwise HorizonLayer tries local Postgres on `127.0.0.1:5432`
+- if Postgres is still unavailable, HorizonLayer starts a local `pgvector/pgvector:pg17` Docker container
+- HorizonLayer creates the `horizon_layer` database if needed
+- HorizonLayer runs migrations before starting the MCP server
 
-Prerequisites for the package path:
+Prerequisites:
 
 - Node.js 22+
-- Docker Desktop or another Docker runtime, unless `DATABASE_URL` points to an existing PostgreSQL instance
+- Codex
+- Docker Desktop or another Docker runtime, unless `DATABASE_URL` points to an existing PostgreSQL + pgvector instance
 
-If you are developing the server itself rather than consuming it as a package, use the clone-based flow in [CONTRIBUTING.md](CONTRIBUTING.md).
+Docker is a fallback, not a requirement. To run without Docker, provide a PostgreSQL database with pgvector and export `DATABASE_URL` before starting Codex:
+
+```bash
+export DATABASE_URL=postgres://user:pass@localhost:5432/horizon_layer
+```
+
+## Quick Agent Demo
+
+If you want a fast proof that the MCP server supports the full agent loop, run:
+
+```bash
+npm ci
+npm run build
+npm run demo:agent
+```
+
+The demo connects through MCP over stdio and exercises the canonical flow:
+
+- create workspace
+- start session
+- write notes
+- create and claim a task
+- start and checkpoint a run
+- search memory
+- resume session context
+
+By default it launches `dist/launcher.js`, so it follows the same package-style startup path as a real MCP client.
 
 ## Runtime Model
 
-Horizon Layer is stdio-only. It is intended to be launched directly by MCP clients such as Codex and Claude.
+Horizon Layer defaults to stdio and is intended to be launched directly by MCP clients such as Codex and Claude. It can also run FastMCP's HTTP Stream transport for deliberately hosted deployments.
 
 ```
 ┌─────────────────────────────────────────────┐
 │              MCP Clients                    │
 │         (Claude, Codex, agents)             │
 └──────────────────┬──────────────────────────┘
-                   │  MCP over stdio
+                   │  MCP over stdio or HTTP Stream
 ┌──────────────────▼──────────────────────────┐
 │            Tool Layer (8 tools)             │
 │  workspace · page · database · row          │
@@ -95,12 +154,14 @@ Horizon Layer is stdio-only. It is intended to be launched directly by MCP clien
 
 ## Install Modes
 
-### 1. Published npm package via `npx`
+### 1. Codex Plugin
 
-This is the easiest MCP-client path for end users.
+Use this when you want Codex to load HorizonLayer skills and run the MCP server from this checkout.
 
 ```bash
-codex mcp add horizonlayer -- npx -y --package=horizonlayer horizonlayer
+git clone https://github.com/kyle-mirich/horizonlayer.git
+cd horizonlayer
+bash scripts/install-codex-plugin.sh
 ```
 
 Behavior:
@@ -111,9 +172,19 @@ Behavior:
 - it creates the `horizon_layer` database if needed
 - it runs migrations before starting the server
 
+The plugin is installed globally for the current user and remains connected to this checkout. The installer also refreshes Codex's plugin cache so Codex sees the latest plugin files immediately after restart.
+
+### 2. Published npm package via `npx`
+
+Use this when you only want the MCP server without repo-backed plugin skills.
+
+```bash
+codex mcp add horizonlayer -- npx -y --package=horizonlayer horizonlayer
+```
+
 The explicit `--package=horizonlayer horizonlayer` form is the most reliable invocation for MCP clients.
 
-### 2. Local build of the packaged launcher
+### 3. Local build of the packaged launcher
 
 Use this when you want package-equivalent behavior from a local checkout.
 
@@ -123,7 +194,7 @@ npm run build
 node dist/launcher.js
 ```
 
-### 3. Local stdio development against an existing database
+### 4. Local stdio development against an existing database
 
 Use this when you are changing the server itself.
 
@@ -146,6 +217,7 @@ make dev          # local stdio server against an existing DB
 make dev-stdio    # same as make dev
 make smoke-live   # smoke test against an already running server
 make smoke-local  # end-to-end stdio smoke test with local bootstrap
+npm run install:codex-plugin # build and install the Codex plugin
 ```
 
 ## Quality Signals
@@ -160,11 +232,20 @@ make smoke-local
 
 - `npm run verify` runs lint, typecheck, and the unit test suite.
 - `make smoke-local` starts local PostgreSQL, builds the launcher, and runs the end-to-end smoke test over stdio.
+- `npm run demo:agent` runs a narrative MCP workflow that shows the intended agent-facing product surface.
 - GitHub Actions runs both verification and local smoke coverage on pushes and pull requests.
 
 ## MCP Client Setup
 
 ### Codex
+
+Repo-backed plugin:
+
+```bash
+bash scripts/install-codex-plugin.sh
+```
+
+Published MCP only:
 
 ```bash
 codex mcp add horizonlayer -- npx -y --package=horizonlayer horizonlayer
@@ -217,6 +298,7 @@ More detail: [docs/configuration.md](docs/configuration.md)
 - [docs/flows.md](docs/flows.md): main application flows
 - [docs/agent-playbook.md](docs/agent-playbook.md): contributor navigation and verification flow
 - [examples/](examples/): copy-pasteable example workflows
+- [examples/mcp-agent-loop.md](examples/mcp-agent-loop.md): canonical end-to-end agent workflow
 - [CONTRIBUTING.md](CONTRIBUTING.md): contributor workflow
 - [SECURITY.md](SECURITY.md): vulnerability reporting policy
 

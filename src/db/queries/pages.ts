@@ -67,6 +67,7 @@ export async function createPage(params: {
 }): Promise<PageWithBlocks> {
   const pool = getPool();
   const access = params.access ?? { kind: 'system' as const };
+  const client = await pool.connect();
 
   let workspaceId = params.workspace_id ?? null;
   let sessionId = params.session_id ?? null;
@@ -101,38 +102,57 @@ export async function createPage(params: {
     ? new Date(Date.now() + params.expires_in_days * 86400000).toISOString()
     : null;
 
-  const { rows } = await pool.query<Page>(
-    `INSERT INTO pages (title, workspace_id, session_id, parent_page_id, icon, cover_url, tags, source, importance, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     RETURNING *`,
-    [
-      params.title,
-      workspaceId,
-      sessionId,
-      params.parent_page_id ?? null,
-      params.icon ?? null,
-      params.cover_url ?? null,
-      params.tags ?? [],
-      params.source ?? null,
-      params.importance ?? 0.5,
-      expiresAt,
-    ]
-  );
-  const page = rows[0];
-
   let blocks: Awaited<ReturnType<typeof getBlocksForPage>> = [];
-  if (params.blocks && params.blocks.length > 0) {
-    blocks = await appendBlocks(page.id, params.blocks);
+  let page: Page | null = null;
+  let finished = false;
+  try {
+    await client.query('BEGIN');
+
+    const { rows } = await client.query<Page>(
+      `INSERT INTO pages (title, workspace_id, session_id, parent_page_id, icon, cover_url, tags, source, importance, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING *`,
+      [
+        params.title,
+        workspaceId,
+        sessionId,
+        params.parent_page_id ?? null,
+        params.icon ?? null,
+        params.cover_url ?? null,
+        params.tags ?? [],
+        params.source ?? null,
+        params.importance ?? 0.5,
+        expiresAt,
+      ]
+    );
+    page = rows[0];
+
+    if (params.blocks && params.blocks.length > 0) {
+      blocks = await appendBlocks(page.id, params.blocks, client);
+    }
+
+    if (page.session_id) {
+      await touchSession(page.session_id, client);
+    }
+    await client.query('COMMIT');
+    finished = true;
+  } catch (error) {
+    if (!finished) {
+      await client.query('ROLLBACK');
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  if (!page) {
+    throw new Error('Page creation failed');
   }
 
   try {
     await updatePageEmbedding(page.id, page.title, blocks);
   } catch (error) {
     logEmbeddingFailure(page.id, error);
-  }
-
-  if (page.session_id) {
-    await touchSession(page.session_id);
   }
 
   return { ...page, blocks };

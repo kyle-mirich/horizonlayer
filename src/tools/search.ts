@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { AppServer } from '../mcp.js';
 import { search } from '../db/queries/search.js';
-import { accessFromSession, errorEnvelope, successEnvelope } from './common.js';
+import { accessFromSession, errorEnvelope, errorEnvelopeFromUnknown, successEnvelope } from './common.js';
 
 const SearchSchema = z.object({
   query: z.string().min(1).optional().describe('Search query text'),
@@ -67,42 +67,46 @@ export function registerSearchTools(server: AppServer): void {
     parameters: SearchSchema,
     execute: async (params, context) => {
       const action = 'search';
-      const access = accessFromSession(context.session);
-      const query = params.query ?? params.q;
-      if (!query) {
-        return errorEnvelope(action, 'query (or q) is required');
+      try {
+        const access = accessFromSession(context.session);
+        const query = params.query ?? params.q;
+        if (!query) {
+          return errorEnvelope(action, 'query (or q) is required');
+        }
+
+        const contentTypes: Array<'pages' | 'rows'> = params.database_id
+          ? ['rows']
+          : (params.content_types ??
+            (params.type === 'page'
+              ? ['pages']
+              : params.type === 'row'
+                ? ['rows']
+                : ['pages', 'rows']));
+
+        const limit = params.limit ?? 20;
+        const offset = params.offset ?? 0;
+        const fetchLimit = limit + offset;
+        const results = await search({
+          query,
+          mode: params.mode ?? 'hybrid',
+          content_types: contentTypes,
+          workspace_id: params.workspace_id,
+          session_id: params.session_id,
+          database_id: params.database_id,
+          tags: params.tags,
+          min_importance: params.min_importance,
+          limit: fetchLimit,
+          access,
+        });
+
+        return successEnvelope({
+          action,
+          result: results.slice(offset, offset + limit),
+          meta: { limit, offset, total_available: results.length },
+        });
+      } catch (error) {
+        return errorEnvelopeFromUnknown(action, error);
       }
-
-      const contentTypes: Array<'pages' | 'rows'> = params.database_id
-        ? ['rows']
-        : (params.content_types ??
-          (params.type === 'page'
-            ? ['pages']
-            : params.type === 'row'
-              ? ['rows']
-              : ['pages', 'rows']));
-
-      const limit = params.limit ?? 20;
-      const offset = params.offset ?? 0;
-      const fetchLimit = limit + offset;
-      const results = await search({
-        query,
-        mode: params.mode ?? 'hybrid',
-        content_types: contentTypes,
-        workspace_id: params.workspace_id,
-        session_id: params.session_id,
-        database_id: params.database_id,
-        tags: params.tags,
-        min_importance: params.min_importance,
-        limit: fetchLimit,
-        access,
-      });
-
-      return successEnvelope({
-        action,
-        result: results.slice(offset, offset + limit),
-        meta: { limit, offset, total_available: results.length },
-      });
     },
   });
 }

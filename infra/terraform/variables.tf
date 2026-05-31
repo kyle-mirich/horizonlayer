@@ -39,9 +39,9 @@ variable "certificate_arn" {
 }
 
 variable "allowed_ingress_cidrs" {
-  description = "CIDR blocks allowed to reach the public ALB listeners."
+  description = "CIDR blocks allowed to reach the public ALB listeners. Replace the non-routable default with trusted MCP client networks."
   type        = list(string)
-  default     = ["0.0.0.0/0"]
+  default     = ["203.0.113.0/24"]
 }
 
 variable "vpc_cidr" {
@@ -268,4 +268,3 @@ variable "allowed_hosts" {
   type        = list(string)
   default     = []
 }
-

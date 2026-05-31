@@ -99,4 +99,19 @@ describe('row tool', () => {
 
     expect(payload.meta.next_cursor).toBeTruthy();
   });
+
+  it('requires integer query pagination', async () => {
+    const tool = await buildTool();
+
+    expect(tool.parameters.safeParse({
+      action: 'query',
+      database_id: '00000000-0000-0000-0000-000000000001',
+      limit: 1.5,
+    }).success).toBe(false);
+    expect(tool.parameters.safeParse({
+      action: 'query',
+      database_id: '00000000-0000-0000-0000-000000000001',
+      offset: 0.5,
+    }).success).toBe(false);
+  });
 });

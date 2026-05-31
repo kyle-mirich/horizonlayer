@@ -42,6 +42,25 @@ export interface PropertyInput {
   is_required?: boolean;
 }
 
+function normalizePropertyName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function assertUniquePropertyInputs(properties: Pick<PropertyInput, 'name'>[]): void {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const property of properties) {
+    const normalized = normalizePropertyName(property.name);
+    if (seen.has(normalized)) {
+      duplicates.add(normalized);
+    }
+    seen.add(normalized);
+  }
+  if (duplicates.size > 0) {
+    throw new Error(`Duplicate database property names: ${[...duplicates].join(', ')}`);
+  }
+}
+
 async function assertDatabaseConflict(id: string, expectedUpdatedAt?: string): Promise<void> {
   if (!expectedUpdatedAt) {
     return;
@@ -67,8 +86,7 @@ export async function createDatabase(params: {
   source?: string;
   access?: AccessContext;
 }): Promise<DatabaseWithProperties> {
-  const pool = getPool();
-  const client = await pool.connect();
+  assertUniquePropertyInputs(params.properties);
   const access = params.access ?? { kind: 'system' as const };
 
   let workspaceId = params.workspace_id ?? null;
@@ -86,6 +104,9 @@ export async function createDatabase(params: {
   } else if (!isSystemAccess(access)) {
     throw new Error('workspace_id is required for authenticated database creation');
   }
+
+  const pool = getPool();
+  const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
@@ -269,46 +290,76 @@ export async function addDatabaseProperty(
     await assertDatabaseWriteAccess(databaseId, access);
   }
 
-  const touchResult = params.expected_updated_at
-    ? await pool.query<{ id: string }>(
-      `UPDATE databases
-       SET updated_at = NOW()
-       WHERE id = $1 AND updated_at = $2
-       RETURNING id`,
-      [databaseId, params.expected_updated_at]
-    )
-    : await pool.query<{ id: string }>(
-      `UPDATE databases
-       SET updated_at = NOW()
-       WHERE id = $1
-       RETURNING id`,
+  const client = await pool.connect();
+  let transactionFinished = false;
+  try {
+    await client.query('BEGIN');
+
+    const touchResult = params.expected_updated_at
+      ? await client.query<{ id: string }>(
+        `UPDATE databases
+         SET updated_at = NOW()
+         WHERE id = $1 AND updated_at = $2
+         RETURNING id`,
+        [databaseId, params.expected_updated_at]
+      )
+      : await client.query<{ id: string }>(
+        `UPDATE databases
+         SET updated_at = NOW()
+         WHERE id = $1
+         RETURNING id`,
+        [databaseId]
+      );
+
+    if (!touchResult.rows[0]) {
+      await client.query('ROLLBACK');
+      transactionFinished = true;
+      await assertDatabaseConflict(databaseId, params.expected_updated_at);
+      throw new Error(`Database ${databaseId} not found`);
+    }
+
+    const { rows: duplicateRows } = await client.query<{ id: string }>(
+      `SELECT id
+       FROM database_properties
+       WHERE database_id = $1
+         AND LOWER(name) = LOWER($2)
+       LIMIT 1`,
+      [databaseId, params.name]
+    );
+    if (duplicateRows[0]) {
+      await client.query('ROLLBACK');
+      transactionFinished = true;
+      throw new Error(`Property ${params.name} already exists in database ${databaseId}`);
+    }
+
+    const { rows: maxRows } = await client.query<{ max_pos: number | null }>(
+      'SELECT MAX(position) AS max_pos FROM database_properties WHERE database_id = $1',
       [databaseId]
     );
+    const pos = (maxRows[0].max_pos ?? -1) + 1;
 
-  if (!touchResult.rows[0]) {
-    await assertDatabaseConflict(databaseId, params.expected_updated_at);
-    throw new Error(`Database ${databaseId} not found`);
+    const { rows } = await client.query<DatabaseProperty>(
+      `INSERT INTO database_properties (database_id, name, property_type, options, position, is_required)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [
+        databaseId,
+        params.name,
+        params.type,
+        JSON.stringify(params.options ?? {}),
+        pos,
+        params.is_required ?? false,
+      ]
+    );
+    await client.query('COMMIT');
+    transactionFinished = true;
+    return rows[0];
+  } catch (error) {
+    if (!transactionFinished) {
+      await client.query('ROLLBACK');
+    }
+    throw error;
+  } finally {
+    client.release();
   }
-
-  // Get current max position
-  const { rows: maxRows } = await pool.query<{ max_pos: number | null }>(
-    'SELECT MAX(position) AS max_pos FROM database_properties WHERE database_id = $1',
-    [databaseId]
-  );
-  const pos = (maxRows[0].max_pos ?? -1) + 1;
-
-  const { rows } = await pool.query<DatabaseProperty>(
-    `INSERT INTO database_properties (database_id, name, property_type, options, position, is_required)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`,
-    [
-      databaseId,
-      params.name,
-      params.type,
-      JSON.stringify(params.options ?? {}),
-      pos,
-      params.is_required ?? false,
-    ]
-  );
-  return rows[0];
 }

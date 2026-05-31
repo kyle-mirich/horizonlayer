@@ -10,7 +10,7 @@ vi.mock('../db/queries/search.js', () => ({
 function buildTool() {
   let definition:
     | {
-        execute: (params: Record<string, unknown>, context: { session?: unknown }) => Promise<{ content: Array<{ text: string }> }>;
+        execute: (params: Record<string, unknown>, context: { session?: unknown }) => Promise<{ content: Array<{ text: string }>; isError?: boolean }>;
         parameters: { safeParse: (value: unknown) => { success: boolean } };
       }
     | null = null;
@@ -93,5 +93,23 @@ describe('search tool', () => {
     expect(tool.parameters.safeParse({ cursor: 'abc', query: 'term' }).success).toBe(false);
     expect(tool.parameters.safeParse({ fields: ['id'], query: 'term' }).success).toBe(false);
     expect(tool.parameters.safeParse({ query: 'term', return: 'full' }).success).toBe(false);
+  });
+
+  it('returns an error envelope when the search query layer rejects', async () => {
+    searchMock.mockRejectedValue(new Error('Invalid regex query: unterminated character class'));
+    const tool = await buildTool();
+
+    const response = await tool.execute(
+      {
+        mode: 'regex',
+        query: '[',
+      },
+      { session: undefined }
+    );
+    const payload = JSON.parse(response.content[0].text) as { ok: boolean; error: { message: string } };
+
+    expect(response.isError).toBe(true);
+    expect(payload.ok).toBe(false);
+    expect(payload.error.message).toBe('Invalid regex query: unterminated character class');
   });
 });

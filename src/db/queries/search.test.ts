@@ -28,7 +28,23 @@ describe('search query layer', () => {
     vectorToSqlMock.mockReset().mockReturnValue('[0.1,0.2,0.3]');
   });
 
-  it('returns no row hits when session scope is requested', async () => {
+  it('still searches rows when agents include session scope', async () => {
+    poolQueryMock.mockImplementation(async (sql: string) => {
+      expect(sql).toContain('FROM database_rows r');
+      expect(sql).not.toContain('session_id');
+      return {
+        rows: [{
+          database_id: 'db-1',
+          id: 'row-1',
+          score: 1,
+          snippet: 'row hit',
+          tags: [],
+          title: 'Row',
+          workspace_id: 'ws-1',
+        }],
+      };
+    });
+
     const { search } = await import('./search.js');
     const results = await search({
       query: 'term',
@@ -37,9 +53,9 @@ describe('search query layer', () => {
       session_id: 'session-1',
     });
 
-    expect(results).toEqual([]);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.id).toBe('row-1');
     expect(assertSessionReadAccessMock).toHaveBeenCalledWith('session-1', expect.any(Object));
-    expect(poolQueryMock).not.toHaveBeenCalled();
   });
 
   it('scopes page search to the requested session', async () => {
@@ -153,5 +169,33 @@ describe('search query layer', () => {
     expect(embedMock).toHaveBeenCalledWith('term');
     expect(vectorToSqlMock).toHaveBeenCalledWith([0.1, 0.2, 0.3]);
     expect(results).toHaveLength(1);
+  });
+
+  it('rejects invalid regex searches before querying Postgres', async () => {
+    const { search } = await import('./search.js');
+
+    await expect(
+      search({
+        query: '[',
+        mode: 'regex',
+        content_types: ['pages'],
+      })
+    ).rejects.toThrow('Invalid regex query');
+
+    expect(poolQueryMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized regex searches before querying Postgres', async () => {
+    const { search } = await import('./search.js');
+
+    await expect(
+      search({
+        query: 'x'.repeat(513),
+        mode: 'regex',
+        content_types: ['rows'],
+      })
+    ).rejects.toThrow('Regex query cannot exceed 512 characters');
+
+    expect(poolQueryMock).not.toHaveBeenCalled();
   });
 });

@@ -2,9 +2,11 @@ aws_region   = "us-west-2"
 environment  = "prod"
 app_image_tag = "2026-03-12"
 
-# Leave null for an HTTP-only ALB using the generated DNS name.
+# Leave null for an ALB using the generated DNS name. Restrict allowed_ingress_cidrs
+# to trusted MCP clients before applying this example.
 public_base_url = null
 certificate_arn = null
+allowed_ingress_cidrs = ["203.0.113.0/24"]
 
 sso_client_id                 = "your-oidc-client-id"
 sso_client_secret_secret_arn  = "arn:aws:secretsmanager:us-west-2:123456789012:secret:horizonsdb/prod/sso-client-secret"
@@ -20,4 +22,3 @@ stripe_secret_key_secret_arn       = null
 stripe_webhook_secret_secret_arn   = null
 
 allowed_hosts = []
-

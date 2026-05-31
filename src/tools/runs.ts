@@ -29,7 +29,7 @@ const RunSchema = z.object({
   session_id: z.string().uuid().optional().describe('Optional session scope for start/list/get'),
   task_id: z.string().uuid().optional().describe('Optional task ID for start/list filtering'),
   parent_run_id: z.string().uuid().optional().describe('Optional parent run ID for start'),
-  agent_name: z.string().min(1).max(255).optional().describe('Agent name for start/list'),
+  agent_name: z.string().min(1).max(255).optional().describe('Agent name for start/list and run mutations'),
   title: z.string().max(500).optional().describe('Run title for start'),
   summary: z.string().optional().describe('Checkpoint summary'),
   metadata: z.record(z.unknown()).optional().describe('Run or checkpoint metadata'),
@@ -98,8 +98,10 @@ export function registerRunTools(server: AppServer): void {
 
           case 'checkpoint': {
             if (!params.id) return errorEnvelope(action, 'id is required for run action=checkpoint');
+            if (!params.agent_name) return errorEnvelope(action, 'agent_name is required for run action=checkpoint');
             const run = await checkpointRun({
               run_id: params.id,
+              agent_name: params.agent_name,
               summary: params.summary,
               state: params.state,
               metadata: params.metadata,
@@ -111,8 +113,10 @@ export function registerRunTools(server: AppServer): void {
 
           case 'complete': {
             if (!params.id) return errorEnvelope(action, 'id is required for run action=complete');
+            if (!params.agent_name) return errorEnvelope(action, 'agent_name is required for run action=complete');
             const run = await completeRun({
               run_id: params.id,
+              agent_name: params.agent_name,
               result: params.result,
               access,
             });
@@ -122,8 +126,10 @@ export function registerRunTools(server: AppServer): void {
 
           case 'fail': {
             if (!params.id) return errorEnvelope(action, 'id is required for run action=fail');
+            if (!params.agent_name) return errorEnvelope(action, 'agent_name is required for run action=fail');
             const run = await failRun({
               run_id: params.id,
+              agent_name: params.agent_name,
               result: params.result,
               error_message: params.error_message,
               access,
@@ -134,8 +140,10 @@ export function registerRunTools(server: AppServer): void {
 
           case 'cancel': {
             if (!params.id) return errorEnvelope(action, 'id is required for run action=cancel');
+            if (!params.agent_name) return errorEnvelope(action, 'agent_name is required for run action=cancel');
             const run = await cancelRun({
               run_id: params.id,
+              agent_name: params.agent_name,
               result: params.result,
               access,
             });

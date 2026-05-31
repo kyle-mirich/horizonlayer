@@ -1,0 +1,4 @@
+interface:
+  display_name: "HorizonLayer Database"
+  short_description: "Use structured databases and rows."
+  default_prompt: "Track this in a HorizonLayer database."

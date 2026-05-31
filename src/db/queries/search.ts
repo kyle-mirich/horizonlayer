@@ -22,6 +22,18 @@ export interface SearchResult {
   tags: string[];
 }
 
+function assertSafeRegexQuery(query: string): void {
+  if (query.length > 512) {
+    throw new Error('Regex query cannot exceed 512 characters');
+  }
+  try {
+    new RegExp(query);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid regex query: ${message}`);
+  }
+}
+
 export async function search(params: {
   query: string;
   mode: SearchMode;
@@ -37,6 +49,10 @@ export async function search(params: {
   const contentTypes = params.content_types ?? ['pages', 'rows'];
   const limit = params.limit ?? 20;
   const access = params.access ?? { kind: 'system' as const };
+
+  if (params.mode === 'regex') {
+    assertSafeRegexQuery(params.query);
+  }
 
   if (params.session_id) {
     const session = await assertSessionReadAccess(params.session_id, access);
@@ -67,7 +83,7 @@ export async function search(params: {
     results.push(...pageResults);
   }
 
-  if (contentTypes.includes('rows') && !params.session_id) {
+  if (contentTypes.includes('rows')) {
     const rowResults = await searchRows({
       query: params.query,
       mode: params.mode,

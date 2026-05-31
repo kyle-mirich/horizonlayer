@@ -1,4 +1,3 @@
-import { writeFile } from 'node:fs/promises';
 import { getPool, type PoolClient } from '../client.js';
 import type { AccessContext } from '../access.js';
 import {
@@ -130,6 +129,20 @@ function truncate(text: string, max = 400): string {
   if (text.length <= max) return text;
   const cut = text.lastIndexOf(' ', max);
   return `${text.slice(0, cut > 0 ? cut : max)}...`;
+}
+
+function jsonBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value, null, 2), 'utf8');
+}
+
+function resumePreview(bundle: SessionResumeBundle): NonNullable<SessionResumeBundleResult['preview']> {
+  return {
+    recent_page_count: bundle.recent_pages.length,
+    recent_run_count: bundle.recent_runs.length,
+    search_hit_count: bundle.search_hits.length,
+    session: bundle.session,
+    task_count: bundle.open_and_recent_tasks.length,
+  };
 }
 
 export async function createSession(params: {
@@ -398,22 +411,57 @@ export async function getSessionResumeBundle(params: {
     search_hits: searchHits,
   };
 
-  const serialized = JSON.stringify(bundle, null, 2);
-  const bytes = Buffer.byteLength(serialized, 'utf8');
+  let serialized = JSON.stringify(bundle, null, 2);
+  let bytes = Buffer.byteLength(serialized, 'utf8');
   if (bytes > maxBytes) {
-    const filePath = `/tmp/horizonlayer-session-${params.session_id}-${Date.now()}.txt`;
-    await writeFile(filePath, serialized, 'utf8');
+    const compactBundle: SessionResumeBundle = {
+      ...bundle,
+      recent_pages: bundle.recent_pages.map((page) => ({
+        ...page,
+        content_preview: truncate(page.content_preview, 200),
+      })),
+      recent_runs: bundle.recent_runs.map((run) => ({
+        ...run,
+        latest_checkpoint: run.latest_checkpoint
+          ? {
+            ...run.latest_checkpoint,
+            summary: run.latest_checkpoint.summary
+              ? truncate(run.latest_checkpoint.summary, 200)
+              : null,
+            state: {},
+            metadata: {},
+          }
+          : null,
+      })),
+      search_hits: bundle.search_hits.map((hit) => ({
+        ...hit,
+        snippet: truncate(hit.snippet, 200),
+      })),
+    };
+    serialized = JSON.stringify(compactBundle, null, 2);
+    bytes = Buffer.byteLength(serialized, 'utf8');
+    const preview = resumePreview(compactBundle);
+    if (bytes > maxBytes) {
+      const previewBytes = jsonBytes(preview);
+      if (previewBytes <= maxBytes) {
+        return {
+          bytes: previewBytes,
+          max_bytes: maxBytes,
+          preview,
+          truncated: true,
+        };
+      }
+      return {
+        bytes: 0,
+        max_bytes: maxBytes,
+        truncated: true,
+      };
+    }
     return {
+      bundle: compactBundle,
       bytes,
-      file_path: filePath,
       max_bytes: maxBytes,
-      preview: {
-        recent_page_count: bundle.recent_pages.length,
-        recent_run_count: bundle.recent_runs.length,
-        search_hit_count: bundle.search_hits.length,
-        session: bundle.session,
-        task_count: bundle.open_and_recent_tasks.length,
-      },
+      preview,
       truncated: true,
     };
   }

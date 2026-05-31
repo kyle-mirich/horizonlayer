@@ -116,7 +116,7 @@ describe('session query layer', () => {
     expect(result?.bundle?.search_hits[0]?.id).toBe('page-1');
   });
 
-  it('writes oversized resume bundles to /tmp instead of returning them inline', async () => {
+  it('keeps oversized resume bundles inline by compacting previews', async () => {
     poolQueryMock.mockImplementation(async (sql: string) => {
       if (sql.includes('SELECT s.*') && sql.includes('page_count')) {
         return {
@@ -151,8 +151,9 @@ describe('session query layer', () => {
     const result = await getSessionResumeBundle({ session_id: 'session-1', max_bytes: 100 });
 
     expect(result?.truncated).toBe(true);
-    expect(result?.file_path).toMatch(/^\/tmp\/horizonlayer-session-session-1-\d+\.txt$/);
-    expect(writeFileMock).toHaveBeenCalledWith(expect.stringMatching(/^\/tmp\/horizonlayer-session-session-1-\d+\.txt$/), expect.any(String), 'utf8');
-    expect(result?.bundle).toBeUndefined();
+    expect(result?.bytes).toBeLessThanOrEqual(100);
+    expect(result?.file_path).toBeUndefined();
+    expect(writeFileMock).not.toHaveBeenCalled();
+    expect(result?.bundle?.recent_pages[0]?.content_preview.length ?? 0).toBeLessThan(5000);
   });
 });

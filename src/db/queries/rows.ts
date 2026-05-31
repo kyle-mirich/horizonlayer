@@ -1,5 +1,5 @@
 import { isSystemAccess, type AccessContext } from '../access.js';
-import { getPool } from '../client.js';
+import { getPool, type PoolClient } from '../client.js';
 import { embed, vectorToSql } from '../../embeddings/index.js';
 import type { DatabaseProperty } from './databases.js';
 import { assertDatabaseReadAccess, assertDatabaseWriteAccess, assertRowReadAccess, assertRowWriteAccess } from './accessControl.js';
@@ -141,6 +141,36 @@ function validateRowValues(
   }
 }
 
+function assertKnownQueryProperties(
+  filters: RowFilter[] | undefined,
+  sortBy: string | undefined,
+  propertiesByName: Map<string, DatabaseProperty>
+): void {
+  const unknownFilterProperties = [...new Set(
+    (filters ?? [])
+      .map((filter) => filter.property)
+      .filter((property) => !propertiesByName.has(property))
+  )];
+  if (unknownFilterProperties.length > 0) {
+    throw new Error(`Unknown filter properties: ${unknownFilterProperties.join(', ')}`);
+  }
+  if (sortBy && !propertiesByName.has(sortBy)) {
+    throw new Error(`Unknown sort property: ${sortBy}`);
+  }
+}
+
+function normalizePaginationValue(
+  name: 'limit' | 'offset',
+  value: number | undefined,
+  defaultValue: number
+): number {
+  const normalized = value ?? defaultValue;
+  if (!Number.isInteger(normalized) || normalized < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return normalized;
+}
+
 function extractRowValue(val: RowValue, propType: string): unknown {
   switch (propType) {
     case 'title':
@@ -163,6 +193,65 @@ function extractRowValue(val: RowValue, propType: string): unknown {
     default:
       return val.value_text;
   }
+}
+
+async function insertRowInTransaction(
+  client: PoolClient,
+  params: {
+    database_id: string;
+    values: Record<string, unknown>;
+    tags?: string[];
+    source?: string;
+    importance?: number;
+    expires_in_days?: number;
+    properties: DatabaseProperty[];
+  }
+): Promise<DatabaseRow> {
+  const expiresAt = params.expires_in_days
+    ? new Date(Date.now() + params.expires_in_days * 86400000).toISOString()
+    : null;
+
+  const { rows } = await client.query<DatabaseRow>(
+    `INSERT INTO database_rows (database_id, tags, source, importance, expires_at)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING *`,
+    [
+      params.database_id,
+      params.tags ?? [],
+      params.source ?? null,
+      params.importance ?? 0.5,
+      expiresAt,
+    ]
+  );
+  const row = rows[0];
+
+  for (const prop of params.properties) {
+    if (!(prop.name in params.values)) continue;
+    const val = params.values[prop.name];
+    const typed = setRowValue(prop, val);
+
+    await client.query(
+      `INSERT INTO database_row_values (row_id, property_id, value_text, value_number, value_date, value_bool, value_json)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (row_id, property_id) DO UPDATE SET
+         value_text = EXCLUDED.value_text,
+         value_number = EXCLUDED.value_number,
+         value_date = EXCLUDED.value_date,
+         value_bool = EXCLUDED.value_bool,
+         value_json = EXCLUDED.value_json`,
+      [
+        row.id,
+        prop.id,
+        typed.value_text ?? null,
+        typed.value_number ?? null,
+        typed.value_date ?? null,
+        typed.value_bool ?? null,
+        typed.value_json !== undefined ? JSON.stringify(typed.value_json) : null,
+      ]
+    );
+  }
+
+  return row;
 }
 
 export async function createRow(params: {
@@ -189,51 +278,8 @@ export async function createRow(params: {
   try {
     await client.query('BEGIN');
 
-    const expiresAt = params.expires_in_days
-      ? new Date(Date.now() + params.expires_in_days * 86400000).toISOString()
-      : null;
-
-    const { rows } = await client.query<DatabaseRow>(
-      `INSERT INTO database_rows (database_id, tags, source, importance, expires_at)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING *`,
-      [
-        params.database_id,
-        params.tags ?? [],
-        params.source ?? null,
-        params.importance ?? 0.5,
-        expiresAt,
-      ]
-    );
-    const row = rows[0];
+    const row = await insertRowInTransaction(client, params);
     rowId = row.id;
-
-    // Insert values
-    for (const prop of params.properties) {
-      if (!(prop.name in params.values)) continue;
-      const val = params.values[prop.name];
-      const typed = setRowValue(prop, val);
-
-      await client.query(
-        `INSERT INTO database_row_values (row_id, property_id, value_text, value_number, value_date, value_bool, value_json)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (row_id, property_id) DO UPDATE SET
-           value_text = EXCLUDED.value_text,
-           value_number = EXCLUDED.value_number,
-           value_date = EXCLUDED.value_date,
-           value_bool = EXCLUDED.value_bool,
-           value_json = EXCLUDED.value_json`,
-        [
-          row.id,
-          prop.id,
-          typed.value_text ?? null,
-          typed.value_number ?? null,
-          typed.value_date ?? null,
-          typed.value_bool ?? null,
-          typed.value_json !== undefined ? JSON.stringify(typed.value_json) : null,
-        ]
-      );
-    }
 
     await client.query('COMMIT');
     committed = true;
@@ -461,6 +507,9 @@ export async function queryRows(params: {
   }
 
   const propByName = new Map(params.properties.map((p) => [p.name, p]));
+  assertKnownQueryProperties(params.filters, params.sort_by, propByName);
+  const limit = normalizePaginationValue('limit', params.limit, 50);
+  const offset = normalizePaginationValue('offset', params.offset, 0);
 
   const conditions: string[] = ['r.database_id = $1'];
   const values: unknown[] = [params.database_id];
@@ -529,19 +578,22 @@ export async function queryRows(params: {
   const total = parseInt(countRows[0].count);
 
   let orderBy = 'r.created_at DESC';
+  const rowValues = [...values];
   if (params.sort_by) {
     const sortProp = propByName.get(params.sort_by);
     if (sortProp) {
-      orderBy = `(SELECT ${getValueColumn(sortProp.property_type)} FROM database_row_values v WHERE v.row_id = r.id AND v.property_id = '${sortProp.id}' LIMIT 1) ASC NULLS LAST`;
+      rowValues.push(sortProp.id);
+      orderBy = `(SELECT ${getValueColumn(sortProp.property_type)} FROM database_row_values v WHERE v.row_id = r.id AND v.property_id = $${rowValues.length} LIMIT 1) ASC NULLS LAST`;
     }
   }
 
-  const limit = params.limit ?? 50;
-  const offset = params.offset ?? 0;
+  rowValues.push(limit, offset);
+  const limitParam = rowValues.length - 1;
+  const offsetParam = rowValues.length;
 
   const { rows: rowRows } = await pool.query<DatabaseRow>(
-    `SELECT r.* FROM database_rows r ${where} ORDER BY ${orderBy} LIMIT ${limit} OFFSET ${offset}`,
-    values
+    `SELECT r.* FROM database_rows r ${where} ORDER BY ${orderBy} LIMIT $${limitParam} OFFSET $${offsetParam}`,
+    rowValues
   );
 
   if (rowRows.length === 0) return { rows: [], total };
@@ -594,19 +646,51 @@ export async function bulkCreateRows(params: {
   properties: DatabaseProperty[];
   access?: AccessContext;
 }): Promise<HydratedRow[]> {
+  const pool = getPool();
   const access = params.access ?? { kind: 'system' as const };
   if (!isSystemAccess(access)) {
     await assertDatabaseWriteAccess(params.database_id, access);
   }
-  const results: HydratedRow[] = [];
   for (const row of params.rows) {
-    const created = await createRow({
-      database_id: params.database_id,
-      properties: params.properties,
-      access,
-      ...row,
-    });
-    results.push(created);
+    validateRowValues(row.values, params.properties, 'create');
+  }
+
+  const client = await pool.connect();
+  const createdRows: DatabaseRow[] = [];
+  try {
+    await client.query('BEGIN');
+    for (const row of params.rows) {
+      const created = await insertRowInTransaction(client, {
+        database_id: params.database_id,
+        properties: params.properties,
+        ...row,
+      });
+      createdRows.push(created);
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  for (let index = 0; index < createdRows.length; index++) {
+    const row = params.rows[index];
+    try {
+      await updateRowEmbedding(createdRows[index].id, row.values, params.properties);
+    } catch (error) {
+      logEmbeddingFailure(createdRows[index].id, error);
+    }
+  }
+
+  const results: HydratedRow[] = [];
+  for (let index = 0; index < createdRows.length; index++) {
+    const hydrated = await getRow(createdRows[index].id, params.properties, access);
+    if (!hydrated) {
+      throw new Error(`Row ${createdRows[index].id} not found after bulk creation`);
+    }
+    results.push(hydrated);
   }
   return results;
 }
@@ -615,21 +699,55 @@ export async function cleanupExpired(
   access: AccessContext = { kind: 'system' }
 ): Promise<{ pages_deleted: number; rows_deleted: number }> {
   const pool = getPool();
+  const client = await pool.connect();
   const now = new Date().toISOString();
   void access;
-  const pageResult = await pool.query(
-    'DELETE FROM pages WHERE expires_at IS NOT NULL AND expires_at < $1',
-    [now]
-  );
-  const rowResult = await pool.query(
-    'DELETE FROM database_rows WHERE expires_at IS NOT NULL AND expires_at < $1',
-    [now]
-  );
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `DELETE FROM links l
+       WHERE EXISTS (
+         SELECT 1
+         FROM pages p
+         WHERE p.expires_at IS NOT NULL
+           AND p.expires_at < $1
+           AND (
+             (l.from_type = 'page' AND l.from_id = p.id)
+             OR (l.to_type = 'page' AND l.to_id = p.id)
+           )
+       )
+       OR EXISTS (
+         SELECT 1
+         FROM database_rows r
+         WHERE r.expires_at IS NOT NULL
+           AND r.expires_at < $1
+           AND (
+             (l.from_type = ANY($2) AND l.from_id = r.id)
+             OR (l.to_type = ANY($2) AND l.to_id = r.id)
+           )
+       )`,
+      [now, ['row', 'database_row']]
+    );
+    const pageResult = await client.query(
+      'DELETE FROM pages WHERE expires_at IS NOT NULL AND expires_at < $1',
+      [now]
+    );
+    const rowResult = await client.query(
+      'DELETE FROM database_rows WHERE expires_at IS NOT NULL AND expires_at < $1',
+      [now]
+    );
 
-  return {
-    pages_deleted: pageResult.rowCount ?? 0,
-    rows_deleted: rowResult.rowCount ?? 0,
-  };
+    await client.query('COMMIT');
+    return {
+      pages_deleted: pageResult.rowCount ?? 0,
+      rows_deleted: rowResult.rowCount ?? 0,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function getValueColumn(propType: string): string {

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { AppServer } from '../mcp.js';
 import { createLink, listLinks, deleteLink } from '../db/queries/links.js';
-import { accessFromSession, errorEnvelope, successEnvelope } from './common.js';
+import { accessFromSession, errorEnvelope, errorEnvelopeFromUnknown, successEnvelope } from './common.js';
 import { isPreview, projectResult, type ReturnMode } from './utils.js';
 
 const ItemTypeEnum = z.enum(['workspace', 'page', 'row', 'database', 'block', 'database_row']);
@@ -43,33 +43,35 @@ export function registerLinkTools(server: AppServer): void {
       validate_only: z.boolean().optional().describe('Validate request without writing'),
     }),
     execute: async (params, context) => {
-      const access = accessFromSession(context.session);
       const returnMode = params.return ?? 'full';
       const action: LinkAction =
         params.action ??
         params.op ??
         (params.from_type && params.from_id && params.to_type && params.to_id ? 'create' : 'list');
 
-      switch (action) {
-        case 'create': {
-          if (!params.from_type || !params.from_id || !params.to_type || !params.to_id) {
-            return errorEnvelope(action, 'from_type, from_id, to_type, and to_id are required for link action=create');
-          }
-          if (isPreview(params)) {
-            return respond(action, { preview: true, values: params }, returnMode, params.fields);
-          }
-          const link = await createLink({
-            from_type: params.from_type,
-            from_id: params.from_id,
-            to_type: params.to_type,
-            to_id: params.to_id,
-            link_type: params.link_type,
-            access,
-          });
-          return respond(action, link, returnMode, params.fields);
-        }
+      try {
+        const access = accessFromSession(context.session);
 
-        case 'list': {
+        switch (action) {
+          case 'create': {
+            if (!params.from_type || !params.from_id || !params.to_type || !params.to_id) {
+              return errorEnvelope(action, 'from_type, from_id, to_type, and to_id are required for link action=create');
+            }
+            if (isPreview(params)) {
+              return respond(action, { preview: true, values: params }, returnMode, params.fields);
+            }
+            const link = await createLink({
+              from_type: params.from_type,
+              from_id: params.from_id,
+              to_type: params.to_type,
+              to_id: params.to_id,
+              link_type: params.link_type,
+              access,
+            });
+            return respond(action, link, returnMode, params.fields);
+          }
+
+          case 'list': {
           if (!params.item_type || !params.item_id) {
             return errorEnvelope(action, 'item_type and item_id are required for link action=list');
           }
@@ -82,7 +84,7 @@ export function registerLinkTools(server: AppServer): void {
           return respond(action, links, returnMode, params.fields);
         }
 
-        case 'delete': {
+          case 'delete': {
           if (!params.link_id) return errorEnvelope(action, 'link_id is required for link action=delete');
           if (isPreview(params)) {
             return respond(action, { preview: true, id: params.link_id, success: true }, returnMode, params.fields);
@@ -91,6 +93,9 @@ export function registerLinkTools(server: AppServer): void {
           if (!deleted) return errorEnvelope(action, `Link ${params.link_id} not found`);
           return respond(action, { success: true, id: params.link_id }, returnMode, params.fields);
         }
+        }
+      } catch (error) {
+        return errorEnvelopeFromUnknown(action, error);
       }
     },
   });

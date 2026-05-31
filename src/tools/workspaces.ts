@@ -14,7 +14,7 @@ import {
   getSessionResumeBundle,
   listSessions,
 } from '../db/queries/sessions.js';
-import { accessFromSession, errorEnvelope, successEnvelope } from './common.js';
+import { accessFromSession, errorEnvelope, errorEnvelopeFromUnknown, successEnvelope } from './common.js';
 
 const WorkspaceActionEnum = z.enum([
   'create',
@@ -56,23 +56,24 @@ export function registerWorkspaceTools(server: AppServer): void {
     description: 'Workspace and workspace-scoped session actions',
     parameters: WorkspaceSchema,
     execute: async (params, context) => {
-      const access = accessFromSession(context.session);
       const action: WorkspaceAction = params.action;
+      try {
+        const access = accessFromSession(context.session);
 
-      switch (action) {
-        case 'create': {
-          if (!params.name) return errorEnvelope(action, 'name is required for workspace action=create');
-          const workspace = await createWorkspace(
-            params.name,
-            params.description,
-            params.icon,
-            params.expires_in_days,
-            access
-          );
-          return successEnvelope({ action, result: workspace });
-        }
+        switch (action) {
+          case 'create': {
+            if (!params.name) return errorEnvelope(action, 'name is required for workspace action=create');
+            const workspace = await createWorkspace(
+              params.name,
+              params.description,
+              params.icon,
+              params.expires_in_days,
+              access
+            );
+            return successEnvelope({ action, result: workspace });
+          }
 
-        case 'create_session': {
+          case 'create_session': {
           const workspaceName = params.name ?? `workspace-${new Date().toISOString()}`;
           const workspace = await createWorkspace(
             workspaceName,
@@ -97,7 +98,7 @@ export function registerWorkspaceTools(server: AppServer): void {
           });
         }
 
-        case 'list': {
+          case 'list': {
           const limit = params.limit ?? 50;
           const offset = params.offset ?? 0;
           const workspaces = await listWorkspaces(access);
@@ -108,14 +109,14 @@ export function registerWorkspaceTools(server: AppServer): void {
           });
         }
 
-        case 'get': {
+          case 'get': {
           if (!params.id) return errorEnvelope(action, 'id is required for workspace action=get');
           const workspace = await getWorkspace(params.id, access);
           if (!workspace) return errorEnvelope(action, `Workspace ${params.id} not found`);
           return successEnvelope({ action, result: workspace });
         }
 
-        case 'update': {
+          case 'update': {
           if (!params.id) return errorEnvelope(action, 'id is required for workspace action=update');
           const workspace = await updateWorkspace(
             params.id,
@@ -132,7 +133,7 @@ export function registerWorkspaceTools(server: AppServer): void {
           return successEnvelope({ action, result: workspace });
         }
 
-        case 'delete': {
+          case 'delete': {
           if (!params.id) return errorEnvelope(action, 'id is required for workspace action=delete');
           const deleted = await deleteWorkspace(params.id, access, params.expected_updated_at);
           if (!deleted) return errorEnvelope(action, `Workspace ${params.id} not found`);
@@ -142,7 +143,7 @@ export function registerWorkspaceTools(server: AppServer): void {
           });
         }
 
-        case 'start_session': {
+          case 'start_session': {
           if (!params.workspace_id) {
             return errorEnvelope(action, 'workspace_id is required for workspace action=start_session');
           }
@@ -156,7 +157,7 @@ export function registerWorkspaceTools(server: AppServer): void {
           return successEnvelope({ action, result: session });
         }
 
-        case 'list_sessions': {
+          case 'list_sessions': {
           if (!params.workspace_id) {
             return errorEnvelope(action, 'workspace_id is required for workspace action=list_sessions');
           }
@@ -175,7 +176,7 @@ export function registerWorkspaceTools(server: AppServer): void {
           });
         }
 
-        case 'get_session': {
+          case 'get_session': {
           if (!params.session_id) {
             return errorEnvelope(action, 'session_id is required for workspace action=get_session');
           }
@@ -189,7 +190,7 @@ export function registerWorkspaceTools(server: AppServer): void {
           return successEnvelope({ action, result: session });
         }
 
-        case 'resume_session_context': {
+          case 'resume_session_context': {
           if (!params.session_id) {
             return errorEnvelope(action, 'session_id is required for workspace action=resume_session_context');
           }
@@ -206,7 +207,7 @@ export function registerWorkspaceTools(server: AppServer): void {
           return successEnvelope({ action, result: bundle });
         }
 
-        case 'close_session': {
+          case 'close_session': {
           if (!params.session_id) {
             return errorEnvelope(action, 'session_id is required for workspace action=close_session');
           }
@@ -216,6 +217,9 @@ export function registerWorkspaceTools(server: AppServer): void {
           }
           return successEnvelope({ action, result: session });
         }
+        }
+      } catch (error) {
+        return errorEnvelopeFromUnknown(action, error);
       }
     },
   });
