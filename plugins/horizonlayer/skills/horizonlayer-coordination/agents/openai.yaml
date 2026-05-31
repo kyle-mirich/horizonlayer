@@ -1,0 +1,4 @@
+interface:
+  display_name: "HorizonLayer Coordination"
+  short_description: "Coordinate tasks and runs."
+  default_prompt: "Coordinate this work in HorizonLayer."

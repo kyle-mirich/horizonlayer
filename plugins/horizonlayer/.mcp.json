@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "horizonlayer": {
+      "command": "node",
+      "args": [
+        "scripts/run-horizonlayer.mjs"
+      ],
+      "cwd": "."
+    }
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "HorizonLayer Overview"
+  short_description: "Use HorizonLayer effectively."
+  default_prompt: "Use HorizonLayer for this task."

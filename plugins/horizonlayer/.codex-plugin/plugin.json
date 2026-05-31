@@ -1,0 +1,38 @@
+{
+  "name": "horizonlayer",
+  "version": "0.1.0",
+  "description": "Codex plugin for using HorizonLayer as agent-first durable memory, structured state, and coordination.",
+  "author": {
+    "name": "Kyle Mirich"
+  },
+  "homepage": "https://github.com/kyle-mirich/horizonlayer",
+  "repository": "https://github.com/kyle-mirich/horizonlayer",
+  "license": "MIT",
+  "keywords": [
+    "horizonlayer",
+    "mcp",
+    "agent-memory",
+    "database",
+    "coordination"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "HorizonLayer",
+    "shortDescription": "Agent-first memory, databases, and coordination.",
+    "longDescription": "HorizonLayer gives Codex concise skills and a repo-backed MCP server for durable workspaces, session memory, structured databases, search, tasks, runs, and links.",
+    "developerName": "Kyle Mirich",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/kyle-mirich/horizonlayer",
+    "defaultPrompt": [
+      "Use HorizonLayer for this task.",
+      "Store this work in HorizonLayer.",
+      "Resume prior HorizonLayer context."
+    ],
+    "brandColor": "#2563EB"
+  },
+  "mcpServers": "./.mcp.json"
+}

@@ -5,3 +5,4 @@ dist/
 config.yaml
 .env.docker
 .tmp/
+docs/superpowers/
