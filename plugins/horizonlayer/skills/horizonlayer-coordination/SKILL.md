@@ -5,12 +5,12 @@ description: Use when Codex should coordinate durable HorizonLayer tasks, leases
 
 # HorizonLayer Coordination
 
-Use coordination when work has ownership, dependencies, retries, handoffs, or needs to resume after interruption.
+Use coordination when work has ownership, retries, handoffs, or needs to resume after interruption.
 
 ## Task Loop
 
 1. Search/list open tasks with `memory.search` and `coordination.task_list`.
-2. Create tasks with `coordination.task_create`; use clear titles, owner agent, priority, and dependencies.
+2. Create tasks with `coordination.task_create`; use clear titles, owner agent, and priority.
 3. Claim with `coordination.task_claim` before doing work; set a lease long enough for the next step.
 4. Heartbeat with `coordination.task_heartbeat` during long work.
 5. Complete, fail, or hand off with `coordination.task_complete`, `coordination.task_fail`, or `coordination.task_handoff`.

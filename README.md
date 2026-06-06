@@ -50,7 +50,23 @@ This keeps the MCP surface focused on agent memory and coordination.
 
 ## Quickstart
 
-For most users on macOS, Linux, or WSL, the recommended setup is the repo-backed Codex plugin:
+For most users, the MCP server installs with one command.
+
+Codex:
+
+```bash
+codex mcp add horizonlayer -- npx -y --package=horizonlayer horizonlayer
+```
+
+Claude Code:
+
+```bash
+claude mcp add -s user horizonlayer -- npx -y --package=horizonlayer horizonlayer
+```
+
+That is enough to launch the published MCP server. The `npx` command starts HorizonLayer over stdio whenever the client needs it.
+
+If you want the optional repo-backed Codex plugin skills as well, install from a checkout:
 
 ```bash
 git clone https://github.com/kyle-mirich/horizonlayer.git
@@ -66,13 +82,7 @@ The installer:
 - refreshes Codex's installed plugin cache
 - removes any older global HorizonLayer MCP entry to avoid duplicate servers
 
-Restart Codex after installation so the plugin skills and MCP server are loaded from the updated plugin cache.
-
-If you only want the published MCP server without the plugin skills, use:
-
-```bash
-codex mcp add horizonlayer -- npx -y --package=horizonlayer horizonlayer
-```
+Restart Codex after plugin installation so the plugin skills and MCP server are loaded from the updated plugin cache.
 
 On first launch, HorizonLayer prepares its database automatically:
 
@@ -151,7 +161,25 @@ Horizon Layer defaults to stdio and is intended to be launched directly by MCP c
 
 ## Install Modes
 
-### 1. Codex Plugin
+### 1. Published npm package via `npx`
+
+Use this when you want the fastest MCP setup for Codex or Claude Code.
+
+Codex:
+
+```bash
+codex mcp add horizonlayer -- npx -y --package=horizonlayer horizonlayer
+```
+
+Claude Code:
+
+```bash
+claude mcp add -s user horizonlayer -- npx -y --package=horizonlayer horizonlayer
+```
+
+The explicit `--package=horizonlayer horizonlayer` form is the most reliable invocation for MCP clients.
+
+### 2. Codex Plugin
 
 Use this when you want Codex to load HorizonLayer skills and run the MCP server from this checkout.
 
@@ -170,16 +198,6 @@ Behavior:
 - it runs migrations before starting the server
 
 The plugin is installed globally for the current user and remains connected to this checkout. The installer also refreshes Codex's plugin cache so Codex sees the latest plugin files immediately after restart.
-
-### 2. Published npm package via `npx`
-
-Use this when you only want the MCP server without repo-backed plugin skills.
-
-```bash
-codex mcp add horizonlayer -- npx -y --package=horizonlayer horizonlayer
-```
-
-The explicit `--package=horizonlayer horizonlayer` form is the most reliable invocation for MCP clients.
 
 ### 3. Local build of the packaged launcher
 

@@ -25,4 +25,4 @@ Good page entries are short and factual:
 - file paths, IDs, commands, URLs, or evidence
 - next action and owner, if known
 
-Use tags and `importance` when a note should be easy to recover. Do not store secrets or raw logs unless the user asks and the content is safe.
+Use tags when a note should be easy to recover. Do not store secrets or raw logs unless the user asks and the content is safe.

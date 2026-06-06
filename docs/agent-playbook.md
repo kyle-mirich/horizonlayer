@@ -26,7 +26,7 @@ make smoke-local
 
 - `src/index.ts`, `src/runServer.ts`, `src/launcher.ts`: startup and transport entrypoints
 - `src/server.ts`: FastMCP server assembly and tool registration
-- `src/tools/*.ts`: tool schemas, action routing, response envelopes
+- `src/tools/core.ts`: public tool schemas, action routing, response envelopes
 - `src/db/queries/*.ts`: SQL-backed application logic
 - `src/testing/liveSmoke.ts`: end-to-end MCP smoke test over stdio
 - `migrations/*.sql`: schema history

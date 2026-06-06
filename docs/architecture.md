@@ -76,7 +76,7 @@ This is the main application core.
 The database stores both knowledge and workflow state:
 
 - content graph: workspaces, pages, blocks, databases, rows, links
-- coordination: tasks, dependencies, handoffs, and events
+- coordination: tasks, handoffs, and events
 - execution: runs and checkpoints
 - search: pgvector embeddings and full-text indexes
 

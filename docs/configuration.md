@@ -70,4 +70,4 @@ make dev
 
 - For local repo work, prefer `make db-up` plus `make dev` so database and server failures stay separate.
 - For MCP client installation tests, prefer `node dist/launcher.js`.
-- When changing config behavior, update both this file and the examples in `README.md` or `.env.docker.example` so the published surface stays synchronized.
+- When changing config behavior, update both this file and the examples in `README.md` so the published surface stays synchronized.
