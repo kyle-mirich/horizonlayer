@@ -1,57 +1,38 @@
 # Example: Basic Agent Memory Session
 
-This is the core Horizon Layer workflow: an agent creates a workspace, opens a session, writes notes, searches memory, and resumes context in a later run.
+This is the core Horizon Layer workflow: an agent starts a session, writes notes, searches memory, and resumes context in a later run.
 
 ---
 
-## 1. Create a workspace
+## 1. Start a session
 
-A workspace is the top-level container. Create one per project or investigation.
-
-```json
-{
-  "tool": "workspace",
-  "arguments": {
-    "action": "create",
-    "name": "Ingestion incident 2026-03-13",
-    "description": "Track the queue backlog investigation"
-  }
-}
-```
-
-Response: `{ "ok": true, "action": "create", "result": { "id": "ws-uuid", "name": "Ingestion incident 2026-03-13", ... } }`
-
----
-
-## 2. Start a session
-
-A session is a named slice of time within a workspace. It scopes pages and tasks so you can resume exactly where you left off.
+A session is the durable slice of work the agent can resume later.
 
 ```json
 {
-  "tool": "workspace",
+  "tool": "session",
   "arguments": {
-    "action": "start_session",
-    "workspace_id": "ws-uuid",
+    "action": "start",
+    "workspace_name": "Ingestion incident 2026-03-13",
     "title": "Initial triage",
-    "summary": "First look at the ingestion backlog"
+    "summary": "Track the queue backlog investigation"
   }
 }
 ```
 
-Response includes `session_id`. Save both IDs.
+Response includes `workspace.id` and `session.id`. Save both IDs.
 
 ---
 
-## 3. Write notes
+## 2. Write notes
 
-Append text blocks to a session journal page. Each call extends the page.
+Append concise memory entries to the session.
 
 ```json
 {
-  "tool": "page",
+  "tool": "memory",
   "arguments": {
-    "action": "append_text",
+    "action": "append",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
     "content": "Queue lag spiked at 14:32 UTC. Batch ingestion is delayed by roughly 18 minutes."
@@ -61,9 +42,9 @@ Append text blocks to a session journal page. Each call extends the page.
 
 ```json
 {
-  "tool": "page",
+  "tool": "memory",
   "arguments": {
-    "action": "append_text",
+    "action": "append",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
     "content": "Root cause: one worker pool was pinned after a bad deploy. Jobs are retrying but not draining."
@@ -73,18 +54,18 @@ Append text blocks to a session journal page. Each call extends the page.
 
 ---
 
-## 4. Search session memory
+## 3. Search session memory
 
-Search finds relevant pages and rows by semantic similarity, recency, or hybrid scoring.
+Search finds relevant saved memory.
 
 ```json
 {
-  "tool": "search",
+  "tool": "memory",
   "arguments": {
+    "action": "search",
     "query": "ingestion queue lag root cause",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
-    "mode": "hybrid",
     "limit": 5
   }
 }
@@ -94,13 +75,13 @@ Search will surface the pages written above, ranked by relevance to the query.
 
 ---
 
-## 5. Create a task for follow-up
+## 4. Create a task for follow-up
 
 ```json
 {
-  "tool": "task",
+  "tool": "coordination",
   "arguments": {
-    "action": "create",
+    "action": "task_create",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
     "title": "Recycle the stuck worker pool and verify queue drain",
@@ -112,19 +93,18 @@ Search will surface the pages written above, ranked by relevance to the query.
 
 ---
 
-## 6. Resume the session in a later run
+## 5. Resume the session in a later run
 
 When coming back to this investigation, resume context with a single call. This returns the most recent pages, tasks, and runs from the session in one payload.
 
 ```json
 {
-  "tool": "workspace",
+  "tool": "session",
   "arguments": {
-    "action": "resume_session_context",
+    "action": "resume",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
-    "max_items": 10,
-    "max_bytes": 32768
+    "max_items": 10
   }
 }
 ```

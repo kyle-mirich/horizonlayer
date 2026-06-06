@@ -77,16 +77,10 @@ async function callTool(
   return envelope;
 }
 
-async function safeCallTool(
-  client: Client,
-  name: string,
-  args: Record<string, unknown>
-): Promise<void> {
+async function safeCloseSession(client: Client, sessionId: string | null): Promise<void> {
+  if (!sessionId) return;
   try {
-    await client.callTool({
-      name,
-      arguments: args,
-    });
+    await client.callTool({ name: 'session', arguments: { action: 'close', session_id: sessionId } });
   } catch {
     return;
   }
@@ -109,20 +103,7 @@ async function main(): Promise<void> {
     } as Record<string, string>,
   });
 
-  let workspaceId: string | null = null;
   let sessionId: string | null = null;
-  let compatibilityWorkspaceId: string | null = null;
-  let pageId: string | null = null;
-  let initialBlockId: string | null = null;
-  let appendedBlockId: string | null = null;
-  let databaseId: string | null = null;
-  let rowId: string | null = null;
-  let linkId: string | null = null;
-  let taskPrimaryId: string | null = null;
-  let taskFailId: string | null = null;
-  let runCompleteId: string | null = null;
-  let runFailId: string | null = null;
-  let runCancelId: string | null = null;
 
   const summary: JsonObject = {
     transport: {
@@ -136,698 +117,242 @@ async function main(): Promise<void> {
     await client.connect(transport);
 
     const tools = await client.listTools();
-    summary.tools = tools.tools.map((tool) => tool.name).sort();
+    const toolNames = tools.tools.map((tool) => tool.name).sort();
+    assert(
+      JSON.stringify(toolNames) === JSON.stringify(['coordination', 'memory', 'session']),
+      `Expected only core tools, got ${toolNames.join(', ')}`
+    );
+    summary.tools = toolNames;
 
-    const workspaceCreate = await callTool(client, 'workspace', {
-      action: 'create',
-      description: 'Live smoke test workspace',
-      name: `Smoke Workspace ${suffix}`,
-    });
-    const workspaceRecord = asRecord(workspaceCreate.result, 'workspace/create result was not an object');
-    workspaceId = getString(workspaceRecord, 'id');
-
-    const compatibilityCreate = await callTool(client, 'workspace', {
-      action: 'create_session',
-      name: `Smoke Compatibility ${suffix}`,
-      title: 'Compatibility Session',
-    });
-    const compatibilityResult = asRecord(compatibilityCreate.result, 'workspace/create_session result was not an object');
-    compatibilityWorkspaceId = getString(asRecord(compatibilityResult.workspace, 'workspace/create_session missing workspace'), 'id');
-
-    const sessionStart = await callTool(client, 'workspace', {
-      action: 'start_session',
+    const sessionStart = await callTool(client, 'session', {
+      action: 'start',
+      workspace_name: `Smoke Workspace ${suffix}`,
       title: `Smoke Session ${suffix}`,
-      workspace_id: workspaceId,
+      summary: 'Live smoke test for the compact core MCP surface',
     });
-    const sessionRecord = asRecord(sessionStart.result, 'workspace/start_session result was not an object');
+    const sessionStartRecord = asRecord(sessionStart.result, 'session/start result was not an object');
+    const workspaceRecord = asRecord(sessionStartRecord.workspace, 'session/start missing workspace');
+    const sessionRecord = asRecord(sessionStartRecord.session, 'session/start missing session');
+    const workspaceId = getString(workspaceRecord, 'id');
     sessionId = getString(sessionRecord, 'id');
 
-    const workspaceList = await callTool(client, 'workspace', {
-      action: 'list',
-      limit: 10,
-      offset: 0,
-    });
-    const workspaceItems = asArray(workspaceList.result, 'workspace/list result was not an array');
-    assert(
-      workspaceItems.some((item) => getString(asRecord(item, 'workspace/list item invalid'), 'id') === workspaceId),
-      'workspace/list did not include the created workspace'
-    );
-
-    const workspaceGet = await callTool(client, 'workspace', {
-      action: 'get',
-      id: workspaceId,
-    });
-
-    const workspaceUpdate = await callTool(client, 'workspace', {
-      action: 'update',
-      id: workspaceId,
-      description: 'Updated by live smoke test',
-      icon: 'local',
-      name: `Smoke Workspace Updated ${suffix}`,
-    });
-
-    const sessionList = await callTool(client, 'workspace', {
-      action: 'list_sessions',
-      limit: 10,
-      offset: 0,
+    const memoryCreate = await callTool(client, 'memory', {
+      action: 'append',
       workspace_id: workspaceId,
-    });
-
-    const pageAppendText = await callTool(client, 'page', {
-      action: 'append_text',
-      content: 'Initial smoke test journal entry.',
       session_id: sessionId,
-      workspace_id: workspaceId,
+      title: `Smoke Journal ${suffix}`,
+      content: `Initial smoke test journal entry ${suffix}.`,
+      tags: ['smoke'],
     });
-    const pageRecord = asRecord(pageAppendText.result, 'page/append_text result was not an object');
-    pageId = getString(pageRecord, 'id');
-    const initialBlocks = asArray(pageRecord.blocks, 'page/append_text did not return blocks');
-    initialBlockId = getString(asRecord(initialBlocks[0], 'page/append_text first block invalid'), 'id');
+    const memoryRecord = asRecord(memoryCreate.result, 'memory/append result was not an object');
+    const pageId = getString(memoryRecord, 'id');
 
-    const pageGet = await callTool(client, 'page', {
-      action: 'get',
-      id: pageId,
-      session_id: sessionId,
-    });
-
-    const pageList = await callTool(client, 'page', {
-      action: 'list',
-      limit: 10,
-      offset: 0,
-      session_id: sessionId,
-      workspace_id: workspaceId,
-    });
-
-    const pageUpdate = await callTool(client, 'page', {
-      action: 'update',
-      id: pageId,
-      importance: 0.9,
-      title: `Smoke Page Updated ${suffix}`,
-    });
-
-    const pageAppend = await callTool(client, 'page', {
-      action: 'append_blocks',
-      blocks: [
-        {
-          block_type: 'code',
-          content: 'console.log("smoke");',
-          metadata: {
-            language: 'ts',
-          },
-        },
-      ],
+    const memoryAppend = await callTool(client, 'memory', {
+      action: 'append',
       page_id: pageId,
       session_id: sessionId,
-    });
-    const appendedBlocks = asArray(pageAppend.result, 'page/append_blocks result was not an array');
-    appendedBlockId = getString(asRecord(appendedBlocks[0], 'page/append_blocks block invalid'), 'id');
-
-    const blockUpdate = await callTool(client, 'page', {
-      action: 'block_update',
-      block_id: initialBlockId,
-      content: 'Updated smoke test journal entry.',
+      content: `Follow-up smoke note ${suffix}.`,
     });
 
-    const blockDelete = await callTool(client, 'page', {
-      action: 'block_delete',
-      block_id: appendedBlockId,
-    });
-    appendedBlockId = null;
-
-    const searchResult = await callTool(client, 'search', {
-      limit: 10,
-      query: `Smoke Page Updated ${suffix}`,
-      session_id: sessionId,
+    const memorySearch = await callTool(client, 'memory', {
+      action: 'search',
       workspace_id: workspaceId,
+      session_id: sessionId,
+      query: `smoke journal ${suffix}`,
+      limit: 10,
     });
+    const searchItems = asArray(memorySearch.result, 'memory/search result was not an array');
+    assert(searchItems.length > 0, 'memory/search did not return the smoke note');
 
-    const taskCreate = await callTool(client, 'task', {
-      action: 'create',
-      created_by_agent_name: 'smoke-suite',
-      description: 'Primary live smoke test task',
-      owner_agent_name: 'agent-a',
+    const taskCreate = await callTool(client, 'coordination', {
+      action: 'task_create',
+      workspace_id: workspaceId,
       session_id: sessionId,
       title: `Smoke Task ${suffix}`,
+      description: 'Primary live smoke task',
+      owner_agent_name: 'agent-a',
+      created_by_agent_name: 'smoke-suite',
+      priority: 1,
+    });
+    const taskRecord = asRecord(taskCreate.result, 'coordination/task_create result was not an object');
+    const taskId = getString(taskRecord, 'id');
+
+    const taskList = await callTool(client, 'coordination', {
+      action: 'task_list',
       workspace_id: workspaceId,
-    });
-    const taskCreateRecord = asRecord(taskCreate.result, 'task/create result was not an object');
-    taskPrimaryId = getString(taskCreateRecord, 'id');
-
-    const taskGet = await callTool(client, 'task', {
-      action: 'get',
-      id: taskPrimaryId,
-    });
-
-    const taskList = await callTool(client, 'task', {
-      action: 'list',
+      session_id: sessionId,
       limit: 20,
-      offset: 0,
-      session_id: sessionId,
-      workspace_id: workspaceId,
     });
+    const taskItems = asArray(taskList.result, 'coordination/task_list result was not an array');
+    assert(
+      taskItems.some((item) => getString(asRecord(item, 'coordination/task_list item invalid'), 'id') === taskId),
+      'coordination/task_list did not include the created task'
+    );
 
-    const taskClaim = await callTool(client, 'task', {
-      action: 'claim',
-      agent_name: 'agent-a',
-      id: taskPrimaryId,
-      lease_seconds: 300,
-      session_id: sessionId,
+    const taskClaim = await callTool(client, 'coordination', {
+      action: 'task_claim',
       workspace_id: workspaceId,
-    });
-
-    const taskHeartbeat = await callTool(client, 'task', {
-      action: 'heartbeat',
+      session_id: sessionId,
+      task_id: taskId,
       agent_name: 'agent-a',
-      id: taskPrimaryId,
       lease_seconds: 300,
     });
 
-    const taskAppendEvent = await callTool(client, 'task', {
-      action: 'append_event',
+    const taskHeartbeat = await callTool(client, 'coordination', {
+      action: 'task_heartbeat',
+      task_id: taskId,
       agent_name: 'agent-a',
-      event_type: 'task.note',
-      id: taskPrimaryId,
-      payload: {
-        note: 'smoke event',
-      },
-    });
-
-    const taskHandoff = await callTool(client, 'task', {
-      action: 'handoff',
-      agent_name: 'agent-a',
-      id: taskPrimaryId,
-      payload: {
-        handoff: 'ready for review',
-      },
-      require_ack: true,
-      target_agent_name: 'agent-b',
-    });
-
-    const inboxList = await callTool(client, 'task', {
-      action: 'inbox_list',
-      agent_name: 'agent-b',
-      limit: 20,
-      offset: 0,
-      unread_only: true,
-      workspace_id: workspaceId,
-    });
-    const inboxItems = asArray(inboxList.result, 'task/inbox_list result was not an array');
-    const handoffInbox = inboxItems
-      .map((item) => asRecord(item, 'task/inbox_list item invalid'))
-      .find((item) => getString(item, 'task_id') === taskPrimaryId);
-    assert(handoffInbox, 'task/inbox_list did not include the handoff inbox item');
-    const inboxId = getString(handoffInbox, 'id');
-
-    const inboxAck = await callTool(client, 'task', {
-      action: 'inbox_ack',
-      agent_name: 'agent-b',
-      inbox_id: inboxId,
-    });
-
-    const taskAck = await callTool(client, 'task', {
-      action: 'ack',
-      agent_name: 'agent-b',
-      id: taskPrimaryId,
-      payload: {
-        acknowledged: true,
-      },
-    });
-
-    const taskReclaim = await callTool(client, 'task', {
-      action: 'claim',
-      agent_name: 'agent-b',
-      id: taskPrimaryId,
       lease_seconds: 300,
-      session_id: sessionId,
-      workspace_id: workspaceId,
     });
 
-    const runStart = await callTool(client, 'run', {
-      action: 'start',
-      agent_name: 'agent-b',
+    const runStart = await callTool(client, 'coordination', {
+      action: 'run_start',
+      workspace_id: workspaceId,
       session_id: sessionId,
-      task_id: taskPrimaryId,
+      task_id: taskId,
+      agent_name: 'agent-a',
       title: 'Smoke Run Complete',
-      workspace_id: workspaceId,
     });
-    const runCompleteRecord = asRecord(runStart.result, 'run/start result was not an object');
-    runCompleteId = getString(runCompleteRecord, 'id');
+    const runRecord = asRecord(runStart.result, 'coordination/run_start result was not an object');
+    const runId = getString(runRecord, 'id');
 
-    const runGet = await callTool(client, 'run', {
-      action: 'get',
-      id: runCompleteId,
-      session_id: sessionId,
-    });
-
-    const runList = await callTool(client, 'run', {
-      action: 'list',
-      limit: 20,
-      offset: 0,
-      session_id: sessionId,
-      workspace_id: workspaceId,
-    });
-
-    const runCheckpoint = await callTool(client, 'run', {
-      action: 'checkpoint',
-      id: runCompleteId,
+    const runCheckpoint = await callTool(client, 'coordination', {
+      action: 'run_checkpoint',
+      run_id: runId,
+      agent_name: 'agent-a',
+      summary: 'Checkpointed by smoke test',
       state: {
-        stage: 'checkpoint',
+        phase: 'checkpoint',
       },
-      summary: 'checkpointed by smoke test',
     });
 
-    const runComplete = await callTool(client, 'run', {
-      action: 'complete',
-      id: runCompleteId,
+    const runComplete = await callTool(client, 'coordination', {
+      action: 'run_complete',
+      run_id: runId,
+      agent_name: 'agent-a',
       result: {
         status: 'ok',
       },
     });
-    runCompleteId = null;
 
-    const taskComplete = await callTool(client, 'task', {
-      action: 'complete',
-      agent_name: 'agent-b',
-      id: taskPrimaryId,
+    const taskComplete = await callTool(client, 'coordination', {
+      action: 'task_complete',
+      task_id: taskId,
+      agent_name: 'agent-a',
       payload: {
         result: 'complete',
       },
     });
-    taskPrimaryId = null;
 
-    const taskFailCreate = await callTool(client, 'task', {
-      action: 'create',
+    const failTaskCreate = await callTool(client, 'coordination', {
+      action: 'task_create',
+      workspace_id: workspaceId,
+      session_id: sessionId,
+      title: `Smoke Fail Task ${suffix}`,
       created_by_agent_name: 'smoke-suite',
-      session_id: sessionId,
-      title: `Smoke Task Fail ${suffix}`,
-      workspace_id: workspaceId,
     });
-    const taskFailRecord = asRecord(taskFailCreate.result, 'task/create fail result was not an object');
-    taskFailId = getString(taskFailRecord, 'id');
-
-    const taskFailClaim = await callTool(client, 'task', {
-      action: 'claim',
-      agent_name: 'agent-c',
-      id: taskFailId,
+    const failTaskId = getString(asRecord(failTaskCreate.result, 'coordination/task_create fail result invalid'), 'id');
+    await callTool(client, 'coordination', {
+      action: 'task_claim',
+      workspace_id: workspaceId,
+      session_id: sessionId,
+      task_id: failTaskId,
+      agent_name: 'agent-b',
       lease_seconds: 300,
-      session_id: sessionId,
-      workspace_id: workspaceId,
     });
-
-    const taskFail = await callTool(client, 'task', {
-      action: 'fail',
-      agent_name: 'agent-c',
+    const taskFail = await callTool(client, 'coordination', {
+      action: 'task_fail',
+      task_id: failTaskId,
+      agent_name: 'agent-b',
       blocker_reason: 'smoke-fail',
-      id: taskFailId,
-      payload: {
-        status: 'failed',
-      },
     });
-    taskFailId = null;
 
-    const runFailStart = await callTool(client, 'run', {
-      action: 'start',
+    const handoffTaskCreate = await callTool(client, 'coordination', {
+      action: 'task_create',
+      workspace_id: workspaceId,
+      session_id: sessionId,
+      title: `Smoke Handoff Task ${suffix}`,
+      owner_agent_name: 'agent-c',
+    });
+    const handoffTaskId = getString(asRecord(handoffTaskCreate.result, 'coordination/task_create handoff result invalid'), 'id');
+    const taskHandoff = await callTool(client, 'coordination', {
+      action: 'task_handoff',
+      task_id: handoffTaskId,
       agent_name: 'agent-c',
-      session_id: sessionId,
-      title: 'Smoke Run Fail',
-      workspace_id: workspaceId,
+      target_agent_name: 'agent-d',
+      payload: {
+        handoff: 'ready for review',
+      },
     });
-    const runFailRecord = asRecord(runFailStart.result, 'run/fail start result was not an object');
-    runFailId = getString(runFailRecord, 'id');
 
-    const runFail = await callTool(client, 'run', {
-      action: 'fail',
+    const failRunStart = await callTool(client, 'coordination', {
+      action: 'run_start',
+      workspace_id: workspaceId,
+      session_id: sessionId,
+      agent_name: 'agent-b',
+      title: 'Smoke Run Fail',
+    });
+    const failRunId = getString(asRecord(failRunStart.result, 'coordination/run_start fail result invalid'), 'id');
+    const runFail = await callTool(client, 'coordination', {
+      action: 'run_fail',
+      run_id: failRunId,
+      agent_name: 'agent-b',
       error_message: 'smoke failure',
-      id: runFailId,
       result: {
         status: 'failed',
       },
     });
-    runFailId = null;
 
-    const runCancelStart = await callTool(client, 'run', {
-      action: 'start',
-      agent_name: 'agent-d',
-      session_id: sessionId,
-      title: 'Smoke Run Cancel',
+    const sessionResume = await callTool(client, 'session', {
+      action: 'resume',
       workspace_id: workspaceId,
-    });
-    const runCancelRecord = asRecord(runCancelStart.result, 'run/cancel start result was not an object');
-    runCancelId = getString(runCancelRecord, 'id');
-
-    const runCancel = await callTool(client, 'run', {
-      action: 'cancel',
-      id: runCancelId,
-      result: {
-        status: 'cancelled',
-      },
-    });
-    runCancelId = null;
-
-    const sessionGet = await callTool(client, 'workspace', {
-      action: 'get_session',
       session_id: sessionId,
-      workspace_id: workspaceId,
-    });
-
-    const sessionResume = await callTool(client, 'workspace', {
-      action: 'resume_session_context',
-      max_bytes: 32768,
       max_items: 10,
-      session_id: sessionId,
-      workspace_id: workspaceId,
     });
 
-    const databaseCreate = await callTool(client, 'database', {
-      action: 'create',
-      description: 'Live smoke test database',
-      name: `Smoke Database ${suffix}`,
-      parent_page_id: pageId,
-      properties: [
-        {
-          is_required: true,
-          name: 'Title',
-          type: 'title',
-        },
-        {
-          name: 'Status',
-          type: 'text',
-        },
-        {
-          name: 'Score',
-          options: {
-            format: 'plain',
-          },
-          type: 'number',
-        },
-      ],
-      workspace_id: workspaceId,
-    });
-    const databaseRecord = asRecord(databaseCreate.result, 'database/create result was not an object');
-    databaseId = getString(databaseRecord, 'id');
-
-    const databaseGet = await callTool(client, 'database', {
-      action: 'get',
-      id: databaseId,
-    });
-
-    const databaseList = await callTool(client, 'database', {
-      action: 'list',
-      limit: 10,
-      workspace_id: workspaceId,
-    });
-
-    const databaseAddProperty = await callTool(client, 'database', {
-      action: 'add_property',
-      database_id: databaseId,
-      name: 'Category',
-      options: {
-        choices: ['alpha', 'beta'],
-      },
-      type: 'select',
-    });
-
-    const databaseUpdate = await callTool(client, 'database', {
-      action: 'update',
-      description: 'Updated database description',
-      id: databaseId,
-      tags: ['smoke', 'live'],
-    });
-
-    const rowCreate = await callTool(client, 'row', {
-      action: 'create',
-      database_id: databaseId,
-      importance: 0.7,
-      tags: ['smoke'],
-      values: {
-        Category: 'alpha',
-        Score: 7,
-        Status: 'open',
-        Title: `Smoke Row ${suffix}`,
-      },
-    });
-    const rowRecord = asRecord(rowCreate.result, 'row/create result was not an object');
-    rowId = getString(rowRecord, 'id');
-
-    const rowGet = await callTool(client, 'row', {
-      action: 'get',
-      database_id: databaseId,
-      id: rowId,
-    });
-
-    const rowUpdate = await callTool(client, 'row', {
-      action: 'update',
-      database_id: databaseId,
-      id: rowId,
-      importance: 0.95,
-      values: {
-        Category: 'beta',
-        Score: 9,
-        Status: 'closed',
-        Title: `Smoke Row Updated ${suffix}`,
-      },
-    });
-
-    const rowQuery = await callTool(client, 'row', {
-      action: 'query',
-      database_id: databaseId,
-      filters: [
-        {
-          operator: 'contains',
-          property: 'Title',
-          value: suffix,
-        },
-      ],
-      limit: 10,
-    });
-
-    const rowCount = await callTool(client, 'row', {
-      action: 'count',
-      database_id: databaseId,
-      filters: [
-        {
-          operator: 'eq',
-          property: 'Status',
-          value: 'closed',
-        },
-      ],
-    });
-
-    const rowBulkCreate = await callTool(client, 'row', {
-      action: 'bulk_create',
-      database_id: databaseId,
-      rows: [
-        {
-          values: {
-            Category: 'alpha',
-            Score: 1,
-            Status: 'queued',
-            Title: `Bulk Row A ${suffix}`,
-          },
-        },
-        {
-          values: {
-            Category: 'beta',
-            Score: 2,
-            Status: 'queued',
-            Title: `Bulk Row B ${suffix}`,
-          },
-        },
-      ],
-    });
-
-    const rowCleanup = await callTool(client, 'row', {
-      action: 'cleanup_expired',
-    });
-
-    const linkCreate = await callTool(client, 'link', {
-      action: 'create',
-      from_id: pageId,
-      from_type: 'page',
-      link_type: 'references',
-      to_id: databaseId,
-      to_type: 'database',
-    });
-    const linkRecord = asRecord(linkCreate.result, 'link/create result was not an object');
-    linkId = getString(linkRecord, 'id');
-
-    const linkList = await callTool(client, 'link', {
-      action: 'list',
-      direction: 'both',
-      item_id: pageId,
-      item_type: 'page',
-    });
-
-    const rowDelete = await callTool(client, 'row', {
-      action: 'delete',
-      id: rowId,
-    });
-    rowId = null;
-
-    const linkDelete = await callTool(client, 'link', {
-      action: 'delete',
-      link_id: linkId,
-    });
-    linkId = null;
-
-    const databaseDelete = await callTool(client, 'database', {
-      action: 'delete',
-      id: databaseId,
-    });
-    databaseId = null;
-
-    const sessionClose = await callTool(client, 'workspace', {
-      action: 'close_session',
+    const sessionClose = await callTool(client, 'session', {
+      action: 'close',
       session_id: sessionId,
     });
     sessionId = null;
 
-    const pageDelete = await callTool(client, 'page', {
-      action: 'delete',
-      id: pageId,
-    });
-    pageId = null;
-    initialBlockId = null;
-
-    const compatibilityDelete = await callTool(client, 'workspace', {
-      action: 'delete',
-      id: compatibilityWorkspaceId,
-    });
-    compatibilityWorkspaceId = null;
-
-    const workspaceDelete = await callTool(client, 'workspace', {
-      action: 'delete',
-      id: workspaceId,
-    });
-    workspaceId = null;
-
-    summary.workspace = {
-      create: workspaceRecord,
-      create_session: compatibilityResult,
-      delete: workspaceDelete.result,
-      get: workspaceGet.result,
-      get_session: sessionGet.result,
-      list_count: workspaceItems.length,
-      list_sessions_count: asArray(sessionList.result, 'workspace/list_sessions result was not an array').length,
-      resume_session_context: sessionResume.result,
-      session_close: sessionClose.result,
-      session_delete_compat: compatibilityDelete.result,
-      start_session: sessionRecord,
-      update: workspaceUpdate.result,
+    summary.session = {
+      close: sessionClose.result,
+      resume_sections: Object.keys(asRecord(sessionResume.result, 'session/resume result invalid')),
+      start: sessionStart.result,
     };
-    summary.page = {
-      append_blocks: pageAppend.result,
-      append_text: pageRecord,
-      block_delete: blockDelete.result,
-      block_update: blockUpdate.result,
-      delete: pageDelete.result,
-      get: pageGet.result,
-      list_count: asArray(pageList.result, 'page/list result was not an array').length,
-      update: pageUpdate.result,
+    summary.memory = {
+      append: memoryAppend.result,
+      create: memoryRecord,
+      search_count: searchItems.length,
     };
-    summary.search = searchResult.result;
-    summary.task = {
-      ack: taskAck.result,
-      append_event: taskAppendEvent.result,
-      claim: taskClaim.result,
-      complete: taskComplete.result,
-      create: taskCreateRecord,
-      fail_claim: taskFailClaim.result,
-      fail: taskFail.result,
-      get: taskGet.result,
-      handoff: taskHandoff.result,
-      heartbeat: taskHeartbeat.result,
-      inbox_ack: inboxAck.result,
-      inbox_list_count: inboxItems.length,
-      list_count: asArray(taskList.result, 'task/list result was not an array').length,
-      reclaim: taskReclaim.result,
-    };
-    summary.run = {
-      cancel: runCancel.result,
-      checkpoint: runCheckpoint.result,
-      complete: runComplete.result,
-      fail: runFail.result,
-      get: runGet.result,
-      list_count: asArray(runList.result, 'run/list result was not an array').length,
-      start: runCompleteRecord,
-    };
-    summary.database = {
-      add_property: databaseAddProperty.result,
-      create: databaseRecord,
-      delete: databaseDelete.result,
-      get: databaseGet.result,
-      list_count: asArray(databaseList.result, 'database/list result was not an array').length,
-      update: databaseUpdate.result,
-    };
-    summary.row = {
-      bulk_create_count: asArray(rowBulkCreate.result, 'row/bulk_create result was not an array').length,
-      cleanup_expired: rowCleanup.result,
-      count: rowCount.result,
-      create: rowRecord,
-      delete: rowDelete.result,
-      get: rowGet.result,
-      query: rowQuery.result,
-      update: rowUpdate.result,
-    };
-    summary.link = {
-      create: linkRecord,
-      delete: linkDelete.result,
-      list: linkList.result,
+    summary.coordination = {
+      run_checkpoint: runCheckpoint.result,
+      run_complete: runComplete.result,
+      run_fail: runFail.result,
+      run_start: runRecord,
+      task_claim: taskClaim.result,
+      task_complete: taskComplete.result,
+      task_fail: taskFail.result,
+      task_handoff: taskHandoff.result,
+      task_heartbeat: taskHeartbeat.result,
+      task_list_count: taskItems.length,
     };
 
-    console.log(JSON.stringify({ ok: true, summary }, null, 2));
-  } catch (error) {
-    console.error(JSON.stringify({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-      summary,
-    }, null, 2));
-    process.exitCode = 1;
+    console.log(JSON.stringify(summary, null, 2));
   } finally {
-    if (runCompleteId) {
-      await safeCallTool(client, 'run', { action: 'cancel', id: runCompleteId, result: { cleanup: true } });
+    await safeCloseSession(client, sessionId);
+
+    try {
+      await client.close();
+    } catch {
+      // ignore close failures
     }
-    if (runFailId) {
-      await safeCallTool(client, 'run', { action: 'cancel', id: runFailId, result: { cleanup: true } });
-    }
-    if (runCancelId) {
-      await safeCallTool(client, 'run', { action: 'cancel', id: runCancelId, result: { cleanup: true } });
-    }
-    if (taskPrimaryId) {
-      await safeCallTool(client, 'task', { action: 'fail', agent_name: 'cleanup', blocker_reason: 'cleanup', id: taskPrimaryId });
-    }
-    if (taskFailId) {
-      await safeCallTool(client, 'task', { action: 'fail', agent_name: 'cleanup', blocker_reason: 'cleanup', id: taskFailId });
-    }
-    if (linkId) {
-      await safeCallTool(client, 'link', { action: 'delete', link_id: linkId });
-    }
-    if (rowId) {
-      await safeCallTool(client, 'row', { action: 'delete', id: rowId });
-    }
-    if (databaseId) {
-      await safeCallTool(client, 'database', { action: 'delete', id: databaseId });
-    }
-    if (pageId) {
-      await safeCallTool(client, 'page', { action: 'delete', id: pageId });
-    }
-    if (sessionId) {
-      await safeCallTool(client, 'workspace', { action: 'close_session', session_id: sessionId });
-    }
-    if (compatibilityWorkspaceId) {
-      await safeCallTool(client, 'workspace', { action: 'delete', id: compatibilityWorkspaceId });
-    }
-    if (workspaceId) {
-      await safeCallTool(client, 'workspace', { action: 'delete', id: workspaceId });
-    }
-    await client.close().catch(() => undefined);
   }
 }
 
-main().catch((error) => {
-  console.error(JSON.stringify({
-    ok: false,
-    error: error instanceof Error ? error.message : String(error),
-  }, null, 2));
+main().catch((err) => {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`Live smoke failed: ${message}`);
   process.exit(1);
 });

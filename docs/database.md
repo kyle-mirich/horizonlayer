@@ -14,7 +14,7 @@ The schema is migration-driven and organized into four main layers:
 - `001_extensions.sql`: enables `vector` and `uuid-ossp`
 - `002_schema.sql`: content graph tables and vector/search indexes
 - `003_workspace_sessions.sql`: workspace expiry support
-- `006_coordination_primitives.sql`: tasks, dependencies, events, acknowledgements, inbox
+- `006_coordination_primitives.sql`: task coordination primitives
 - `007_schema_hardening.sql`: integrity checks, unique indexes, trigger hardening
 - `009_agent_runs.sql`: durable runs and checkpoints
 - `010_sessions.sql`: browser session lifecycle and session metadata support
@@ -78,22 +78,19 @@ This supports:
 
 ## Coordination tables
 
-The task system is backed by:
+The compact OSS coordination API is backed by:
 
 - `tasks`
-- `task_dependencies`
 - `task_events`
-- `task_acknowledgements`
-- `agent_inbox`
 
-Key coordination concepts already modeled in SQL:
+Key coordination concepts modeled in SQL and exposed through `coordination`:
 
 - ready vs pending work
 - leases and heartbeats
 - handoff targets
-- required acknowledgements
-- append-only event history
-- per-agent inbox state
+- event history
+
+The schema may contain additional internal tables for future coordination features. They are not separate public MCP tools in this OSS surface.
 
 ## Run and checkpoint tables
 

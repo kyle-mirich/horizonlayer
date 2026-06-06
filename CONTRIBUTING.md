@@ -49,7 +49,7 @@ make dev       # in another terminal
 make smoke-live
 ```
 
-`smoke-live` exercises every MCP tool action once against the running stdio server. Use `MCP_COMMAND` and `MCP_ARGS` when you need to point the smoke test at a different launcher command.
+`smoke-live` exercises the compact core MCP loop against the running stdio server. Use `MCP_COMMAND` and `MCP_ARGS` when you need to point the smoke test at a different launcher command.
 
 One-command local smoke flow:
 
@@ -67,21 +67,18 @@ make smoke-local
 - **Standard response envelope** — tools return `successEnvelope(...)` or `errorEnvelope(...)` from `src/tools/common.ts`. Do not return raw strings or ad-hoc shapes.
 - **No `any` in query types** — use `pg`'s typed query pattern with explicit generic parameters.
 
-## Adding a new tool action
+## Adding a core tool action
 
-1. Add the new action name to the `z.enum([...])` in the tool file (e.g. `src/tools/tasks.ts`).
+1. Add the new action name to the relevant enum in `src/tools/core.ts`.
 2. Add parameters for the new action to the tool schema with `.describe(...)` on each field.
 3. Add a `case` branch in the `switch (action)` block.
 4. Write the SQL in `src/db/queries/` — one function per logical operation.
 5. Wire the query function into the `case` branch. Return `successEnvelope(...)`.
-6. Add a unit test in the corresponding `*.test.ts` file or extend the smoke test in `src/testing/liveSmoke.ts`.
+6. Add a unit test in `src/tools/core.test.ts` or extend the smoke test in `src/testing/liveSmoke.ts`.
 
 ## Adding a new tool
 
-1. Create `src/tools/<name>.ts` following the pattern of an existing tool (e.g. `rows.ts`).
-2. Export a `register<Name>Tools(server: AppServer): void` function.
-3. Import and call it in `src/server.ts`.
-4. Document it in `docs/api.md`.
+Treat a new MCP tool as a public API expansion. Prefer adding a focused action to `session`, `memory`, or `coordination`; only add another tool when the concept cannot fit those boundaries cleanly.
 
 ## Pull request guidelines
 

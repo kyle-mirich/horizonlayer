@@ -19,73 +19,57 @@ There are two startup paths:
 1. `src/index.ts` starts the process.
 2. `runServer()` applies pending migrations.
 3. `createAppServer()` builds the FastMCP server.
-4. The server starts over stdio.
+4. The server registers the compact core toolset.
+5. The server starts over stdio.
 
-## 2. Content authoring
+## 2. Core memory flow
 
-The content graph is centered on a workspace.
+The default content flow is centered on a session.
 
 Typical flow:
 
-1. Create or pick a workspace.
-2. Create pages in that workspace, optionally with ordered blocks.
-3. Create databases under the workspace or under a page.
-4. Insert rows into those databases.
-5. Connect entities with explicit `link` relationships.
+1. Use `session.start` to create or enter a durable workspace/session boundary.
+2. Use `memory.append` for concise notes, decisions, findings, and handoff summaries.
+3. Use `memory.search` to recover prior context.
+4. Use `session.resume` to recover the recent notes, open tasks, and run state later.
 
 The write path also maintains embeddings so the content can be searched semantically.
 
 ## 3. Search
 
-The `search` tool supports:
+The default `memory.search` action uses hybrid search across saved notes.
 
-- `full_text`
-- `grep`
-- `regex`
-- `similarity`
-- `similarity_recency`
-- `similarity_importance`
-- `hybrid`
-
-Search pulls from both:
-
-- pages and their blocks
-- databases rows and typed row values
-
-The result shape is normalized to a shared `SearchResult` shape so MCP clients can page through mixed content.
+Search pulls from pages written through `memory.append`. The result shape is normalized to a shared `SearchResult` shape so MCP clients can consume ranked memory without knowing the storage tables.
 
 ## 4. Task coordination
 
-The `task` tool is the durable coordination surface for agents.
+The default `coordination` tool is the durable coordination surface for agents.
 
 Typical long-lived flow:
 
-1. Create a task in a workspace.
-2. Add dependencies or required acknowledgements.
-3. Claim a ready task with a lease.
-4. Send periodic heartbeats while the task is in progress.
-5. Complete, fail, or hand off the task.
-6. Append explicit task events and consume per-agent inbox items.
+1. Create a task in a workspace with `coordination.task_create`.
+2. Claim a ready task with `coordination.task_claim` and a lease.
+3. Send `coordination.task_heartbeat` during long work.
+4. Complete, fail, or hand off with `coordination.task_complete`, `coordination.task_fail`, or `coordination.task_handoff`.
 
 The server persists:
 
 - current task state
-- dependency edges
-- acknowledgement state
-- append-only task events
-- inbox notifications
+- claim and lease state
+- handoff state
+- execution attempts associated with the task
 
 This is the main bridge from “content storage” to “durable agent workflow”.
 
 ## 5. Run and checkpoint flow
 
-The `run` tool models an actual execution attempt by an agent.
+The default `coordination` tool also models actual execution attempts by an agent.
 
 Typical flow:
 
-1. Start a run for a workspace and, optionally, a task.
-2. Emit checkpoints as the agent reaches durable milestones.
-3. Complete, fail, or cancel the run.
+1. Start a run with `coordination.run_start` for a workspace and, optionally, a task.
+2. Emit checkpoints with `coordination.run_checkpoint` as the agent reaches durable milestones.
+3. Complete or fail the run with `coordination.run_complete` or `coordination.run_fail`.
 
 Runs are useful when tasks represent the durable unit of work, and checkpoints represent resumable execution state inside that unit.
 

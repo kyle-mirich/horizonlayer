@@ -4,18 +4,17 @@
 
 ## Files
 
-- `agent-memory.md`: basic workspace/session/page/search loop for persistent agent memory.
-- `structured-knowledge.md`: structured databases, typed rows, and hybrid search across rows plus page content.
-- `task-coordination.md`: multi-agent coordination with dependencies, leases, heartbeats, handoffs, acknowledgements, and inbox items.
+- `agent-memory.md`: basic session/memory loop for persistent agent context.
+- `mcp-agent-loop.md`: canonical end-to-end loop across session, memory, tasks, runs, search, and resume.
+- `task-coordination.md`: multi-agent coordination with leases, heartbeats, handoffs, and run checkpoints.
 
 ## Why This Folder Matters
 
 The examples reveal the intended product shape more clearly than isolated function signatures do:
 
-- workspaces are the top-level boundary
-- sessions are resumability slices inside a workspace
-- pages and rows are the two main content forms
-- search spans both content forms
+- sessions are the resumability boundary agents interact with
+- memory entries are the main content form
+- search recovers saved context
 - tasks and runs turn the storage layer into a durable agent execution system
 
 ## Best Use

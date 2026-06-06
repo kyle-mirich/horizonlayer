@@ -7,7 +7,7 @@ Horizon Layer is a single TypeScript service backed by PostgreSQL.
 There are three main layers:
 
 1. An optional launcher that bootstraps local PostgreSQL for stdio users
-2. The FastMCP server and tool registration layer
+2. The FastMCP server and compact tool registration layer
 3. The PostgreSQL-backed query layer that owns persistence, access control, and search
 
 ## Entrypoints
@@ -39,6 +39,12 @@ Responsibilities:
 
 - `src/tools/*.ts`
 
+The server registers:
+
+- `session`: start, resume, and close work sessions
+- `memory`: append notes and search context
+- `coordination`: task leases, handoffs, and run checkpoints
+
 Each tool:
 
 - validates inputs with Zod
@@ -60,7 +66,7 @@ Responsibilities:
 - run migrations
 - manage the shared Postgres pool
 - enforce the local-only access model
-- execute SQL for content, search, tasks, links, and runs
+- execute SQL for memory, search, tasks, and runs
 - shape records returned to the tool layer
 
 This is the main application core.
@@ -70,7 +76,7 @@ This is the main application core.
 The database stores both knowledge and workflow state:
 
 - content graph: workspaces, pages, blocks, databases, rows, links
-- coordination: tasks, dependencies, acknowledgements, events, and inbox items
+- coordination: tasks, dependencies, handoffs, and events
 - execution: runs and checkpoints
 - search: pgvector embeddings and full-text indexes
 

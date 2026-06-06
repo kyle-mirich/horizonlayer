@@ -20,4 +20,4 @@
 
 ## Important Caveat
 
-Some docs describe capabilities in broader product terms than the current code tree exposes. When docs and code disagree, treat `src/` plus `migrations/` as authoritative and update the prose later.
+`database.md` describes the storage schema, including internal tables that are not exposed as separate public MCP tools. Treat `docs/api.md` and `src/tools/core.ts` as authoritative for the OSS tool surface.

@@ -9,12 +9,12 @@ Use memory for durable context: project notes, decisions, user preferences, rese
 
 ## Workflow
 
-1. Search with `search` before creating new memory.
-2. Use `workspace.list` or create a workspace for the durable boundary.
-3. Start or resume a session for the active job.
-4. Use `page.append_text` for concise journals, findings, decisions, and next steps.
+1. Search with `memory.search` before creating new memory.
+2. Start or resume the durable boundary with `session.start` or `session.resume`.
+3. Use `memory.append` for concise journals, findings, decisions, and next steps.
+4. Keep `workspace_id` and `session_id` from `session.start` available for later calls.
 5. At the end of meaningful work, write a short summary and open follow-ups.
-6. For later continuation, call `workspace.resume_session_context`.
+6. For later continuation, call `session.resume`.
 
 ## Write Shape
 

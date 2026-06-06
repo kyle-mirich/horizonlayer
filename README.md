@@ -5,7 +5,7 @@
 ![Postgres](https://img.shields.io/badge/postgres-pgvector-4169E1)
 ![License: MIT](https://img.shields.io/badge/license-MIT-black)
 
-Horizon Layer is a self-hosted, local-first MCP server for durable agent memory and coordination. It gives agents one persistent system for structured knowledge, resumable execution state, and multi-agent workflow primitives on top of PostgreSQL and pgvector.
+Horizon Layer is a self-hosted, local-first MCP server for durable agent memory and coordination. It gives agents one persistent system for saved context, resumable execution state, and multi-agent workflow primitives on top of PostgreSQL and pgvector.
 
 The current runtime is deliberately local and system-only. This repository focuses on the MCP server, persistence model, and query layer. It does not include application-layer auth or SSO wiring.
 
@@ -13,13 +13,13 @@ The current runtime is deliberately local and system-only. This repository focus
 
 Horizon Layer is meant to be mounted as an MCP server by an agent, not browsed as a human app.
 
-The core agent loop is:
+The default core toolset is intentionally small. The core agent loop is:
 
-1. open a workspace and session for the current job
-2. store notes, findings, and structured records as work progresses
-3. create and claim durable tasks with leases, handoffs, and inboxes
+1. start a session for the current job
+2. append durable notes and findings as work progresses
+3. create and claim durable tasks with leases and handoffs
 4. checkpoint runs so execution can resume after interruption
-5. search prior context across notes and rows
+5. search prior context across saved memory
 6. resume the session later from one bundled context payload
 
 If you want one file that shows the intended MCP story end to end, start with [examples/mcp-agent-loop.md](examples/mcp-agent-loop.md).
@@ -29,9 +29,8 @@ If you want one file that shows the intended MCP story end to end, start with [e
 Most agent workflows need more than a vector store or a chat transcript. They need:
 
 - durable workspaces and session context
-- structured content with pages, blocks, databases, and rows
-- explicit links between entities
-- task coordination with leasing, acknowledgements, and inboxes
+- notes stored behind a small memory API
+- task coordination with leases and handoffs
 - run state and checkpoints for resumable execution
 - hybrid semantic and keyword search across the same persistence layer
 
@@ -39,16 +38,15 @@ Horizon Layer puts those primitives behind a single MCP server so clients like C
 
 ## What It Exposes
 
+By default Horizon Layer exposes the compact first-product surface:
+
 | Tool | Main actions |
 | --- | --- |
-| `workspace` | create, list, get, update, delete, start_session, list_sessions, get_session, resume_session_context, close_session |
-| `page` | create, get, update, delete, list, append_blocks, append_text, block_update, block_delete |
-| `database` | create, get, update, delete, list, add_property |
-| `row` | create, get, update, delete, query, count, bulk_create, cleanup_expired |
-| `search` | hybrid, similarity, similarity_recency, similarity_importance, full_text, grep, regex |
-| `task` | create, get, list, claim, heartbeat, complete, fail, handoff, ack, append_event, inbox_list, inbox_ack |
-| `run` | start, get, checkpoint, list, complete, fail, cancel |
-| `link` | create, list, delete |
+| `session` | start, resume, close |
+| `memory` | append, search |
+| `coordination` | task_create, task_list, task_claim, task_heartbeat, task_complete, task_fail, task_handoff, run_start, run_checkpoint, run_complete, run_fail |
+
+This keeps the MCP surface focused on agent memory and coordination.
 
 ## Quickstart
 
@@ -83,6 +81,7 @@ On first launch, HorizonLayer prepares its database automatically:
 - if Postgres is still unavailable, HorizonLayer starts a local `pgvector/pgvector:pg17` Docker container
 - HorizonLayer creates the `horizon_layer` database if needed
 - HorizonLayer runs migrations before starting the MCP server
+- HorizonLayer exposes the compact core toolset
 
 Prerequisites:
 
@@ -108,8 +107,7 @@ npm run demo:agent
 
 The demo connects through MCP over stdio and exercises the canonical flow:
 
-- create workspace
-- start session
+- start a session
 - write notes
 - create and claim a task
 - start and checkpoint a run
@@ -129,9 +127,8 @@ Horizon Layer defaults to stdio and is intended to be launched directly by MCP c
 └──────────────────┬──────────────────────────┘
                    │  MCP over stdio or HTTP Stream
 ┌──────────────────▼──────────────────────────┐
-│            Tool Layer (8 tools)             │
-│  workspace · page · database · row          │
-│  search · task · run · link                 │
+│         Core Tool Layer (3 tools)           │
+│     session · memory · coordination         │
 └──────────────────┬──────────────────────────┘
                    │  typed query calls
 ┌──────────────────▼──────────────────────────┐
@@ -146,7 +143,7 @@ Horizon Layer defaults to stdio and is intended to be launched directly by MCP c
 
 ## Design Principles
 
-- Thin tool layer: `src/tools/*.ts` validates inputs and dispatches to query functions.
+- Compact default tool layer: `session`, `memory`, and `coordination` cover the common agent loop.
 - SQL lives in one place: application logic and persistence stay in `src/db/queries/*.ts`.
 - Local-first operation: the launcher can bootstrap local PostgreSQL automatically when `DATABASE_URL` is unset.
 - Shared persistence model: knowledge, coordination, and run state live in the same database instead of separate systems.
@@ -275,7 +272,6 @@ The most important ones are:
 
 - `DATABASE_URL`: connect to an existing PostgreSQL instance and skip Docker bootstrap
 - `APP_NAME`: MCP server name
-
 Launcher-only variables:
 
 - `HORIZONLAYER_DOCKER_CONTAINER_NAME`

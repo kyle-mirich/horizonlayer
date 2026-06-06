@@ -10,21 +10,10 @@ The workspace is the durable container. The session is the active slice of work 
 
 ```json
 {
-  "tool": "workspace",
+  "tool": "session",
   "arguments": {
-    "action": "create",
-    "name": "Ingestion backlog incident",
-    "description": "Agent-run investigation of the delayed queue"
-  }
-}
-```
-
-```json
-{
-  "tool": "workspace",
-  "arguments": {
-    "action": "start_session",
-    "workspace_id": "ws-uuid",
+    "action": "start",
+    "workspace_name": "Ingestion backlog incident",
     "title": "Initial triage",
     "summary": "Collect evidence, create follow-up tasks, and checkpoint the recovery run"
   }
@@ -39,9 +28,9 @@ The agent appends notes to a session page as it learns new facts.
 
 ```json
 {
-  "tool": "page",
+  "tool": "memory",
   "arguments": {
-    "action": "append_text",
+    "action": "append",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
     "title": "Incident journal",
@@ -52,9 +41,9 @@ The agent appends notes to a session page as it learns new facts.
 
 ```json
 {
-  "tool": "page",
+  "tool": "memory",
   "arguments": {
-    "action": "append_text",
+    "action": "append",
     "page_id": "page-uuid",
     "session_id": "session-uuid",
     "content": "Confirmed the issue is isolated to ingestion-worker-b. Restart looks safe if queue depth falls immediately after recovery."
@@ -70,9 +59,9 @@ The agent records the next operational step as a task so ownership and progress 
 
 ```json
 {
-  "tool": "task",
+  "tool": "coordination",
   "arguments": {
-    "action": "create",
+    "action": "task_create",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
     "title": "Restart ingestion-worker-b and verify queue drain",
@@ -85,12 +74,12 @@ The agent records the next operational step as a task so ownership and progress 
 
 ```json
 {
-  "tool": "task",
+  "tool": "coordination",
   "arguments": {
-    "action": "claim",
+    "action": "task_claim",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
-    "id": "task-uuid",
+    "task_id": "task-uuid",
     "agent_name": "ops-agent",
     "lease_seconds": 300
   }
@@ -105,9 +94,9 @@ The task is the durable unit of work. The run captures the concrete execution at
 
 ```json
 {
-  "tool": "run",
+  "tool": "coordination",
   "arguments": {
-    "action": "start",
+    "action": "run_start",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
     "task_id": "task-uuid",
@@ -118,10 +107,11 @@ The task is the durable unit of work. The run captures the concrete execution at
 
 ```json
 {
-  "tool": "run",
+  "tool": "coordination",
   "arguments": {
-    "action": "checkpoint",
-    "id": "run-uuid",
+    "action": "run_checkpoint",
+    "run_id": "run-uuid",
+    "agent_name": "ops-agent",
     "summary": "Prepared restart plan and confirmed the worker is isolated.",
     "state": {
       "next_step": "restart worker and watch queue depth",
@@ -135,22 +125,22 @@ The task is the durable unit of work. The run captures the concrete execution at
 
 ## 5. Search the agent's prior context
 
-The same server can search across stored notes and structured records without external glue.
+The same server can search saved notes without external glue.
 
 ```json
 {
-  "tool": "search",
+  "tool": "memory",
   "arguments": {
+    "action": "search",
     "query": "stuck ingestion worker backlog restart plan",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
-    "mode": "hybrid",
     "limit": 3
   }
 }
 ```
 
-The expected top hits are the incident notes above and any related structured findings in the workspace.
+The expected top hits are the incident notes above and any related saved memory in the workspace.
 
 ---
 
@@ -158,10 +148,10 @@ The expected top hits are the incident notes above and any related structured fi
 
 ```json
 {
-  "tool": "task",
+  "tool": "coordination",
   "arguments": {
-    "action": "complete",
-    "id": "task-uuid",
+    "action": "task_complete",
+    "task_id": "task-uuid",
     "agent_name": "ops-agent",
     "payload": {
       "outcome": "restart completed and queue depth began to fall"
@@ -172,10 +162,11 @@ The expected top hits are the incident notes above and any related structured fi
 
 ```json
 {
-  "tool": "run",
+  "tool": "coordination",
   "arguments": {
-    "action": "complete",
-    "id": "run-uuid",
+    "action": "run_complete",
+    "run_id": "run-uuid",
+    "agent_name": "ops-agent",
     "result": {
       "status": "done",
       "summary": "Recovered the stuck worker and confirmed queue drain."
@@ -186,13 +177,12 @@ The expected top hits are the incident notes above and any related structured fi
 
 ```json
 {
-  "tool": "workspace",
+  "tool": "session",
   "arguments": {
-    "action": "resume_session_context",
+    "action": "resume",
     "workspace_id": "ws-uuid",
     "session_id": "session-uuid",
-    "max_items": 10,
-    "max_bytes": 32768
+    "max_items": 10
   }
 }
 ```

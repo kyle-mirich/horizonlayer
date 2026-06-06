@@ -1,6 +1,6 @@
 ---
 name: horizonlayer-coordination
-description: Use when Codex should coordinate durable HorizonLayer tasks, leases, handoffs, inboxes, runs, checkpoints, or multi-agent execution state.
+description: Use when Codex should coordinate durable HorizonLayer tasks, leases, handoffs, runs, checkpoints, or multi-agent execution state.
 ---
 
 # HorizonLayer Coordination
@@ -9,18 +9,18 @@ Use coordination when work has ownership, dependencies, retries, handoffs, or ne
 
 ## Task Loop
 
-1. Search/list open tasks in the workspace/session.
-2. Create tasks with clear titles, owner agent, priority, and dependencies.
-3. Claim before doing work; set a lease long enough for the next step.
-4. Heartbeat during long work.
-5. Complete, fail, or hand off with a concise payload.
-6. Use inbox actions for cross-agent messages that need acknowledgement.
+1. Search/list open tasks with `memory.search` and `coordination.task_list`.
+2. Create tasks with `coordination.task_create`; use clear titles, owner agent, priority, and dependencies.
+3. Claim with `coordination.task_claim` before doing work; set a lease long enough for the next step.
+4. Heartbeat with `coordination.task_heartbeat` during long work.
+5. Complete, fail, or hand off with `coordination.task_complete`, `coordination.task_fail`, or `coordination.task_handoff`.
+6. Keep custom event flows outside the public OSS loop.
 
 ## Run Loop
 
-1. Start a run for a concrete execution attempt.
-2. Checkpoint after each meaningful phase with summary plus minimal state.
-3. Link the run to relevant tasks, pages, and rows.
-4. Complete/fail/cancel the run explicitly.
+1. Start a run with `coordination.run_start` for a concrete execution attempt.
+2. Checkpoint with `coordination.run_checkpoint` after each meaningful phase with summary plus minimal state.
+3. Keep the run associated with the relevant `task_id` and `session_id`.
+4. Complete or fail the run with `coordination.run_complete` or `coordination.run_fail`.
 
 Tasks describe durable work. Runs describe attempts to execute it.

@@ -3,14 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ZodTypeAny } from 'zod';
 import type { AppServer } from '../mcp.js';
-import { registerDatabaseTools } from '../tools/databases.js';
-import { registerLinkTools } from '../tools/links.js';
-import { registerPageTools } from '../tools/pages.js';
-import { registerRowTools } from '../tools/rows.js';
-import { registerRunTools } from '../tools/runs.js';
-import { registerSearchTools } from '../tools/search.js';
-import { registerTaskTools } from '../tools/tasks.js';
-import { registerWorkspaceTools } from '../tools/workspaces.js';
+import { registerCoreTools } from '../tools/core.js';
 
 type ToolCall = {
   arguments: Record<string, unknown>;
@@ -23,16 +16,8 @@ const UUID_FIELDS = new Set([
   'workspace_id',
   'session_id',
   'page_id',
-  'block_id',
-  'database_id',
   'task_id',
-  'parent_run_id',
   'run_id',
-  'link_id',
-  'inbox_id',
-  'from_id',
-  'to_id',
-  'item_id',
 ]);
 
 function collectSchemas(): Map<string, ZodTypeAny> {
@@ -43,14 +28,7 @@ function collectSchemas(): Map<string, ZodTypeAny> {
     },
   } as unknown as AppServer;
 
-  registerWorkspaceTools(server);
-  registerPageTools(server);
-  registerDatabaseTools(server);
-  registerRowTools(server);
-  registerSearchTools(server);
-  registerTaskTools(server);
-  registerRunTools(server);
-  registerLinkTools(server);
+  registerCoreTools(server);
 
   return schemas;
 }

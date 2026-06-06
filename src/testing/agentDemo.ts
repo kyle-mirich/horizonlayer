@@ -38,11 +38,6 @@ function asString(value: unknown, message: string): string {
   return value;
 }
 
-function asNumber(value: unknown, message: string): number {
-  assert(typeof value === 'number', message);
-  return value;
-}
-
 function getString(record: JsonObject, key: string): string {
   return asString(record[key], `Expected ${key} to be a string`);
 }
@@ -82,13 +77,10 @@ async function callTool(
   return envelope;
 }
 
-async function safeDelete(
-  client: Client,
-  name: string,
-  args: Record<string, unknown>
-): Promise<void> {
+async function safeCloseSession(client: Client, sessionId: string | null): Promise<void> {
+  if (!sessionId) return;
   try {
-    await client.callTool({ name, arguments: args });
+    await client.callTool({ name: 'session', arguments: { action: 'close', session_id: sessionId } });
   } catch {
     // ignore cleanup failures
   }
@@ -111,51 +103,42 @@ async function main(): Promise<void> {
     } as Record<string, string>,
   });
 
-  let workspaceId: string | null = null;
   let sessionId: string | null = null;
-  let pageId: string | null = null;
-  let taskId: string | null = null;
-  let runId: string | null = null;
 
   try {
     await client.connect(transport);
 
-    const workspaceCreate = await callTool(client, 'workspace', {
-      action: 'create',
-      name: `Agent Demo ${suffix}`,
-      description: 'Canonical Horizon Layer MCP demo',
-    });
-    const workspaceRecord = asRecord(workspaceCreate.result, 'workspace/create result was not an object');
-    workspaceId = getString(workspaceRecord, 'id');
-
-    const sessionStart = await callTool(client, 'workspace', {
-      action: 'start_session',
-      workspace_id: workspaceId,
+    const sessionStart = await callTool(client, 'session', {
+      action: 'start',
+      workspace_name: `Agent Demo ${suffix}`,
       title: 'Triage session',
       summary: 'Agent investigates a queue backlog and stores resumable state',
     });
-    const sessionRecord = asRecord(sessionStart.result, 'workspace/start_session result was not an object');
+    const sessionStartRecord = asRecord(sessionStart.result, 'session/start result was not an object');
+    const workspaceRecord = asRecord(sessionStartRecord.workspace, 'session/start missing workspace');
+    const sessionRecord = asRecord(sessionStartRecord.session, 'session/start missing session');
+    const workspaceId = getString(workspaceRecord, 'id');
     sessionId = getString(sessionRecord, 'id');
 
-    const pageAppend = await callTool(client, 'page', {
-      action: 'append_text',
+    const firstMemory = await callTool(client, 'memory', {
+      action: 'append',
       workspace_id: workspaceId,
       session_id: sessionId,
       title: 'Incident journal',
       content: 'Queue lag spiked after a deploy. One worker pool is stuck and retries are not draining the backlog.',
     });
-    const pageRecord = asRecord(pageAppend.result, 'page/append_text result was not an object');
-    pageId = getString(pageRecord, 'id');
+    const pageRecord = asRecord(firstMemory.result, 'memory/append result was not an object');
+    const pageId = getString(pageRecord, 'id');
 
-    await callTool(client, 'page', {
-      action: 'append_text',
+    await callTool(client, 'memory', {
+      action: 'append',
       page_id: pageId,
       session_id: sessionId,
-      content: 'Confirmed the backlog is localized to ingestion-worker-b. Restart is low risk if we verify queue drain after recovery.',
+      content: 'Confirmed the backlog is localized to ingestion-worker-b. Restart is low risk if queue drain is verified after recovery.',
     });
 
-    const taskCreate = await callTool(client, 'task', {
-      action: 'create',
+    const taskCreate = await callTool(client, 'coordination', {
+      action: 'task_create',
       workspace_id: workspaceId,
       session_id: sessionId,
       title: 'Restart ingestion-worker-b and verify queue drain',
@@ -163,31 +146,32 @@ async function main(): Promise<void> {
       created_by_agent_name: 'planner',
       owner_agent_name: 'ops-agent',
     });
-    const taskRecord = asRecord(taskCreate.result, 'task/create result was not an object');
-    taskId = getString(taskRecord, 'id');
+    const taskRecord = asRecord(taskCreate.result, 'coordination/task_create result was not an object');
+    const taskId = getString(taskRecord, 'id');
 
-    const taskClaim = await callTool(client, 'task', {
-      action: 'claim',
+    const taskClaim = await callTool(client, 'coordination', {
+      action: 'task_claim',
       workspace_id: workspaceId,
       session_id: sessionId,
-      id: taskId,
+      task_id: taskId,
       agent_name: 'ops-agent',
       lease_seconds: 300,
     });
 
-    const runStart = await callTool(client, 'run', {
-      action: 'start',
+    const runStart = await callTool(client, 'coordination', {
+      action: 'run_start',
       workspace_id: workspaceId,
       session_id: sessionId,
       task_id: taskId,
       agent_name: 'ops-agent',
     });
-    const runRecord = asRecord(runStart.result, 'run/start result was not an object');
-    runId = getString(runRecord, 'id');
+    const runRecord = asRecord(runStart.result, 'coordination/run_start result was not an object');
+    const runId = getString(runRecord, 'id');
 
-    await callTool(client, 'run', {
-      action: 'checkpoint',
-      id: runId,
+    await callTool(client, 'coordination', {
+      action: 'run_checkpoint',
+      run_id: runId,
+      agent_name: 'ops-agent',
       summary: 'Prepared restart plan and confirmed the target worker is isolated.',
       state: {
         next_step: 'restart worker and watch queue depth for recovery',
@@ -195,28 +179,29 @@ async function main(): Promise<void> {
       },
     });
 
-    const searchResult = await callTool(client, 'search', {
+    const searchResult = await callTool(client, 'memory', {
+      action: 'search',
       query: 'stuck ingestion worker backlog restart plan',
       workspace_id: workspaceId,
       session_id: sessionId,
-      mode: 'hybrid',
       limit: 3,
     });
-    const searchItems = asArray(searchResult.result, 'search result was not an array');
+    const searchItems = asArray(searchResult.result, 'memory/search result was not an array');
     const topHit = searchItems[0] ? asRecord(searchItems[0], 'top search hit was invalid') : null;
 
-    await callTool(client, 'task', {
-      action: 'complete',
-      id: taskId,
+    await callTool(client, 'coordination', {
+      action: 'task_complete',
+      task_id: taskId,
       agent_name: 'ops-agent',
       payload: {
         outcome: 'restart completed and queue depth began to fall',
       },
     });
 
-    await callTool(client, 'run', {
-      action: 'complete',
-      id: runId,
+    await callTool(client, 'coordination', {
+      action: 'run_complete',
+      run_id: runId,
+      agent_name: 'ops-agent',
       result: {
         task_id: taskId,
         status: 'done',
@@ -224,14 +209,13 @@ async function main(): Promise<void> {
       },
     });
 
-    const resumeResult = await callTool(client, 'workspace', {
-      action: 'resume_session_context',
+    const resumeResult = await callTool(client, 'session', {
+      action: 'resume',
       workspace_id: workspaceId,
       session_id: sessionId,
       max_items: 10,
-      max_bytes: 32768,
     });
-    const resumeBundle = asRecord(resumeResult.result, 'resume_session_context result was not an object');
+    const resumeBundle = asRecord(resumeResult.result, 'session/resume result was not an object');
 
     const summary = {
       workspace_id: workspaceId,
@@ -239,12 +223,11 @@ async function main(): Promise<void> {
       page_id: pageId,
       task_id: taskId,
       run_id: runId,
-      claimed_task_status: getString(asRecord(taskClaim.result, 'task/claim result invalid'), 'status'),
+      claimed_task_status: getString(asRecord(taskClaim.result, 'coordination/task_claim result invalid'), 'status'),
       top_search_hit: topHit
         ? {
             id: getString(topHit, 'id'),
             title: getString(topHit, 'title'),
-            score: asNumber(topHit.score, 'Expected top search hit score to be a number'),
             type: getString(topHit, 'type'),
           }
         : null,
@@ -253,32 +236,20 @@ async function main(): Promise<void> {
 
     console.log('# Horizon Layer MCP Agent Demo');
     console.log('');
-    console.log('This run exercised the core agent loop against the live MCP server:');
-    console.log('1. create workspace');
-    console.log('2. start session');
-    console.log('3. write incident notes');
-    console.log('4. create and claim a task');
-    console.log('5. start and checkpoint a run');
-    console.log('6. search prior context');
-    console.log('7. complete task and run');
-    console.log('8. resume the session context');
+    console.log('This run exercised the compact core MCP surface:');
+    console.log('1. start a session');
+    console.log('2. write memory');
+    console.log('3. create and claim a task');
+    console.log('4. start and checkpoint a run');
+    console.log('5. search prior context');
+    console.log('6. complete task and run');
+    console.log('7. resume the session context');
     console.log('');
     console.log('```json');
     console.log(JSON.stringify(summary, null, 2));
     console.log('```');
   } finally {
-    if (runId) {
-      await safeDelete(client, 'run', {
-        action: 'cancel',
-        id: runId,
-      });
-    }
-    if (workspaceId) {
-      await safeDelete(client, 'workspace', {
-        action: 'delete',
-        id: workspaceId,
-      });
-    }
+    await safeCloseSession(client, sessionId);
 
     try {
       await client.close();

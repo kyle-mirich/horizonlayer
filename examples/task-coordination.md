@@ -1,69 +1,50 @@
 # Example: Multi-Agent Task Coordination
 
-This example shows how multiple agents coordinate work using the `task` tool. Tasks support dependencies, leases, heartbeats, handoffs, and an inbox for per-agent notifications.
+This example shows how agents coordinate durable work with the `coordination` tool. The public surface covers the common loop: create, claim, heartbeat, complete, fail, hand off, and checkpoint runs.
 
 ---
 
 ## Task state machine
 
-```
-pending  ──(deps resolved)──→  ready  ──(claim)──→  claimed  ──(complete)──→  done
-                                                               ──(fail)──────→  failed
-                                                               ──(handoff)───→  handoff_pending ──→ claimed
-blocked  ──(acks received)──→  ready
+```text
+ready -> claimed -> done
+                 -> failed
+                 -> handoff_pending -> claimed
 ```
 
 ---
 
-## 1. Create tasks with dependencies
-
-Planner agent creates two tasks. Task B cannot start until Task A is done.
+## 1. Create a task
 
 ```json
 {
-  "tool": "task",
+  "tool": "coordination",
   "arguments": {
-    "action": "create",
+    "action": "task_create",
     "workspace_id": "ws-uuid",
+    "session_id": "session-uuid",
     "title": "Collect system metrics",
     "priority": 0,
-    "created_by_agent_name": "planner"
+    "created_by_agent_name": "planner",
+    "owner_agent_name": "worker-1"
   }
 }
 ```
 
-Response: `{ "result": { "id": "task-a-uuid", "status": "ready", ... } }`
-
-```json
-{
-  "tool": "task",
-  "arguments": {
-    "action": "create",
-    "workspace_id": "ws-uuid",
-    "title": "Analyze metrics and produce report",
-    "depends_on_task_ids": ["task-a-uuid"],
-    "created_by_agent_name": "planner"
-  }
-}
-```
-
-Response: `{ "result": { "id": "task-b-uuid", "status": "pending", ... } }`
-
-Task B stays `pending` until Task A reaches `done`.
+Response: `{ "result": { "id": "task-uuid", "status": "ready", ... } }`
 
 ---
 
-## 2. Claim a task with a lease
-
-Worker agents claim ready tasks. The lease prevents two agents from grabbing the same task.
+## 2. Claim the task with a lease
 
 ```json
 {
-  "tool": "task",
+  "tool": "coordination",
   "arguments": {
-    "action": "claim",
+    "action": "task_claim",
     "workspace_id": "ws-uuid",
-    "id": "task-a-uuid",
+    "session_id": "session-uuid",
+    "task_id": "task-uuid",
     "agent_name": "worker-1",
     "lease_seconds": 300
   }
@@ -72,16 +53,14 @@ Worker agents claim ready tasks. The lease prevents two agents from grabbing the
 
 ---
 
-## 3. Send heartbeats
-
-Long-running tasks must heartbeat before the lease expires to retain ownership.
+## 3. Heartbeat during long work
 
 ```json
 {
-  "tool": "task",
+  "tool": "coordination",
   "arguments": {
-    "action": "heartbeat",
-    "id": "task-a-uuid",
+    "action": "task_heartbeat",
+    "task_id": "task-uuid",
     "agent_name": "worker-1",
     "lease_seconds": 300
   }
@@ -90,90 +69,68 @@ Long-running tasks must heartbeat before the lease expires to retain ownership.
 
 ---
 
-## 4. Complete a task
-
-When done, the worker marks the task complete. This unblocks dependent tasks automatically.
+## 4. Checkpoint an execution run
 
 ```json
 {
-  "tool": "task",
+  "tool": "coordination",
   "arguments": {
-    "action": "complete",
-    "id": "task-a-uuid",
-    "agent_name": "worker-1"
+    "action": "run_start",
+    "workspace_id": "ws-uuid",
+    "session_id": "session-uuid",
+    "task_id": "task-uuid",
+    "agent_name": "worker-1",
+    "title": "Metrics collection run"
   }
 }
 ```
 
-Task B now transitions from `pending` → `ready`.
+```json
+{
+  "tool": "coordination",
+  "arguments": {
+    "action": "run_checkpoint",
+    "run_id": "run-uuid",
+    "agent_name": "worker-1",
+    "summary": "Collected host metrics and started log review.",
+    "state": {
+      "phase": "log_review"
+    }
+  }
+}
+```
 
 ---
 
-## 5. Handoff to a specialist agent
-
-If the worker can't finish, it hands off to a specific agent. Optionally requires acknowledgement before the task becomes ready again.
+## 5. Complete or hand off
 
 ```json
 {
-  "tool": "task",
+  "tool": "coordination",
   "arguments": {
-    "action": "handoff",
-    "id": "task-b-uuid",
+    "action": "task_complete",
+    "task_id": "task-uuid",
+    "agent_name": "worker-1",
+    "payload": {
+      "summary": "Metrics collected and attached to session notes."
+    }
+  }
+}
+```
+
+If the work needs a different agent:
+
+```json
+{
+  "tool": "coordination",
+  "arguments": {
+    "action": "task_handoff",
+    "task_id": "task-uuid",
     "agent_name": "worker-1",
     "target_agent_name": "analyst",
-    "require_ack": true,
-    "payload": { "reason": "Needs domain expertise for anomaly detection" }
-  }
-}
-```
-
-The analyst's inbox receives a notification.
-
----
-
-## 6. Acknowledge from the inbox
-
-The target agent checks its inbox and acknowledges the handoff.
-
-```json
-{
-  "tool": "task",
-  "arguments": {
-    "action": "inbox_list",
-    "workspace_id": "ws-uuid",
-    "agent_name": "analyst",
-    "unread_only": true
-  }
-}
-```
-
-```json
-{
-  "tool": "task",
-  "arguments": {
-    "action": "inbox_ack",
-    "inbox_id": "inbox-item-uuid",
-    "agent_name": "analyst"
-  }
-}
-```
-
-After ack, the task transitions to `ready` and can be claimed by the analyst.
-
----
-
-## 7. Append events
-
-Any agent can append structured events to a task's event log for audit or coordination.
-
-```json
-{
-  "tool": "task",
-  "arguments": {
-    "action": "append_event",
-    "id": "task-b-uuid",
-    "event_type": "analysis_note",
-    "payload": { "note": "Detected 3 anomaly clusters in the 14:30–15:00 window" }
+    "payload": {
+      "reason": "Needs deeper anomaly analysis"
+    }
   }
 }
 ```

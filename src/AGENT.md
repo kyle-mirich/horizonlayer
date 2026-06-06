@@ -7,7 +7,7 @@
 - `index.ts`: smallest possible entrypoint. It just calls `runServer()`.
 - `launcher.ts`: end-user entrypoint for stdio installs. If `DATABASE_URL` is missing, it tries to reach local Postgres, starts a Docker container if needed, creates the target database, then hands off to `runServer()`.
 - `runServer.ts`: startup coordinator. It runs migrations, creates the server, starts the selected transport, and wires SIGINT/SIGTERM cleanup.
-- `server.ts`: creates the FastMCP instance and registers the tool modules.
+- `server.ts`: creates the FastMCP instance and registers the compact core toolset.
 - `config.ts`: reads `config.yaml` or `config.example.yaml`, overlays environment variables, validates everything with Zod, and exports the final config.
 - `mcp.ts`: shared FastMCP type aliases.
 - `db/`: database access, access control, migrations, and the actual SQL-backed business logic.
@@ -19,7 +19,7 @@
 
 1. Process starts through `index.ts` or `launcher.ts`.
 2. `runServer.ts` migrates the database before serving traffic.
-3. `server.ts` registers 8 tools with FastMCP.
+3. `server.ts` registers the core tools (`session`, `memory`, `coordination`) with FastMCP.
 4. A tool module in `src/tools/` validates the request and chooses an action.
 5. The tool calls into `src/db/queries/`.
 6. Query code reads or mutates Postgres and returns typed records.

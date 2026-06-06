@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fastMcpInstances: Array<{ options: Record<string, unknown> }> = [];
-const registerWorkspaceTools = vi.fn();
-const registerPageTools = vi.fn();
-const registerDatabaseTools = vi.fn();
-const registerRowTools = vi.fn();
-const registerSearchTools = vi.fn();
-const registerLinkTools = vi.fn();
-const registerTaskTools = vi.fn();
-const registerRunTools = vi.fn();
+const configState = vi.hoisted(() => ({
+  server: {
+    health_path: '/healthz',
+    name: 'Horizon Layer',
+    version: '1.0.0',
+  },
+}));
+const registerCoreTools = vi.fn();
 
 vi.mock('fastmcp', () => ({
   FastMCP: class FastMCP {
@@ -24,61 +24,21 @@ vi.mock('fastmcp', () => ({
 }));
 
 vi.mock('./config.js', () => ({
-  config: {
-    server: {
-      health_path: '/healthz',
-      name: 'Horizon Layer',
-      version: '1.0.0',
-    },
-  },
+  config: configState,
 }));
 
-vi.mock('./tools/workspaces.js', () => ({
-  registerWorkspaceTools,
-}));
-
-vi.mock('./tools/pages.js', () => ({
-  registerPageTools,
-}));
-
-vi.mock('./tools/databases.js', () => ({
-  registerDatabaseTools,
-}));
-
-vi.mock('./tools/rows.js', () => ({
-  registerRowTools,
-}));
-
-vi.mock('./tools/search.js', () => ({
-  registerSearchTools,
-}));
-
-vi.mock('./tools/links.js', () => ({
-  registerLinkTools,
-}));
-
-vi.mock('./tools/tasks.js', () => ({
-  registerTaskTools,
-}));
-
-vi.mock('./tools/runs.js', () => ({
-  registerRunTools,
+vi.mock('./tools/core.js', () => ({
+  registerCoreTools,
 }));
 
 describe('createAppServer local runtime', () => {
   beforeEach(() => {
+    vi.resetModules();
     fastMcpInstances.length = 0;
-    registerWorkspaceTools.mockClear();
-    registerPageTools.mockClear();
-    registerDatabaseTools.mockClear();
-    registerRowTools.mockClear();
-    registerSearchTools.mockClear();
-    registerLinkTools.mockClear();
-    registerTaskTools.mockClear();
-    registerRunTools.mockClear();
+    registerCoreTools.mockClear();
   });
 
-  it('boots FastMCP without hosted auth wiring', async () => {
+  it('boots FastMCP with the compact core toolset', async () => {
     const { createAppServer } = await import('./server.js');
     createAppServer();
 
@@ -90,7 +50,6 @@ describe('createAppServer local runtime', () => {
       name: 'Horizon Layer',
       version: '1.0.0',
     });
-    expect(registerWorkspaceTools).toHaveBeenCalledTimes(1);
-    expect(registerRunTools).toHaveBeenCalledTimes(1);
+    expect(registerCoreTools).toHaveBeenCalledTimes(1);
   });
 });
