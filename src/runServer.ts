@@ -2,9 +2,18 @@ import { runMigrations } from './db/migrate.js';
 import { closePool } from './db/client.js';
 import { createAppServer } from './server.js';
 import { config } from './config.js';
+import { startDashboardApiServer, type DashboardApiServer } from './dashboardApi.js';
 
 export async function runServer(): Promise<void> {
   await runMigrations();
+
+  let dashboardApiServer: DashboardApiServer | null = null;
+  if (config.dashboard_api.enabled) {
+    dashboardApiServer = await startDashboardApiServer({
+      host: config.dashboard_api.host,
+      port: config.dashboard_api.port,
+    });
+  }
 
   const server = createAppServer();
   if (config.server.transport === 'httpStream') {
@@ -23,6 +32,10 @@ export async function runServer(): Promise<void> {
   }
 
   const shutdown = async (): Promise<void> => {
+    if (dashboardApiServer) {
+      await dashboardApiServer.close();
+      dashboardApiServer = null;
+    }
     await server.stop();
     await closePool();
   };

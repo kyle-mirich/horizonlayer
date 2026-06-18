@@ -136,6 +136,25 @@ describe('database query contracts', () => {
     expect(clientQueryMock.mock.calls.at(-1)?.[0]).toBe('ROLLBACK');
   });
 
+  it('rolls back database creation when property insertion fails', async () => {
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [database()] })
+      .mockRejectedValueOnce(new Error('property insert failed'))
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    const { createDatabase } = await import('./databases.js');
+    await expect(createDatabase({
+      name: 'Database',
+      workspace_id: 'ws-1',
+      properties: [{ name: 'Title', type: 'title' }],
+    })).rejects.toThrow('property insert failed');
+
+    expect(clientQueryMock.mock.calls.map(([sql]) => sql)).toContain('ROLLBACK');
+    expect(clientQueryMock.mock.calls.map(([sql]) => sql)).not.toContain('COMMIT');
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+  });
+
   it('gets, lists, updates, and deletes databases with optimistic conflict checks', async () => {
     poolQueryMock
       .mockResolvedValueOnce({ rows: [database()] })
@@ -158,6 +177,40 @@ describe('database query contracts', () => {
     await expect(updateDatabase('db-1', { name: 'Stale', expected_updated_at: '2026-01-01T00:00:00.000Z' })).rejects.toThrow(
       'Conflict: database db-1 was modified by another agent'
     );
+  });
+
+  it('returns empty database lists without fetching properties', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [] });
+
+    const { listDatabases } = await import('./databases.js');
+    await expect(listDatabases({ workspace_id: 'ws-1' })).resolves.toEqual([]);
+
+    expect(poolQueryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns null for missing database updates and false for missing deletes without stale-write conflicts', async () => {
+    poolQueryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const { deleteDatabase, updateDatabase } = await import('./databases.js');
+    await expect(updateDatabase('missing', { name: 'Nope' })).resolves.toBeNull();
+    await expect(deleteDatabase('missing')).resolves.toBe(false);
+  });
+
+  it('throws conflicts for stale database deletes', async () => {
+    poolQueryMock
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rows: [{ updated_at: '2026-01-03T00:00:00.000Z' }] });
+
+    const { deleteDatabase } = await import('./databases.js');
+    await expect(deleteDatabase(
+      'db-1',
+      { kind: 'system' },
+      '2026-01-02T00:00:00.000Z'
+    )).rejects.toThrow('Conflict: database db-1 was modified by another agent');
   });
 
   it('adds database properties and handles duplicate, missing, and failed transactions', async () => {
@@ -193,5 +246,27 @@ describe('database query contracts', () => {
     })).rejects.toThrow('Database db-1 not found');
 
     expect(releaseMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('rolls back add-property transactions when the insert fails after duplicate checks', async () => {
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ id: 'db-1' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ max_pos: null }] })
+      .mockRejectedValueOnce(new Error('property insert failed'))
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    const { addDatabaseProperty } = await import('./databases.js');
+    await expect(addDatabaseProperty('db-1', {
+      name: 'Status',
+      type: 'select',
+      options: { choices: ['todo'] },
+      is_required: true,
+    })).rejects.toThrow('property insert failed');
+
+    expect(clientQueryMock.mock.calls.map(([sql]) => sql)).toContain('ROLLBACK');
+    expect(clientQueryMock.mock.calls.map(([sql]) => sql)).not.toContain('COMMIT');
+    expect(releaseMock).toHaveBeenCalledTimes(1);
   });
 });

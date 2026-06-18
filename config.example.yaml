@@ -15,6 +15,11 @@ embedding:
   model: Xenova/all-MiniLM-L6-v2
   dimensions: 384
 
+dashboard_api:
+  enabled: false
+  host: 127.0.0.1
+  port: 3737
+
 server:
   name: Horizon Layer
   version: 1.0.0

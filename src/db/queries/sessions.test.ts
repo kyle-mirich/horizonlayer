@@ -67,11 +67,71 @@ describe('session query layer', () => {
     expect(closed?.status).toBe('closed');
   });
 
+  it('creates sessions with default titles and JSON metadata', async () => {
+    poolQueryMock.mockResolvedValueOnce({
+      rows: [{ id: 'session-1', workspace_id: 'ws-1', title: 'Session default' }],
+    });
+
+    const { createSession } = await import('./sessions.js');
+    await createSession({
+      metadata: { agent: 'codex', fresh: true },
+      summary: 'Fresh context handoff',
+      workspace_id: 'ws-1',
+    });
+
+    const values = poolQueryMock.mock.calls[0]?.[1] as unknown[];
+    expect(String(values[1])).toMatch(/^Session \d{4}-/);
+    expect(values).toEqual([
+      'ws-1',
+      expect.stringMatching(/^Session \d{4}-/),
+      'Fresh context handoff',
+      JSON.stringify({ agent: 'codex', fresh: true }),
+    ]);
+  });
+
+  it('rejects sessions that belong to a different requested workspace', async () => {
+    const { getSession } = await import('./sessions.js');
+
+    await expect(getSession('session-1', { workspace_id: 'ws-2' })).rejects.toThrow(
+      'Session belongs to workspace ws-1, not ws-2'
+    );
+
+    expect(poolQueryMock).not.toHaveBeenCalled();
+  });
+
   it('touches session activity timestamps', async () => {
     poolQueryMock.mockResolvedValue({ rowCount: 1, rows: [] });
     const { touchSession } = await import('./sessions.js');
     await touchSession('session-2');
     expect(poolQueryMock).toHaveBeenCalledWith(expect.stringContaining('SET last_activity_at = NOW()'), ['session-2']);
+  });
+
+  it('does not touch activity when no session id is provided', async () => {
+    const { touchSession } = await import('./sessions.js');
+
+    await touchSession(null);
+    await touchSession(undefined);
+
+    expect(poolQueryMock).not.toHaveBeenCalled();
+  });
+
+  it('touches session activity through a provided queryable', async () => {
+    const queryable = { query: vi.fn().mockResolvedValue({ rowCount: 1, rows: [] }) };
+
+    const { touchSession } = await import('./sessions.js');
+    await touchSession('session-2', queryable);
+
+    expect(queryable.query).toHaveBeenCalledWith(expect.stringContaining('SET last_activity_at = NOW()'), ['session-2']);
+    expect(poolQueryMock).not.toHaveBeenCalled();
+  });
+
+  it('returns null when a session cannot be loaded for resume', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [] });
+
+    const { getSessionResumeBundle } = await import('./sessions.js');
+    await expect(getSessionResumeBundle({ session_id: 'missing-session' })).resolves.toBeNull();
+
+    expect(poolQueryMock).toHaveBeenCalledTimes(1);
   });
 
   it('builds resume bundles from session-scoped pages, tasks, runs, and search hits', async () => {
@@ -116,6 +176,43 @@ describe('session query layer', () => {
     expect(result?.bundle?.search_hits[0]?.id).toBe('page-1');
   });
 
+  it('skips resume search when both session summary and title are blank', async () => {
+    poolQueryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT s.*') && sql.includes('page_count')) {
+        return {
+          rows: [{
+            id: 'session-1',
+            workspace_id: 'ws-1',
+            title: '   ',
+            summary: '  ',
+            page_count: 0,
+            task_count: 0,
+            run_count: 0,
+          }],
+        };
+      }
+      if (sql.includes('FROM pages p') && sql.includes('content_preview')) {
+        return { rows: [] };
+      }
+      if (sql.includes('FROM tasks') && sql.includes('session_id = $1')) {
+        return { rows: [] };
+      }
+      if (sql.includes('FROM agent_runs r')) {
+        return { rows: [] };
+      }
+      if (sql.includes('ORDER BY score DESC')) {
+        throw new Error('search should not run for blank resume query');
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const { getSessionResumeBundle } = await import('./sessions.js');
+    const result = await getSessionResumeBundle({ session_id: 'session-1' });
+
+    expect(result?.truncated).toBe(false);
+    expect(result?.bundle?.search_hits).toEqual([]);
+  });
+
   it('keeps oversized resume bundles inline by compacting previews', async () => {
     poolQueryMock.mockImplementation(async (sql: string) => {
       if (sql.includes('SELECT s.*') && sql.includes('page_count')) {
@@ -155,5 +252,185 @@ describe('session query layer', () => {
     expect(result?.file_path).toBeUndefined();
     expect(writeFileMock).not.toHaveBeenCalled();
     expect(result?.bundle?.recent_pages[0]?.content_preview.length ?? 0).toBeLessThan(5000);
+  });
+
+  it('compacts run checkpoints and search snippets when resume bundles exceed the byte budget', async () => {
+    poolQueryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT s.*') && sql.includes('page_count')) {
+        return {
+          rows: [{
+            id: 'session-1',
+            workspace_id: 'ws-1',
+            title: 'Session title',
+            summary: 'resume me',
+            metadata: {},
+            page_count: 1,
+            task_count: 0,
+            run_count: 1,
+          }],
+        };
+      }
+      if (sql.includes('FROM pages p') && sql.includes('content_preview')) {
+        return { rows: [{ id: 'page-1', title: 'Page', content_preview: 'page '.repeat(800), tags: [], importance: 0.5, parent_page_id: null, created_at: 'now', updated_at: 'now' }] };
+      }
+      if (sql.includes('FROM tasks') && sql.includes('session_id = $1')) {
+        return { rows: [] };
+      }
+      if (sql.includes('FROM agent_runs r')) {
+        return {
+          rows: [{
+            id: 'run-1',
+            session_id: 'session-1',
+            task_id: null,
+            parent_run_id: null,
+            agent_name: 'agent',
+            title: null,
+            status: 'running',
+            metadata: { verbose: 'run metadata should survive at run level' },
+            result: {},
+            error_message: null,
+            latest_checkpoint_sequence: 3,
+            latest_checkpoint_at: 'now',
+            started_at: 'now',
+            finished_at: null,
+            created_at: 'now',
+            updated_at: 'now',
+            latest_checkpoint: {
+              id: 'cp-1',
+              run_id: 'run-1',
+              sequence: 3,
+              summary: 'checkpoint '.repeat(500),
+              state: { large: 'state should be cleared' },
+              metadata: { large: 'metadata should be cleared' },
+              created_at: 'now',
+            },
+          }],
+        };
+      }
+      if (sql.includes('ORDER BY score DESC')) {
+        return { rows: [{ id: 'page-1', title: 'Page', score: 3, snippet: 'snippet '.repeat(500), updated_at: 'now' }] };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const { getSessionResumeBundle } = await import('./sessions.js');
+    const result = await getSessionResumeBundle({ session_id: 'session-1', max_bytes: 3500 });
+
+    expect(result?.truncated).toBe(true);
+    expect(result?.bundle?.recent_runs[0]?.latest_checkpoint?.summary?.endsWith('...')).toBe(true);
+    expect(result?.bundle?.recent_runs[0]?.latest_checkpoint?.state).toEqual({});
+    expect(result?.bundle?.recent_runs[0]?.latest_checkpoint?.metadata).toEqual({});
+    expect(result?.bundle?.search_hits[0]?.snippet.endsWith('...')).toBe(true);
+    expect(result?.preview).toEqual({
+      recent_page_count: 1,
+      recent_run_count: 1,
+      search_hit_count: 1,
+      session: result?.bundle?.session,
+      task_count: 0,
+    });
+  });
+
+  it('returns only a preview when compacted resume content still exceeds the byte budget', async () => {
+    poolQueryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT s.*') && sql.includes('page_count')) {
+        return {
+          rows: [{
+            id: 'session-1',
+            workspace_id: 'ws-1',
+            title: 'Session title',
+            summary: 'resume me',
+            metadata: {},
+            page_count: 0,
+            task_count: 1,
+            run_count: 0,
+          }],
+        };
+      }
+      if (sql.includes('FROM pages p') && sql.includes('content_preview')) {
+        return { rows: [] };
+      }
+      if (sql.includes('FROM tasks') && sql.includes('session_id = $1')) {
+        return {
+          rows: [{
+            id: 'task-1',
+            title: 'task title '.repeat(1000),
+            status: 'ready',
+            priority: 1,
+            owner_agent_name: null,
+            handoff_target_agent_name: null,
+            blocker_reason: null,
+            last_event_at: 'now',
+            created_at: 'now',
+            updated_at: 'now',
+          }],
+        };
+      }
+      if (sql.includes('FROM agent_runs r')) {
+        return { rows: [] };
+      }
+      if (sql.includes('ORDER BY score DESC')) {
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const { getSessionResumeBundle } = await import('./sessions.js');
+    const result = await getSessionResumeBundle({ session_id: 'session-1', max_bytes: 500 });
+
+    expect(result).toEqual({
+      bytes: expect.any(Number),
+      max_bytes: 500,
+      preview: {
+        recent_page_count: 0,
+        recent_run_count: 0,
+        search_hit_count: 0,
+        session: expect.objectContaining({ id: 'session-1' }),
+        task_count: 1,
+      },
+      truncated: true,
+    });
+    expect(result?.bytes).toBeLessThanOrEqual(500);
+    expect(result).not.toHaveProperty('bundle');
+  });
+
+  it('returns an empty truncated response when even the preview exceeds the byte budget', async () => {
+    poolQueryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT s.*') && sql.includes('page_count')) {
+        return {
+          rows: [{
+            id: 'session-1',
+            workspace_id: 'ws-1',
+            title: 'Session title',
+            summary: 'resume me',
+            metadata: { large: 'x'.repeat(5000) },
+            page_count: 999,
+            task_count: 999,
+            run_count: 999,
+          }],
+        };
+      }
+      if (sql.includes('FROM pages p') && sql.includes('content_preview')) {
+        return { rows: [{ id: 'page-1', title: 'Page', content_preview: 'x'.repeat(5000), tags: [], importance: 0.5, parent_page_id: null, created_at: 'now', updated_at: 'now' }] };
+      }
+      if (sql.includes('FROM tasks') && sql.includes('session_id = $1')) {
+        return { rows: [] };
+      }
+      if (sql.includes('FROM agent_runs r')) {
+        return { rows: [] };
+      }
+      if (sql.includes('ORDER BY score DESC')) {
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const { getSessionResumeBundle } = await import('./sessions.js');
+    const result = await getSessionResumeBundle({ session_id: 'session-1', max_bytes: 10 });
+
+    expect(result).toEqual({
+      bytes: 0,
+      max_bytes: 10,
+      truncated: true,
+    });
   });
 });

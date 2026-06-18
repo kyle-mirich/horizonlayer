@@ -44,8 +44,15 @@ const ServerSchema = z.object({
   health_path: HttpPathSchema.default('/healthz'),
 });
 
+const DashboardApiSchema = z.object({
+  enabled: z.boolean().default(false),
+  host: z.string().default('127.0.0.1'),
+  port: z.number().int().positive().default(3737),
+});
+
 const ConfigSchema = z.object({
   database: DatabaseSchema,
+  dashboard_api: DashboardApiSchema.default({}),
   embedding: EmbeddingSchema.default({}),
   server: ServerSchema,
 });
@@ -98,6 +105,11 @@ function buildEnvConfig(): Record<string, unknown> {
     embedding: {
       model: process.env.EMBEDDING_MODEL,
       dimensions: parseNumber(process.env.EMBEDDING_DIMENSIONS),
+    },
+    dashboard_api: {
+      enabled: parseBoolean(process.env.DASHBOARD_API_ENABLED),
+      host: process.env.DASHBOARD_API_HOST,
+      port: parseNumber(process.env.DASHBOARD_API_PORT),
     },
     server: {
       name: process.env.APP_NAME,

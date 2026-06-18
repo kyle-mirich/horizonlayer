@@ -2,6 +2,15 @@
 
 This repository is a single TypeScript service that exposes a PostgreSQL-backed MCP server for agent memory, task coordination, and resumable runs.
 
+## Agent Operating Rules
+
+- Optimize for fresh context: a coding agent should be able to open this repo, read the nearest `AGENT.md` plus the files it references, and make a useful change without prior conversation history.
+- Keep instructions current. When code behavior, entrypoints, scripts, schema, examples, workflows, or agent-facing conventions change, update the related `AGENT.md`, `AGENTS.md`, README, and documentation in the same change.
+- Add or update tests with every behavior change. Prefer focused tests near the changed module, then run the smallest relevant command before broader verification.
+- Preserve the compact MCP surface unless a change clearly improves the agent loop. The default public tools are `session`, `memory`, and `coordination`; deeper query modules can exist without becoming first-class tools.
+- Treat migrations and query modules as the source of truth for persistence behavior. If docs disagree with code, fix the docs or the code before moving on.
+- Leave breadcrumbs for future agents: name tests by behavior, keep examples runnable, and update this source map when directories, entrypoints, or ownership boundaries move.
+
 ## Start Here
 
 - `src/index.ts`: direct process entrypoint for normal app startup.

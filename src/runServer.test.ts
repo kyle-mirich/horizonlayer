@@ -5,10 +5,17 @@ const closePoolMock = vi.fn();
 const startMock = vi.fn();
 const stopMock = vi.fn();
 const createAppServerMock = vi.fn();
+const startDashboardApiServerMock = vi.fn();
+const closeDashboardApiServerMock = vi.fn();
 const processOnSpy = vi.spyOn(process, 'on');
 const processExitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
 
 const configState = vi.hoisted(() => ({
+  dashboard_api: {
+    enabled: false,
+    host: '127.0.0.1',
+    port: 3737,
+  },
   server: {
     endpoint: '/mcp',
     host: '0.0.0.0',
@@ -29,6 +36,10 @@ vi.mock('./server.js', () => ({
   createAppServer: createAppServerMock,
 }));
 
+vi.mock('./dashboardApi.js', () => ({
+  startDashboardApiServer: startDashboardApiServerMock,
+}));
+
 vi.mock('./config.js', () => ({
   config: configState,
 }));
@@ -36,6 +47,7 @@ vi.mock('./config.js', () => ({
 describe('runServer transport startup', () => {
   beforeEach(() => {
     configState.server.transport = 'httpStream';
+    configState.dashboard_api.enabled = false;
     runMigrationsMock.mockReset().mockResolvedValue(undefined);
     closePoolMock.mockReset().mockResolvedValue(undefined);
     startMock.mockReset().mockResolvedValue(undefined);
@@ -43,6 +55,11 @@ describe('runServer transport startup', () => {
     createAppServerMock.mockReset().mockReturnValue({
       start: startMock,
       stop: stopMock,
+    });
+    closeDashboardApiServerMock.mockReset().mockResolvedValue(undefined);
+    startDashboardApiServerMock.mockReset().mockResolvedValue({
+      close: closeDashboardApiServerMock,
+      url: 'http://127.0.0.1:3737',
     });
     processOnSpy.mockReset().mockReturnValue(process);
     processExitSpy.mockClear();
@@ -73,6 +90,18 @@ describe('runServer transport startup', () => {
     });
   });
 
+  it('starts the dashboard API when enabled', async () => {
+    configState.dashboard_api.enabled = true;
+
+    const { runServer } = await import('./runServer.js');
+    await runServer();
+
+    expect(startDashboardApiServerMock).toHaveBeenCalledWith({
+      host: '127.0.0.1',
+      port: 3737,
+    });
+  });
+
   it('registers shutdown handlers that stop the server and close the pool', async () => {
     const { runServer } = await import('./runServer.js');
     await runServer();
@@ -81,6 +110,23 @@ describe('runServer transport startup', () => {
     expect(sigintHandler).toBeDefined();
     await sigintHandler?.();
 
+    expect(closeDashboardApiServerMock).not.toHaveBeenCalled();
+    expect(stopMock).toHaveBeenCalledTimes(1);
+    expect(closePoolMock).toHaveBeenCalledTimes(1);
+    expect(processExitSpy).toHaveBeenCalledWith(0);
+  });
+
+  it('closes the dashboard API during shutdown when it was started', async () => {
+    configState.dashboard_api.enabled = true;
+
+    const { runServer } = await import('./runServer.js');
+    await runServer();
+
+    const sigtermHandler = processOnSpy.mock.calls.find(([event]) => event === 'SIGTERM')?.[1] as (() => Promise<void>) | undefined;
+    expect(sigtermHandler).toBeDefined();
+    await sigtermHandler?.();
+
+    expect(closeDashboardApiServerMock).toHaveBeenCalledTimes(1);
     expect(stopMock).toHaveBeenCalledTimes(1);
     expect(closePoolMock).toHaveBeenCalledTimes(1);
     expect(processExitSpy).toHaveBeenCalledWith(0);

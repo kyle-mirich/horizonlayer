@@ -50,6 +50,25 @@ describe('access control query guards', () => {
   });
 
   it.each([
+    ['workspace', 'assertWorkspaceWriteAccess', { id: 'ws-1' }, undefined, 'SELECT id FROM workspaces WHERE id = $1'],
+    ['session', 'assertSessionWriteAccess', { workspace_id: 'ws-1' }, { workspace_id: 'ws-1' }, 'SELECT workspace_id FROM sessions WHERE id = $1'],
+    ['page', 'assertPageWriteAccess', { workspace_id: 'ws-1', parent_page_id: null, session_id: null }, { workspace_id: 'ws-1', parent_page_id: null, session_id: null }, 'SELECT workspace_id, parent_page_id, session_id FROM pages WHERE id = $1'],
+    ['database', 'assertDatabaseWriteAccess', { workspace_id: 'ws-1', parent_page_id: null }, { workspace_id: 'ws-1', parent_page_id: null }, 'SELECT workspace_id, parent_page_id FROM databases WHERE id = $1'],
+    ['row', 'assertRowWriteAccess', { database_id: 'db-1', workspace_id: 'ws-1' }, { database_id: 'db-1', workspace_id: 'ws-1' }, 'FROM database_rows r'],
+    ['block', 'assertBlockWriteAccess', { page_id: 'page-1', workspace_id: 'ws-1', session_id: null }, { page_id: 'page-1', workspace_id: 'ws-1', session_id: null }, 'FROM blocks b'],
+  ])('returns metadata for %s write checks', async (_label, fnName, row, expected, sqlNeedle) => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [row] });
+    const accessControl = await import('./accessControl.js');
+    const check = accessControl[fnName as keyof typeof accessControl] as (
+      id: string,
+      access: { kind: 'system' }
+    ) => Promise<unknown>;
+
+    await expect(check('item-1', { kind: 'system' })).resolves.toEqual(expected);
+    expect(String(poolQueryMock.mock.calls[0]?.[0])).toContain(sqlNeedle);
+  });
+
+  it.each([
     ['workspace', 'SELECT id FROM workspaces WHERE id = $1'],
     ['page', 'SELECT workspace_id, parent_page_id, session_id FROM pages WHERE id = $1'],
     ['database', 'SELECT workspace_id, parent_page_id FROM databases WHERE id = $1'],
@@ -86,6 +105,36 @@ describe('access control query guards', () => {
     await assertLinkAccess('link-1', { kind: 'system' }, 'read');
 
     expect(poolQueryMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('uses write-mode endpoint checks before allowing link writes', async () => {
+    poolQueryMock
+      .mockResolvedValueOnce({
+        rows: [{ from_type: 'database_row', from_id: 'row-1', to_type: 'block', to_id: 'block-1' }],
+      })
+      .mockResolvedValueOnce({ rows: [{ database_id: 'db-1', workspace_id: 'ws-1' }] })
+      .mockResolvedValueOnce({ rows: [{ page_id: 'page-1', workspace_id: 'ws-1', session_id: 'session-1' }] });
+
+    const { assertLinkAccess } = await import('./accessControl.js');
+    await assertLinkAccess('link-1', { kind: 'system' }, 'write');
+
+    expect(String(poolQueryMock.mock.calls[1]?.[0])).toContain('FROM database_rows r');
+    expect(String(poolQueryMock.mock.calls[2]?.[0])).toContain('FROM blocks b');
+  });
+
+  it('does not check the second link endpoint when the first endpoint is missing', async () => {
+    poolQueryMock
+      .mockResolvedValueOnce({
+        rows: [{ from_type: 'workspace', from_id: 'missing-ws', to_type: 'page', to_id: 'page-1' }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const { assertLinkAccess } = await import('./accessControl.js');
+    await expect(assertLinkAccess('link-1', { kind: 'system' }, 'write')).rejects.toThrow(
+      'Workspace missing-ws not found'
+    );
+
+    expect(poolQueryMock).toHaveBeenCalledTimes(2);
   });
 
   it('throws when a link does not exist', async () => {

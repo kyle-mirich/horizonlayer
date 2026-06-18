@@ -142,6 +142,50 @@ describe('core MCP tools', () => {
     }));
   });
 
+  it('starts a session in an existing workspace without creating a workspace', async () => {
+    await expect(call('session', {
+      action: 'start',
+      summary: 'Existing workspace session',
+      title: 'Triage',
+      workspace_id: ids.workspace,
+    })).resolves.toMatchObject({
+      ok: true,
+      result: {
+        session: { id: ids.session },
+      },
+    });
+
+    expect(workspaceMocks.createWorkspace).not.toHaveBeenCalled();
+    expect(sessionMocks.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      summary: 'Existing workspace session',
+      title: 'Triage',
+      workspace_id: ids.workspace,
+    }));
+  });
+
+  it('returns useful session errors for missing or unknown sessions', async () => {
+    await expect(call('session', { action: 'resume' })).resolves.toMatchObject({
+      error: { message: 'session_id is required for session action=resume' },
+      ok: false,
+    });
+    await expect(call('session', { action: 'close' })).resolves.toMatchObject({
+      error: { message: 'session_id is required for session action=close' },
+      ok: false,
+    });
+
+    sessionMocks.getSessionResumeBundle.mockResolvedValueOnce(null);
+    sessionMocks.closeSession.mockResolvedValueOnce(null);
+
+    await expect(call('session', { action: 'resume', session_id: ids.session })).resolves.toMatchObject({
+      error: { message: `Session ${ids.session} not found` },
+      ok: false,
+    });
+    await expect(call('session', { action: 'close', session_id: ids.session })).resolves.toMatchObject({
+      error: { message: `Session ${ids.session} not found` },
+      ok: false,
+    });
+  });
+
   it('stores and searches memory through one tool', async () => {
     await call('memory', {
       action: 'append',
@@ -168,6 +212,42 @@ describe('core MCP tools', () => {
     }));
   });
 
+  it('appends memory to an existing page', async () => {
+    await expect(call('memory', {
+      action: 'append',
+      content: 'Additional detail',
+      page_id: ids.page,
+      session_id: ids.session,
+    })).resolves.toMatchObject({
+      ok: true,
+      result: [{ id: 'block-1', content: 'note' }],
+    });
+
+    expect(pageMocks.appendPageBlocks).toHaveBeenCalledWith(
+      ids.page,
+      [{ block_type: 'text', content: 'Additional detail' }],
+      { kind: 'system' },
+      undefined,
+      ids.session
+    );
+    expect(pageMocks.createPage).not.toHaveBeenCalled();
+  });
+
+  it('returns useful memory errors for missing required fields', async () => {
+    await expect(call('memory', { action: 'append', workspace_id: ids.workspace })).resolves.toMatchObject({
+      error: { message: 'content is required for memory action=append' },
+      ok: false,
+    });
+    await expect(call('memory', { action: 'append', content: 'No target' })).resolves.toMatchObject({
+      error: { message: 'workspace_id is required when memory action=append does not target page_id' },
+      ok: false,
+    });
+    await expect(call('memory', { action: 'search', workspace_id: ids.workspace })).resolves.toMatchObject({
+      error: { message: 'query is required for memory action=search' },
+      ok: false,
+    });
+  });
+
   it('keeps durable task and run coordination in the core toolset', async () => {
     await call('coordination', { action: 'task_create', workspace_id: ids.workspace, title: 'Verify fix' });
     await call('coordination', { action: 'task_list', workspace_id: ids.workspace });
@@ -184,5 +264,109 @@ describe('core MCP tools', () => {
     expect(taskMocks.createTask).toHaveBeenCalledWith(expect.objectContaining({ title: 'Verify fix' }));
     expect(taskMocks.handoffTask).toHaveBeenCalledWith(expect.objectContaining({ target_agent_name: 'reviewer' }));
     expect(runMocks.checkpointRun).toHaveBeenCalledWith(expect.objectContaining({ summary: 'phase 1' }));
+  });
+
+  it('returns useful coordination validation errors', async () => {
+    await expect(call('coordination', { action: 'task_create', title: 'Missing workspace' })).resolves.toMatchObject({
+      error: { message: 'workspace_id is required for coordination action=task_create' },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'task_create', workspace_id: ids.workspace })).resolves.toMatchObject({
+      error: { message: 'title is required for coordination action=task_create' },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'task_claim', workspace_id: ids.workspace })).resolves.toMatchObject({
+      error: { message: 'agent_name is required for coordination action=task_claim' },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'task_heartbeat', agent_name: 'worker' })).resolves.toMatchObject({
+      error: { message: 'task_id is required for coordination action=task_heartbeat' },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'task_complete', task_id: ids.task })).resolves.toMatchObject({
+      error: { message: 'agent_name is required for coordination action=task_complete' },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'task_fail', agent_name: 'worker' })).resolves.toMatchObject({
+      error: { message: 'task_id is required for coordination action=task_fail' },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'task_handoff', task_id: ids.task })).resolves.toMatchObject({
+      error: { message: 'target_agent_name is required for coordination action=task_handoff' },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'run_start', workspace_id: ids.workspace })).resolves.toMatchObject({
+      error: { message: 'agent_name is required for coordination action=run_start' },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'run_checkpoint', agent_name: 'worker' })).resolves.toMatchObject({
+      error: { message: 'run_id is required for coordination action=run_checkpoint' },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'run_complete', run_id: ids.run })).resolves.toMatchObject({
+      error: { message: 'agent_name is required for coordination action=run_complete' },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'run_fail', agent_name: 'worker' })).resolves.toMatchObject({
+      error: { message: 'run_id is required for coordination action=run_fail' },
+      ok: false,
+    });
+  });
+
+  it('returns useful coordination not-found errors', async () => {
+    taskMocks.claimTask.mockResolvedValueOnce(null);
+    taskMocks.heartbeatTask.mockResolvedValueOnce(null);
+    taskMocks.completeTask.mockResolvedValueOnce(null);
+    taskMocks.failTask.mockResolvedValueOnce(null);
+    taskMocks.handoffTask.mockResolvedValueOnce(null);
+    runMocks.checkpointRun.mockResolvedValueOnce(null);
+    runMocks.completeRun.mockResolvedValueOnce(null);
+    runMocks.failRun.mockResolvedValueOnce(null);
+
+    await expect(call('coordination', { action: 'task_claim', workspace_id: ids.workspace, agent_name: 'worker' })).resolves.toMatchObject({
+      error: { message: 'No claimable task found' },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'task_heartbeat', task_id: ids.task, agent_name: 'worker' })).resolves.toMatchObject({
+      error: { message: `Task ${ids.task} is not actively leased by worker` },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'task_complete', task_id: ids.task, agent_name: 'worker' })).resolves.toMatchObject({
+      error: { message: `Task ${ids.task} not found` },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'task_fail', task_id: ids.task, agent_name: 'worker' })).resolves.toMatchObject({
+      error: { message: `Task ${ids.task} not found` },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'task_handoff', task_id: ids.task, target_agent_name: 'reviewer' })).resolves.toMatchObject({
+      error: { message: `Task ${ids.task} not found` },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'run_checkpoint', run_id: ids.run, agent_name: 'worker' })).resolves.toMatchObject({
+      error: { message: `Run ${ids.run} not found` },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'run_complete', run_id: ids.run, agent_name: 'worker' })).resolves.toMatchObject({
+      error: { message: `Run ${ids.run} not found` },
+      ok: false,
+    });
+    await expect(call('coordination', { action: 'run_fail', run_id: ids.run, agent_name: 'worker' })).resolves.toMatchObject({
+      error: { message: `Run ${ids.run} not found` },
+      ok: false,
+    });
+  });
+
+  it('wraps unexpected query failures as tool error envelopes', async () => {
+    searchMock.mockRejectedValueOnce(new Error('search backend unavailable'));
+
+    await expect(call('memory', {
+      action: 'search',
+      query: 'anything',
+      workspace_id: ids.workspace,
+    })).resolves.toMatchObject({
+      error: { message: 'search backend unavailable' },
+      ok: false,
+    });
   });
 });

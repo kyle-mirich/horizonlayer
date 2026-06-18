@@ -101,6 +101,19 @@ describe('run query contracts', () => {
     ]);
   });
 
+  it('rejects session-scoped run creation when the session belongs to another workspace', async () => {
+    assertSessionWriteAccessMock.mockResolvedValueOnce({ workspace_id: 'ws-2' });
+
+    const { startRun } = await import('./runs.js');
+    await expect(startRun({
+      workspace_id: 'ws-1',
+      session_id: 'session-foreign',
+      agent_name: 'agent',
+    })).rejects.toThrow('session_id must belong to workspace ws-1');
+
+    expect(poolQueryMock).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO agent_runs'), expect.anything());
+  });
+
   it.each([
     ['missing task', { taskRows: [], parentRows: [], message: 'Task task-1 not found' }],
     ['wrong task workspace', { taskRows: [{ workspace_id: 'ws-2', session_id: 'session-1' }], parentRows: [], message: 'task_id must belong to workspace ws-1' }],
@@ -152,6 +165,18 @@ describe('run query contracts', () => {
     expect(String(poolQueryMock.mock.calls.at(-1)?.[0])).toContain('status = ANY($5)');
   });
 
+  it('returns null for missing runs and rejects session-scoped lists from another workspace', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [] });
+    assertSessionReadAccessMock.mockResolvedValueOnce({ workspace_id: 'ws-2' });
+
+    const { getRun, listRuns } = await import('./runs.js');
+    await expect(getRun('missing')).resolves.toBeNull();
+    await expect(listRuns({
+      workspace_id: 'ws-1',
+      session_id: 'session-foreign',
+    })).rejects.toThrow('session_id must belong to workspace ws-1');
+  });
+
   it('checkpoints running runs and rolls back missing or stale runs', async () => {
     clientQueryMock
       .mockResolvedValueOnce({ rows: [], rowCount: 0 })
@@ -191,6 +216,41 @@ describe('run query contracts', () => {
     );
   });
 
+  it('requires an agent name before checkpointing or finishing a run', async () => {
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [run()] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    poolQueryMock
+      .mockResolvedValueOnce({ rows: [run()] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const { checkpointRun, completeRun } = await import('./runs.js');
+    await expect(checkpointRun({ run_id: 'run-1' })).rejects.toThrow('agent_name is required for run mutation');
+    await expect(completeRun({ run_id: 'run-1' })).rejects.toThrow('agent_name is required for run mutation');
+
+    expect(clientQueryMock.mock.calls.map(([sql]) => sql)).toContain('ROLLBACK');
+  });
+
+  it('rolls back checkpoints when the run stops after the checkpoint insert', async () => {
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [run({ latest_checkpoint_sequence: 2 })] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    const { checkpointRun } = await import('./runs.js');
+    await expect(checkpointRun({
+      run_id: 'run-1',
+      agent_name: 'agent',
+      summary: 'stale',
+    })).rejects.toThrow('Run run-1 is no longer running');
+
+    expect(clientQueryMock.mock.calls.at(-1)?.[0]).toBe('ROLLBACK');
+    expect(releaseMock).toHaveBeenCalled();
+  });
+
   it.each([
     ['completeRun', 'completed'],
     ['failRun', 'failed'],
@@ -226,5 +286,16 @@ describe('run query contracts', () => {
 
     await expect(completeRun({ run_id: 'run-1', agent_name: 'agent' })).rejects.toThrow('Run run-1 is owned by owner, not agent');
     await expect(completeRun({ run_id: 'run-1', agent_name: 'agent' })).rejects.toThrow('Run run-1 is no longer running');
+  });
+
+  it('returns null when finishing a run that no longer exists', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [] });
+
+    const { failRun } = await import('./runs.js');
+    await expect(failRun({
+      run_id: 'missing',
+      agent_name: 'agent',
+      error_message: 'not found',
+    })).resolves.toBeNull();
   });
 });

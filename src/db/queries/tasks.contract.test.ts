@@ -9,6 +9,7 @@ const assertSessionReadAccessMock = vi.fn();
 const assertSessionWriteAccessMock = vi.fn();
 const assertWorkspaceReadAccessMock = vi.fn();
 const assertWorkspaceWriteAccessMock = vi.fn();
+const isSystemAccessMock = vi.fn();
 
 vi.mock('../client.js', () => ({
   getPool: () => ({
@@ -26,6 +27,10 @@ vi.mock('./accessControl.js', () => ({
   assertSessionWriteAccess: assertSessionWriteAccessMock,
   assertWorkspaceReadAccess: assertWorkspaceReadAccessMock,
   assertWorkspaceWriteAccess: assertWorkspaceWriteAccessMock,
+}));
+
+vi.mock('../access.js', () => ({
+  isSystemAccess: isSystemAccessMock,
 }));
 
 function task(overrides: Record<string, unknown> = {}) {
@@ -82,6 +87,8 @@ describe('task query contracts', () => {
     assertSessionWriteAccessMock.mockResolvedValue({ workspace_id: 'ws-1' });
     assertWorkspaceReadAccessMock.mockResolvedValue(undefined);
     assertWorkspaceWriteAccessMock.mockResolvedValue(undefined);
+    isSystemAccessMock.mockReset();
+    isSystemAccessMock.mockReturnValue(true);
   });
 
   it('creates tasks with dependencies, required acknowledgements, events, inbox items, and session touch', async () => {
@@ -116,6 +123,62 @@ describe('task query contracts', () => {
     expect(clientQueryMock.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO agent_inbox'))).toBe(true);
     expect(touchSessionMock).toHaveBeenCalledWith('session-1', expect.any(Object));
     expect(releaseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects session-scoped task creation when the session belongs to another workspace', async () => {
+    assertSessionWriteAccessMock.mockResolvedValueOnce({ workspace_id: 'ws-2' });
+
+    const { createTask } = await import('./tasks.js');
+    await expect(createTask({
+      workspace_id: 'ws-1',
+      session_id: 'session-foreign',
+      title: 'Task',
+    })).rejects.toThrow('session_id must belong to workspace ws-1');
+
+    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  it('creates dependency-blocked tasks without assigning inbox items', async () => {
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ id: 'dep-1' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [task({ status: 'pending', owner_agent_name: null, lease_owner_agent_name: null })] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    queueTaskDetails(task({ status: 'pending', owner_agent_name: null, lease_owner_agent_name: null }));
+
+    const { createTask } = await import('./tasks.js');
+    await expect(createTask({
+      workspace_id: 'ws-1',
+      session_id: 'session-1',
+      title: 'Task',
+      depends_on_task_ids: ['dep-1'],
+    })).resolves.toMatchObject({ status: 'pending' });
+
+    expect(clientQueryMock.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO agent_inbox'))).toBe(false);
+  });
+
+  it('throws when a created task cannot be hydrated after commit', async () => {
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [task({ status: 'ready' })] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    poolQueryMock.mockResolvedValueOnce({ rows: [] });
+
+    const { createTask } = await import('./tasks.js');
+    await expect(createTask({
+      workspace_id: 'ws-1',
+      title: 'Task',
+    })).rejects.toThrow('Task task-1 not found after creation');
   });
 
   it('rolls back task creation when dependencies are outside the workspace', async () => {
@@ -160,6 +223,135 @@ describe('task query contracts', () => {
 
     expect(String(poolQueryMock.mock.calls[0]?.[0])).toContain('handoff_target_agent_name = $5');
     expect(String(poolQueryMock.mock.calls[4]?.[0])).toContain('lease_expires_at = NOW() + ($3 * INTERVAL');
+  });
+
+  it('checks workspace read access when getting tasks with non-system access', async () => {
+    isSystemAccessMock.mockReturnValue(false);
+    queueTaskDetails(task());
+
+    const { getTask } = await import('./tasks.js');
+    await expect(getTask('task-1', { kind: 'user' } as never)).resolves.toMatchObject({ id: 'task-1' });
+
+    expect(assertWorkspaceReadAccessMock).toHaveBeenCalledWith('ws-1', { kind: 'user' });
+  });
+
+  it('rejects session-scoped task lists when the session belongs to another workspace', async () => {
+    assertSessionReadAccessMock.mockResolvedValueOnce({ workspace_id: 'ws-2' });
+
+    const { listTasks } = await import('./tasks.js');
+    await expect(listTasks({
+      workspace_id: 'ws-1',
+      session_id: 'session-foreign',
+    })).rejects.toThrow('session_id must belong to workspace ws-1');
+
+    expect(poolQueryMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects session-scoped task claims when the session belongs to another workspace', async () => {
+    assertSessionWriteAccessMock.mockResolvedValueOnce({ workspace_id: 'ws-2' });
+
+    const { claimTask } = await import('./tasks.js');
+    await expect(claimTask({
+      workspace_id: 'ws-1',
+      session_id: 'session-foreign',
+      agent_name: 'agent',
+    })).rejects.toThrow('session_id must belong to workspace ws-1');
+
+    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  it('rolls back and returns null when no ready task is available to claim', async () => {
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    const { claimTask } = await import('./tasks.js');
+    await expect(claimTask({
+      workspace_id: 'ws-1',
+      agent_name: 'agent',
+    })).resolves.toBeNull();
+
+    expect(clientQueryMock.mock.calls.at(-1)?.[0]).toBe('ROLLBACK');
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns null for missing heartbeat and terminal task targets without opening transactions', async () => {
+    poolQueryMock.mockResolvedValue({ rows: [] });
+
+    const { completeTask, heartbeatTask } = await import('./tasks.js');
+    await expect(heartbeatTask({ task_id: 'missing', agent_name: 'agent' })).resolves.toBeNull();
+    await expect(completeTask({ task_id: 'missing', agent_name: 'agent' })).resolves.toBeNull();
+
+    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  it('returns null when a heartbeat loses a race after lease validation', async () => {
+    queueTaskDetails(task());
+    poolQueryMock.mockResolvedValueOnce({ rows: [] });
+
+    const { heartbeatTask } = await import('./tasks.js');
+    await expect(heartbeatTask({
+      task_id: 'task-1',
+      agent_name: 'agent',
+    })).resolves.toBeNull();
+  });
+
+  it('rejects heartbeats for tasks that are no longer claimed', async () => {
+    queueTaskDetails(task({
+      status: 'ready',
+      lease_owner_agent_name: null,
+      lease_expires_at: null,
+    }));
+
+    const { heartbeatTask } = await import('./tasks.js');
+    await expect(heartbeatTask({
+      task_id: 'task-1',
+      agent_name: 'agent',
+    })).rejects.toThrow('Task task-1 is not claimed, cannot heartbeat');
+
+    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  it('rolls back claims when the claim event cannot be inserted', async () => {
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ id: 'task-1' }] })
+      .mockResolvedValueOnce({ rows: [task({ status: 'ready', lease_owner_agent_name: null })] })
+      .mockResolvedValueOnce({ rows: [task({ status: 'claimed', lease_owner_agent_name: 'agent' })] })
+      .mockRejectedValueOnce(new Error('claim event insert failed'))
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    const { claimTask } = await import('./tasks.js');
+    await expect(claimTask({
+      workspace_id: 'ws-1',
+      agent_name: 'agent',
+    })).rejects.toThrow('claim event insert failed');
+
+    expect(clientQueryMock.mock.calls.at(-1)?.[0]).toBe('ROLLBACK');
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns null when a task disappears after terminal transition preflight', async () => {
+    queueTaskDetails(task());
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    const { completeTask } = await import('./tasks.js');
+    await expect(completeTask({
+      task_id: 'task-1',
+      agent_name: 'agent',
+    })).resolves.toBeNull();
+
+    expect(clientQueryMock.mock.calls.at(-1)?.[0]).toBe('ROLLBACK');
   });
 
   it.each([
@@ -217,6 +409,102 @@ describe('task query contracts', () => {
     expect(clientQueryMock.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO agent_inbox'))).toBe(true);
   });
 
+  it('hands off unclaimed work without requiring acknowledgement when requested', async () => {
+    queueTaskDetails(task({
+      status: 'ready',
+      lease_owner_agent_name: null,
+      owner_agent_name: null,
+      lease_expires_at: null,
+    }));
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [task({
+        status: 'ready',
+        owner_agent_name: 'reviewer',
+        handoff_target_agent_name: 'reviewer',
+        lease_owner_agent_name: null,
+      })] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    queueTaskDetails(task({
+      status: 'ready',
+      owner_agent_name: 'reviewer',
+      handoff_target_agent_name: 'reviewer',
+      lease_owner_agent_name: null,
+    }));
+
+    const { handoffTask } = await import('./tasks.js');
+    await expect(handoffTask({
+      task_id: 'task-1',
+      target_agent_name: 'reviewer',
+      require_ack: false,
+    })).resolves.toMatchObject({ status: 'ready' });
+
+    expect(clientQueryMock.mock.calls[2]?.[1]).toEqual(['task-1', 'ready', 'reviewer', []]);
+  });
+
+  it('requires an actor before handing off a claimed task', async () => {
+    queueTaskDetails(task());
+
+    const { handoffTask } = await import('./tasks.js');
+    await expect(handoffTask({
+      task_id: 'task-1',
+      target_agent_name: 'reviewer',
+    })).rejects.toThrow('actor_agent_name is required to hand off a claimed task');
+
+    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  it('returns null when handing off a missing task', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [] });
+
+    const { handoffTask } = await import('./tasks.js');
+    await expect(handoffTask({
+      task_id: 'missing',
+      target_agent_name: 'reviewer',
+    })).resolves.toBeNull();
+
+    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects handoff after a task is already terminal', async () => {
+    queueTaskDetails(task({ status: 'done', lease_owner_agent_name: null }));
+
+    const { handoffTask } = await import('./tasks.js');
+    await expect(handoffTask({
+      task_id: 'task-1',
+      target_agent_name: 'reviewer',
+    })).rejects.toThrow('Task task-1 is already done, cannot handoff');
+
+    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  it('rolls back handoffs when inbox notification fails', async () => {
+    queueTaskDetails(task());
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [task({ status: 'handoff_pending', owner_agent_name: 'reviewer', handoff_target_agent_name: 'reviewer' })] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockRejectedValueOnce(new Error('inbox insert failed'))
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    const { handoffTask } = await import('./tasks.js');
+    await expect(handoffTask({
+      task_id: 'task-1',
+      actor_agent_name: 'agent',
+      target_agent_name: 'reviewer',
+    })).rejects.toThrow('inbox insert failed');
+
+    expect(clientQueryMock.mock.calls.at(-1)?.[0]).toBe('ROLLBACK');
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+  });
+
   it('acknowledges tasks and refreshes readiness', async () => {
     queueTaskDetails(task({ status: 'handoff_pending', lease_owner_agent_name: null }));
     clientQueryMock
@@ -237,6 +525,28 @@ describe('task query contracts', () => {
     });
 
     expect(clientQueryMock.mock.calls[1]?.[1]).toEqual(['task-1', 'reviewer', JSON.stringify({ ack: true })]);
+  });
+
+  it('returns null for missing acknowledgements and rolls back when a task disappears mid-acknowledgement', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [] });
+
+    const { acknowledgeTask } = await import('./tasks.js');
+    await expect(acknowledgeTask({ task_id: 'missing', agent_name: 'reviewer' })).resolves.toBeNull();
+    expect(connectMock).not.toHaveBeenCalled();
+
+    queueTaskDetails(task({ status: 'handoff_pending', lease_owner_agent_name: null }));
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    await expect(acknowledgeTask({
+      task_id: 'task-1',
+      agent_name: 'reviewer',
+    })).rejects.toThrow('Task task-1 not found');
+
+    expect(clientQueryMock.mock.calls.at(-1)?.[0]).toBe('ROLLBACK');
   });
 
   it('appends task events and rolls back failed inserts', async () => {
@@ -264,6 +574,18 @@ describe('task query contracts', () => {
       .mockResolvedValueOnce({ rows: [], rowCount: 0 });
     await expect(appendTaskEvent({ task_id: 'task-1', event_type: 'note' })).rejects.toThrow('event insert failed');
     expect(clientQueryMock.mock.calls.at(-1)?.[0]).toBe('ROLLBACK');
+  });
+
+  it('throws when appending events to missing tasks', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [] });
+
+    const { appendTaskEvent } = await import('./tasks.js');
+    await expect(appendTaskEvent({
+      task_id: 'missing',
+      event_type: 'note',
+    })).rejects.toThrow('Task missing not found');
+
+    expect(connectMock).not.toHaveBeenCalled();
   });
 
   it('lists and acknowledges inbox items', async () => {

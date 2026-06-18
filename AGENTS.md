@@ -1,5 +1,9 @@
 # Agent Notes
 
+## Required Maintenance
+
+Keep this repo AI-first for coding agents with fresh context. If a change affects runtime behavior, scripts, schema, examples, plugin behavior, or agent workflow, update the related `AGENT.md`, `AGENTS.md`, README, and documentation before calling the work done. Every behavior change should also include focused tests or an explicit note explaining why the existing tests already cover it.
+
 ## HorizonLayer Codex Plugin
 
 The canonical Codex plugin source lives at `plugins/horizonlayer`.

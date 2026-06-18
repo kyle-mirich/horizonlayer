@@ -165,6 +165,76 @@ describe('page query contracts', () => {
       workspace_id: 'ws-1',
       session_id: 'session-1',
     })).rejects.toThrow('session_id must belong to the target workspace');
+
+    assertPageWriteAccessMock.mockResolvedValueOnce({ workspace_id: 'ws-1', session_id: 'session-2' });
+    await expect(createPage({
+      title: 'Page',
+      parent_page_id: 'parent-1',
+      session_id: 'session-1',
+    })).rejects.toThrow('session_id must match the parent page session');
+
+    expect(clientQueryMock).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO pages'), expect.anything());
+  });
+
+  it('returns null for missing session-scoped pages without loading blocks', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [] });
+
+    const { getPage } = await import('./pages.js');
+    await expect(getPage('missing', { kind: 'system' }, 'session-1')).resolves.toBeNull();
+
+    expect(assertSessionReadAccessMock).toHaveBeenCalledWith('session-1', { kind: 'system' });
+    expect(getBlocksForPageMock).not.toHaveBeenCalled();
+  });
+
+  it('supports no-op page updates without rebuilding embeddings', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [page()] });
+
+    const { updatePage } = await import('./pages.js');
+    await expect(updatePage('page-1', {})).resolves.toMatchObject({ id: 'page-1' });
+
+    expect(poolQueryMock).toHaveBeenCalledWith('SELECT * FROM pages WHERE id = $1', ['page-1']);
+    expect(getBlocksForPageMock).not.toHaveBeenCalled();
+    expect(embedMock).not.toHaveBeenCalled();
+  });
+
+  it('returns null and false for missing non-stale page updates and deletes', async () => {
+    poolQueryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+
+    const { deletePage, updatePage } = await import('./pages.js');
+    await expect(updatePage('missing', { tags: ['lost'] })).resolves.toBeNull();
+    await expect(deletePage('missing')).resolves.toBe(false);
+
+    expect(poolQueryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects list requests when the session is outside the requested workspace', async () => {
+    assertSessionReadAccessMock.mockResolvedValueOnce({ workspace_id: 'ws-2' });
+
+    const { listPages } = await import('./pages.js');
+    await expect(listPages({
+      workspace_id: 'ws-1',
+      session_id: 'session-1',
+    })).rejects.toThrow('session_id must belong to the requested workspace');
+
+    expect(poolQueryMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects appends when the requested session does not own the page', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [{ session_id: 'session-2' }] });
+
+    const { appendPageBlocks } = await import('./pages.js');
+    await expect(appendPageBlocks(
+      'page-1',
+      [{ block_type: 'text', content: 'More' }],
+      { kind: 'system' },
+      undefined,
+      'session-1'
+    )).rejects.toThrow('Page page-1 is not associated with session session-1');
+
+    expect(assertSessionWriteAccessMock).toHaveBeenCalledWith('session-1', { kind: 'system' });
+    expect(connectMock).not.toHaveBeenCalled();
   });
 
   it('gets, lists, updates, and deletes pages with access checks and filters', async () => {
@@ -223,6 +293,26 @@ describe('page query contracts', () => {
     expect(clientQueryMock.mock.calls.filter(([sql]) => sql === 'COMMIT')).toHaveLength(3);
   });
 
+  it('keeps successful block appends when embedding refresh fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    poolQueryMock.mockResolvedValueOnce({ rows: [{ session_id: null }] });
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ title: 'Page' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    embedMock.mockRejectedValueOnce(new Error('embedding unavailable'));
+
+    const { appendPageBlocks } = await import('./pages.js');
+    await expect(appendPageBlocks('page-1', [{ block_type: 'text', content: 'More' }])).resolves.toHaveLength(1);
+
+    expect(consoleError).toHaveBeenCalledWith(
+      'Failed to update page embedding for page-1:',
+      expect.any(Error)
+    );
+    consoleError.mockRestore();
+  });
+
   it('returns not-found results and detects stale block mutations', async () => {
     poolQueryMock
       .mockResolvedValueOnce({ rows: [] })
@@ -239,5 +329,80 @@ describe('page query contracts', () => {
     await expect(appendPageBlocks('missing', [{ block_type: 'text' }])).rejects.toThrow('Page missing not found');
     await expect(updatePageBlock('missing', {})).resolves.toBeNull();
     await expect(deletePageBlock('block-1', { kind: 'system' }, '2026-01-01T00:00:00.000Z')).resolves.toBe(false);
+  });
+
+  it('returns false for missing block deletes without opening a transaction', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [] });
+
+    const { deletePageBlock } = await import('./pages.js');
+    await expect(deletePageBlock('missing-block')).resolves.toBe(false);
+
+    expect(connectMock).not.toHaveBeenCalled();
+  });
+
+  it('rolls back block update and delete transactions when the low-level block mutation misses', async () => {
+    poolQueryMock
+      .mockResolvedValueOnce({ rows: [{ page_id: 'page-1', session_id: 'session-1' }] })
+      .mockResolvedValueOnce({ rows: [{ page_id: 'page-1', session_id: 'session-1' }] });
+    clientQueryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ title: 'Page' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ title: 'Page' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    updateBlockMock.mockResolvedValueOnce(null);
+    deleteBlockMock.mockResolvedValueOnce(null);
+
+    const { deletePageBlock, updatePageBlock } = await import('./pages.js');
+    await expect(updatePageBlock('block-1', { content: 'Updated' })).resolves.toBeNull();
+    await expect(deletePageBlock('block-1')).resolves.toBe(false);
+
+    expect(clientQueryMock.mock.calls.filter(([sql]) => sql === 'ROLLBACK')).toHaveLength(2);
+    expect(clientQueryMock.mock.calls.some(([sql]) => sql === 'COMMIT')).toBe(false);
+  });
+
+  it('rolls back block update and delete transactions when low-level mutations throw', async () => {
+    poolQueryMock
+      .mockResolvedValueOnce({ rows: [{ page_id: 'page-1', session_id: 'session-1' }] })
+      .mockResolvedValueOnce({ rows: [{ page_id: 'page-1', session_id: 'session-1' }] });
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'ROLLBACK') {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes('UPDATE pages') && sql.includes('RETURNING title')) {
+        return { rows: [{ title: 'Page' }], rowCount: 1 };
+      }
+      if (sql === 'COMMIT') {
+        throw new Error('block mutation should not commit after failure');
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    updateBlockMock.mockRejectedValueOnce(new Error('block update failed'));
+    deleteBlockMock.mockRejectedValueOnce(new Error('block delete failed'));
+
+    const { deletePageBlock, updatePageBlock } = await import('./pages.js');
+    await expect(updatePageBlock('block-1', { content: 'Updated' })).rejects.toThrow('block update failed');
+    await expect(deletePageBlock('block-1')).rejects.toThrow('block delete failed');
+
+    expect(clientQueryMock.mock.calls.filter(([sql]) => sql === 'ROLLBACK')).toHaveLength(2);
+    expect(clientQueryMock.mock.calls.some(([sql]) => sql === 'COMMIT')).toBe(false);
+  });
+
+  it('keeps successful page mutations even when embedding refresh fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    poolQueryMock
+      .mockResolvedValueOnce({ rows: [page({ title: 'Renamed' })] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    embedMock.mockRejectedValueOnce(new Error('embedding unavailable'));
+
+    const { updatePage } = await import('./pages.js');
+    await expect(updatePage('page-1', { title: 'Renamed' })).resolves.toMatchObject({ title: 'Renamed' });
+
+    expect(consoleError).toHaveBeenCalledWith(
+      'Failed to update page embedding for page-1:',
+      expect.any(Error)
+    );
+    consoleError.mockRestore();
   });
 });
