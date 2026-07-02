@@ -20,6 +20,8 @@ The schema is migration-driven and organized into four main layers:
 - `010_sessions.sql`: browser session lifecycle and session metadata support
 - `011_search_fts_indexes.sql`: block and row-value full-text indexes for search
 - `012_remove_historical_auth_schema.sql`: drops the legacy auth, tenancy, and billing schema
+- `013_agentic_integrity.sql`: hardens agentic property uniqueness
+- `014_core_integrity_and_indexes.sql`: enforces core workspace/session scope invariants and adds query-path indexes
 
 ## Core content tables
 
@@ -40,6 +42,8 @@ Workspaces are the main content and coordination boundary for most tool operatio
 
 Blocks are ordered by `(page_id, position)` and page embeddings are rebuilt from page title plus block text.
 
+Session-scoped pages are required to belong to the same workspace as their session. Page tags are non-null arrays, block positions are non-negative, and block metadata is constrained to JSON objects.
+
 ### Databases, rows, and row values
 
 - `databases` stores the table-like container
@@ -54,6 +58,8 @@ Rows use a typed-column model:
 - `value_date`
 - `value_bool`
 - `value_json`
+
+Row values are constrained so a single cell can populate at most one typed value column. Property options are JSON objects, property positions are non-negative, and row tags are non-null arrays.
 
 ## Graph and search support
 
@@ -76,6 +82,8 @@ This supports:
 - title full-text search
 - grep/regex search across page blocks and row values
 
+Tag filters are backed by GIN indexes on page, database, and row tag arrays. Session resume and dashboard reads are backed by session/workspace recency indexes on pages, tasks, and runs.
+
 ## Coordination tables
 
 The compact OSS coordination API is backed by:
@@ -92,6 +100,8 @@ Key coordination concepts modeled in SQL and exposed through `coordination`:
 
 The schema may contain additional internal tables for future coordination features. They are not separate public MCP tools in this OSS surface.
 
+Task sessions, task events, inbox records, and task dependencies are enforced to stay within their workspace. Claimed tasks must carry lease ownership/timing data, and terminal task states must carry their corresponding timestamp.
+
 ## Run and checkpoint tables
 
 Long-running execution state is stored in:
@@ -100,6 +110,8 @@ Long-running execution state is stored in:
 - `run_checkpoints`
 
 Runs are workspace-scoped and can optionally point at a task. Checkpoints provide ordered resumability for agent execution state.
+
+Run session, task, and parent-run references are enforced to share the same workspace and session. Run/checkpoint JSON payloads are constrained to objects, checkpoint sequence numbers are positive, and run list/resume queries have recency indexes.
 
 ## Operational notes
 

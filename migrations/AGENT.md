@@ -14,6 +14,10 @@
 - `008_billing.sql`: creates billing-related tables for subscription and webhook tracking.
 - `009_agent_runs.sql`: adds durable run and checkpoint tracking.
 - `010_sessions.sql`: expands session support and browser-session-related metadata.
+- `011_search_fts_indexes.sql`: adds full-text indexes for block content and row values.
+- `012_remove_historical_auth_schema.sql`: removes legacy auth, tenancy, and billing tables from the local-first OSS schema.
+- `013_agentic_integrity.sql`: adds unique database property name and position constraints.
+- `014_core_integrity_and_indexes.sql`: tightens core local-first invariants for session/workspace scope, JSON object payloads, typed row values, task/run state sanity, and dashboard/search/session-resume indexes.
 
 ## Reading Advice
 
