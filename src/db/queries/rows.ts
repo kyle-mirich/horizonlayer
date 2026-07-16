@@ -1,19 +1,65 @@
-import { isSystemAccess, type AccessContext } from '../access.js';
 import { getPool, type PoolClient } from '../client.js';
-import { embed, vectorToSql } from '../../embeddings/index.js';
-import type { DatabaseProperty } from './databases.js';
-import { assertDatabaseReadAccess, assertDatabaseWriteAccess, assertRowReadAccess, assertRowWriteAccess } from './accessControl.js';
+import { isPropertyType, type PropertyType } from '../../domain.js';
+import { normalizePropertyOptions, type DatabaseProperty } from './databases.js';
+import { requireActiveWorkspace } from './scopeGuards.js';
+
+const ROW_COLUMNS = `
+  id,
+  database_id,
+  tags,
+  importance,
+  revision,
+  archived_at,
+  created_at,
+  updated_at
+`;
+
+const ROW_SELECT = `
+  r.id,
+  r.database_id,
+  r.tags,
+  r.importance,
+  r.revision,
+  r.archived_at,
+  r.created_at,
+  r.updated_at
+`;
+
+const ROW_VALUE_COLUMNS = `
+  id,
+  row_id,
+  property_id,
+  value_text,
+  value_number,
+  value_date,
+  value_bool,
+  value_json
+`;
+
+const PROPERTY_COLUMNS = `
+  id,
+  database_id,
+  name,
+  property_type,
+  options,
+  position,
+  revision,
+  archived_at,
+  created_at,
+  updated_at
+`;
+
+type Queryable = Pick<PoolClient, 'query'>;
 
 export interface DatabaseRow {
   id: string;
   database_id: string;
   tags: string[];
-  source: string | null;
   importance: number;
-  expires_at: string | null;
+  revision: number;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
-  last_accessed_at: string;
 }
 
 export interface RowValue {
@@ -31,207 +77,235 @@ export interface HydratedRow extends DatabaseRow {
   values: Record<string, unknown>;
 }
 
-export interface RowFilter {
-  property: string;
-  operator: 'eq' | 'neq' | 'gt' | 'lt' | 'contains' | 'is_empty';
-  value?: unknown;
+export type RowFilter =
+  | { property: string; operator: 'is_empty' }
+  | {
+      property: string;
+      operator: 'eq' | 'neq' | 'gt' | 'lt' | 'contains';
+      value: unknown;
+    };
+
+interface TypedValue {
+  value_text: string | null;
+  value_number: number | null;
+  value_date: string | null;
+  value_bool: boolean | null;
+  value_json: unknown | null;
 }
 
-function logEmbeddingFailure(entityId: string, error: unknown): void {
-  console.error(`Failed to update row embedding for ${entityId}:`, error);
+interface DatabaseSchema {
+  id: string;
+  workspace_id: string;
+  properties: DatabaseProperty[];
 }
 
-function parseCheckboxValue(value: unknown, propertyName: string): boolean | null {
+function assertRevision(revision: number): void {
+  if (!Number.isInteger(revision) || revision < 1) {
+    throw new Error('revision must be a positive integer');
+  }
+}
+
+function pagination(name: 'limit' | 'offset', value: number | undefined, fallback: number): number {
+  const resolved = value ?? fallback;
+  const max = name === 'limit' ? 101 : 1_000_000;
+  if (!Number.isInteger(resolved) || resolved < 0 || resolved > max) {
+    throw new Error(`${name} must be an integer between 0 and ${max}`);
+  }
+  return resolved;
+}
+
+function assertImportance(importance: number | undefined): void {
+  if (importance !== undefined && (!Number.isFinite(importance) || importance < 0 || importance > 1)) {
+    throw new Error('importance must be a number between 0 and 1');
+  }
+}
+
+function strictNumber(value: unknown, propertyName: string): number | null {
   if (value == null) return null;
-  if (typeof value === 'boolean') {
-    return value;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`Property ${propertyName} must be a finite number`);
   }
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === 'true') return true;
-    if (normalized === 'false') return false;
-  }
-  throw new Error(`Property ${propertyName} must be a boolean`);
+  return value;
 }
 
-async function assertRowConflict(id: string, expectedUpdatedAt?: string): Promise<void> {
-  if (!expectedUpdatedAt) {
-    return;
+function parseDate(value: unknown, propertyName: string): string | null {
+  if (value == null) return null;
+  if (typeof value !== 'string') {
+    throw new Error(`Property ${propertyName} must be a valid date`);
   }
-  const pool = getPool();
-  const { rows } = await pool.query<{ updated_at: string }>(
-    'SELECT updated_at FROM database_rows WHERE id = $1',
-    [id]
-  );
-  if (rows[0]) {
-    throw new Error(`Conflict: row ${id} was modified by another agent`);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Property ${propertyName} must be a valid date`);
+  }
+  return date.toISOString();
+}
+
+function typedValue(property: DatabaseProperty, value: unknown): TypedValue {
+  const empty: TypedValue = {
+    value_text: null,
+    value_number: null,
+    value_date: null,
+    value_bool: null,
+    value_json: null,
+  };
+  switch (property.property_type) {
+    case 'title':
+      if (value == null) return empty;
+      if (typeof value !== 'string' || !value.trim()) {
+        throw new Error(`Property ${property.name} must be a non-empty string`);
+      }
+      return { ...empty, value_text: value };
+    case 'text':
+    case 'url':
+      if (value == null) return empty;
+      if (typeof value !== 'string') {
+        throw new Error(`Property ${property.name} must be a string`);
+      }
+      return { ...empty, value_text: value };
+    case 'number':
+      return { ...empty, value_number: strictNumber(value, property.name) };
+    case 'date':
+      return { ...empty, value_date: parseDate(value, property.name) };
+    case 'checkbox':
+      if (value == null) return empty;
+      if (typeof value !== 'boolean') {
+        throw new Error(`Property ${property.name} must be a boolean`);
+      }
+      return { ...empty, value_bool: value };
+    case 'select':
+      if (value == null) return empty;
+      if (typeof value !== 'string') {
+        throw new Error(`Property ${property.name} must be a string`);
+      }
+      if (property.options.choices !== undefined && !property.options.choices.includes(value)) {
+        throw new Error(`Property ${property.name} must be one of: ${property.options.choices.join(', ')}`);
+      }
+      return { ...empty, value_text: value };
+    case 'multi_select':
+      if (value == null) return empty;
+      if (!Array.isArray(value) || value.some((choice) => typeof choice !== 'string')) {
+        throw new Error(`Property ${property.name} must be an array of strings`);
+      }
+      if (property.options.choices !== undefined) {
+        const invalid = value.find((choice) => !property.options.choices!.includes(choice));
+        if (invalid !== undefined) {
+          throw new Error(`Property ${property.name} contains unsupported choice: ${String(invalid)}`);
+        }
+      }
+      return { ...empty, value_json: value };
+    default:
+      throw new Error(`Unsupported property type: ${String(property.property_type)}`);
   }
 }
 
-function setRowValue(
-  prop: DatabaseProperty,
-  value: unknown
-): {
-  value_text?: string | null;
-  value_number?: number | null;
-  value_date?: string | null;
-  value_bool?: boolean | null;
-  value_json?: unknown | null;
-} {
-  switch (prop.property_type) {
+function valueForOutput(value: TypedValue, type: PropertyType): unknown {
+  switch (type) {
     case 'title':
     case 'text':
     case 'url':
-    case 'email':
-    case 'phone':
-      return { value_text: value != null ? String(value) : null };
-    case 'number':
-      if (value == null) return { value_number: null };
-      if (typeof value === 'number') {
-        if (!Number.isFinite(value)) {
-          throw new Error(`Property ${prop.name} must be a finite number`);
-        }
-        return { value_number: value };
-      }
-      if (typeof value === 'string' && value.trim() !== '') {
-        const parsed = Number(value);
-        if (!Number.isFinite(parsed)) {
-          throw new Error(`Property ${prop.name} must be a finite number`);
-        }
-        return { value_number: parsed };
-      }
-      throw new Error(`Property ${prop.name} must be a finite number`);
-    case 'date':
-      return { value_date: value != null ? String(value) : null };
-    case 'checkbox':
-      return { value_bool: parseCheckboxValue(value, prop.name) };
     case 'select':
+      return value.value_text;
+    case 'number':
+      return value.value_number;
+    case 'date':
+      return value.value_date;
+    case 'checkbox':
+      return value.value_bool;
     case 'multi_select':
-    case 'files':
-    case 'relation':
-      return { value_json: value };
+      return value.value_json;
     default:
-      return { value_text: value != null ? String(value) : null };
+      throw new Error(`Unsupported property type: ${String(type)}`);
   }
 }
 
-function validateRowValues(
+function extractStoredValue(value: RowValue, type: PropertyType): unknown {
+  return valueForOutput(value, type);
+}
+
+function jsonParameter(value: unknown | null): string | null {
+  // JavaScript null must become SQL NULL, not a JSONB `null` value.
+  return value == null ? null : JSON.stringify(value);
+}
+
+function assertRowValues(
   values: Record<string, unknown>,
   properties: DatabaseProperty[],
   mode: 'create' | 'update'
 ): void {
-  const propertiesByName = new Map(properties.map((property) => [property.name, property]));
-  const unknownProperties = Object.keys(values).filter((name) => !propertiesByName.has(name));
-  if (unknownProperties.length > 0) {
-    throw new Error(`Unknown properties: ${unknownProperties.join(', ')}`);
-  }
+  const byName = new Map(properties.map((property) => [property.name, property]));
+  const unknown = Object.keys(values).filter((name) => !byName.has(name));
+  if (unknown.length > 0) throw new Error(`Unknown properties: ${unknown.join(', ')}`);
 
-  const missingRequiredProperties = properties
-    .filter((property) => property.is_required)
-    .filter((property) => {
-      if (mode === 'create') {
-        return values[property.name] == null;
-      }
-      return Object.prototype.hasOwnProperty.call(values, property.name) && values[property.name] == null;
-    })
+  const missing = properties
+    .filter((property) => property.property_type === 'title')
+    .filter((property) => mode === 'create'
+      ? !Object.prototype.hasOwnProperty.call(values, property.name) || values[property.name] == null
+      : Object.prototype.hasOwnProperty.call(values, property.name) && values[property.name] == null)
     .map((property) => property.name);
+  if (missing.length > 0) throw new Error(`Missing required properties: ${missing.join(', ')}`);
 
-  if (missingRequiredProperties.length > 0) {
-    throw new Error(`Missing required properties: ${missingRequiredProperties.join(', ')}`);
+  for (const [name, value] of Object.entries(values)) {
+    typedValue(byName.get(name)!, value);
   }
 }
 
-function assertKnownQueryProperties(
-  filters: RowFilter[] | undefined,
-  sortBy: string | undefined,
-  propertiesByName: Map<string, DatabaseProperty>
-): void {
-  const unknownFilterProperties = [...new Set(
-    (filters ?? [])
-      .map((filter) => filter.property)
-      .filter((property) => !propertiesByName.has(property))
-  )];
-  if (unknownFilterProperties.length > 0) {
-    throw new Error(`Unknown filter properties: ${unknownFilterProperties.join(', ')}`);
-  }
-  if (sortBy && !propertiesByName.has(sortBy)) {
-    throw new Error(`Unknown sort property: ${sortBy}`);
-  }
-}
-
-function normalizePaginationValue(
-  name: 'limit' | 'offset',
-  value: number | undefined,
-  defaultValue: number
-): number {
-  const normalized = value ?? defaultValue;
-  if (!Number.isInteger(normalized) || normalized < 0) {
-    throw new Error(`${name} must be a non-negative integer`);
-  }
-  return normalized;
-}
-
-function extractRowValue(val: RowValue, propType: string): unknown {
-  switch (propType) {
-    case 'title':
-    case 'text':
-    case 'url':
-    case 'email':
-    case 'phone':
-      return val.value_text;
-    case 'number':
-      return val.value_number;
-    case 'date':
-      return val.value_date;
-    case 'checkbox':
-      return val.value_bool;
-    case 'select':
-    case 'multi_select':
-    case 'files':
-    case 'relation':
-      return val.value_json;
-    default:
-      return val.value_text;
-  }
-}
-
-async function insertRowInTransaction(
-  client: PoolClient,
-  params: {
-    database_id: string;
-    values: Record<string, unknown>;
-    tags?: string[];
-    source?: string;
-    importance?: number;
-    expires_in_days?: number;
-    properties: DatabaseProperty[];
-  }
-): Promise<DatabaseRow> {
-  const expiresAt = params.expires_in_days
-    ? new Date(Date.now() + params.expires_in_days * 86400000).toISOString()
-    : null;
-
-  const { rows } = await client.query<DatabaseRow>(
-    `INSERT INTO database_rows (database_id, tags, source, importance, expires_at)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING *`,
-    [
-      params.database_id,
-      params.tags ?? [],
-      params.source ?? null,
-      params.importance ?? 0.5,
-      expiresAt,
-    ]
+async function loadProperties(
+  databaseId: string,
+  includeArchived: boolean,
+  queryable: Queryable
+): Promise<DatabaseProperty[]> {
+  const { rows } = await queryable.query<Array<DatabaseProperty>[number] & { property_type: string }>(
+    `SELECT ${PROPERTY_COLUMNS}
+     FROM database_properties
+     WHERE database_id = $1
+       AND ($2::boolean OR archived_at IS NULL)
+     ORDER BY position ASC, created_at ASC`,
+    [databaseId, includeArchived]
   );
-  const row = rows[0];
+  for (const property of rows) {
+    if (!isPropertyType(property.property_type)) {
+      throw new Error(`Unsupported property type: ${property.property_type}`);
+    }
+    property.options = normalizePropertyOptions(property.property_type, property.options);
+  }
+  return rows as DatabaseProperty[];
+}
 
-  for (const prop of params.properties) {
-    if (!(prop.name in params.values)) continue;
-    const val = params.values[prop.name];
-    const typed = setRowValue(prop, val);
+async function loadDatabaseSchema(
+  databaseId: string,
+  includeArchived: boolean,
+  queryable: Queryable,
+  lockForRowWrite = false
+): Promise<DatabaseSchema | null> {
+  const { rows } = await queryable.query<{ id: string; workspace_id: string }>(
+    `SELECT id, workspace_id
+     FROM databases
+     WHERE id = $1
+       AND ($2::boolean OR archived_at IS NULL)
+     ${lockForRowWrite ? 'FOR SHARE' : ''}`,
+    [databaseId, includeArchived]
+  );
+  const database = rows[0];
+  if (!database) return null;
+  return {
+    ...database,
+    properties: await loadProperties(databaseId, includeArchived, queryable),
+  };
+}
 
+async function writeRowValues(
+  client: PoolClient,
+  rowId: string,
+  values: Record<string, unknown>,
+  properties: DatabaseProperty[]
+): Promise<void> {
+  const byName = new Map(properties.map((property) => [property.name, property]));
+  for (const [name, rawValue] of Object.entries(values)) {
+    const property = byName.get(name)!;
+    const value = typedValue(property, rawValue);
     await client.query(
-      `INSERT INTO database_row_values (row_id, property_id, value_text, value_number, value_date, value_bool, value_json)
+      `INSERT INTO database_row_values
+         (row_id, property_id, value_text, value_number, value_date, value_bool, value_json)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (row_id, property_id) DO UPDATE SET
          value_text = EXCLUDED.value_text,
@@ -240,508 +314,396 @@ async function insertRowInTransaction(
          value_bool = EXCLUDED.value_bool,
          value_json = EXCLUDED.value_json`,
       [
-        row.id,
-        prop.id,
-        typed.value_text ?? null,
-        typed.value_number ?? null,
-        typed.value_date ?? null,
-        typed.value_bool ?? null,
-        typed.value_json !== undefined ? JSON.stringify(typed.value_json) : null,
+        rowId,
+        property.id,
+        value.value_text,
+        value.value_number,
+        value.value_date,
+        value.value_bool,
+        jsonParameter(value.value_json),
       ]
     );
   }
+}
 
-  return row;
+async function hydrateRows(
+  rows: DatabaseRow[],
+  properties: DatabaseProperty[],
+  queryable: Queryable
+): Promise<HydratedRow[]> {
+  if (rows.length === 0) return [];
+  const { rows: storedValues } = await queryable.query<RowValue>(
+    `SELECT ${ROW_VALUE_COLUMNS}
+     FROM database_row_values
+     WHERE row_id = ANY($1::uuid[])`,
+    [rows.map((row) => row.id)]
+  );
+  const propertiesById = new Map(properties.map((property) => [property.id, property]));
+  const valuesByRow = new Map<string, Record<string, unknown>>();
+  for (const stored of storedValues) {
+    const property = propertiesById.get(stored.property_id);
+    if (!property) continue;
+    const values = valuesByRow.get(stored.row_id) ?? {};
+    values[property.name] = extractStoredValue(stored, property.property_type);
+    valuesByRow.set(stored.row_id, values);
+  }
+  return rows.map((row) => ({ ...row, values: valuesByRow.get(row.id) ?? {} }));
+}
+
+async function assertRowRevision(id: string, revision: number, queryable: Queryable = getPool()): Promise<void> {
+  const { rows } = await queryable.query<{ revision: number }>(
+    'SELECT revision FROM database_rows WHERE id = $1',
+    [id]
+  );
+  if (rows[0] && rows[0].revision !== revision) {
+    throw new Error(`Conflict: row ${id} is at revision ${rows[0].revision}, not ${revision}`);
+  }
 }
 
 export async function createRow(params: {
   database_id: string;
   values: Record<string, unknown>;
   tags?: string[];
-  source?: string;
   importance?: number;
-  expires_in_days?: number;
-  properties: DatabaseProperty[];
-  access?: AccessContext;
 }): Promise<HydratedRow> {
-  const pool = getPool();
-  const access = params.access ?? { kind: 'system' as const };
-  let committed = false;
-  let rowId: string | null = null;
-
-  if (!isSystemAccess(access)) {
-    await assertDatabaseWriteAccess(params.database_id, access);
-  }
-  validateRowValues(params.values, params.properties, 'create');
-  const client = await pool.connect();
-
+  assertImportance(params.importance);
+  const client = await getPool().connect();
   try {
     await client.query('BEGIN');
+    const database = await loadDatabaseSchema(params.database_id, false, client, true);
+    if (!database) throw new Error(`Database ${params.database_id} not found`);
+    await requireActiveWorkspace(database.workspace_id, client);
+    assertRowValues(params.values, database.properties, 'create');
 
-    const row = await insertRowInTransaction(client, params);
-    rowId = row.id;
-
+    const { rows } = await client.query<DatabaseRow>(
+      `INSERT INTO database_rows (database_id, tags, importance)
+       VALUES ($1, $2, $3)
+       RETURNING ${ROW_COLUMNS}`,
+      [params.database_id, params.tags ?? [], params.importance ?? 0.5]
+    );
+    await writeRowValues(client, rows[0].id, params.values, database.properties);
+    const hydrated = (await hydrateRows(rows, database.properties, client))[0];
     await client.query('COMMIT');
-    committed = true;
-  } catch (err) {
-    if (!committed) {
-      await client.query('ROLLBACK');
-    }
-    throw err;
+    return hydrated;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
   } finally {
     client.release();
   }
-
-  if (!rowId) {
-    throw new Error('Row creation failed');
-  }
-
-  try {
-    await updateRowEmbedding(rowId, params.values, params.properties);
-  } catch (error) {
-    logEmbeddingFailure(rowId, error);
-  }
-
-  const hydrated = await getRow(rowId, params.properties, access);
-  if (!hydrated) {
-    throw new Error(`Row ${rowId} not found after creation`);
-  }
-  return hydrated;
 }
 
 export async function getRow(
   id: string,
-  properties: DatabaseProperty[],
-  access: AccessContext = { kind: 'system' }
+  params: { include_archived?: boolean } = {}
 ): Promise<HydratedRow | null> {
   const pool = getPool();
-
-  if (!isSystemAccess(access)) {
-    await assertRowReadAccess(id, access);
-  }
-
-  const { rows: rowRows } = await pool.query<DatabaseRow>(
-    `UPDATE database_rows SET last_accessed_at = NOW()
-     WHERE id = $1 RETURNING *`,
-    [id]
+  const includeArchived = params.include_archived ?? false;
+  const { rows } = await pool.query<DatabaseRow & { workspace_id: string }>(
+    `SELECT ${ROW_SELECT}, d.workspace_id
+     FROM database_rows r
+     JOIN databases d ON d.id = r.database_id
+     WHERE r.id = $1
+       AND ($2::boolean OR r.archived_at IS NULL)
+       AND ($2::boolean OR d.archived_at IS NULL)`,
+    [id, includeArchived]
   );
-  if (!rowRows[0]) return null;
-
-  const { rows: valRows } = await pool.query<RowValue>(
-    'SELECT * FROM database_row_values WHERE row_id = $1',
-    [id]
-  );
-
-  const propMap = new Map(properties.map((p) => [p.id, p]));
-  const values: Record<string, unknown> = {};
-  for (const val of valRows) {
-    const prop = propMap.get(val.property_id);
-    if (prop) {
-      values[prop.name] = extractRowValue(val, prop.property_type);
-    }
-  }
-
-  return { ...rowRows[0], values };
+  const selected = rows[0];
+  if (!selected) return null;
+  const { workspace_id: workspaceId, ...row } = selected;
+  await requireActiveWorkspace(workspaceId);
+  const properties = await loadProperties(row.database_id, includeArchived, pool);
+  return (await hydrateRows([row], properties, pool))[0];
 }
 
-export async function getRowDatabaseId(
-  id: string,
-  access: AccessContext = { kind: 'system' }
-): Promise<string | null> {
-  if (!isSystemAccess(access)) {
-    const result = await assertRowReadAccess(id, access);
-    return result.database_id;
+function assertFilters(
+  filters: RowFilter[] | undefined,
+  properties: Map<string, DatabaseProperty>
+): void {
+  const operators = new Set(['eq', 'neq', 'gt', 'lt', 'contains', 'is_empty']);
+  for (const filter of filters ?? []) {
+    const property = properties.get(filter.property);
+    if (!property) {
+      throw new Error(`Unknown filter property: ${filter.property}`);
+    }
+    if (!operators.has(filter.operator)) {
+      throw new Error(`Unsupported row filter operator: ${String(filter.operator)}`);
+    }
+    const hasValue = Object.prototype.hasOwnProperty.call(filter, 'value');
+    if (filter.operator === 'is_empty' && hasValue) {
+      throw new Error('is_empty filters cannot include a value');
+    }
+    if (filter.operator !== 'is_empty' && !hasValue) {
+      throw new Error(`${filter.operator} filters require a value`);
+    }
+    if ((filter.operator === 'gt' || filter.operator === 'lt')
+      && property.property_type !== 'number'
+      && property.property_type !== 'date') {
+      throw new Error(
+        `Operator ${filter.operator} is not supported for ${property.property_type}; use it only with number or date properties`
+      );
+    }
+    if (filter.operator === 'contains'
+      && !['title', 'text', 'url', 'select', 'multi_select'].includes(property.property_type)) {
+      throw new Error(
+        `Operator contains is not supported for ${property.property_type} properties`
+      );
+    }
+    if (filter.operator === 'contains' && typeof filter.value !== 'string') {
+      throw new Error('contains filters require a string value');
+    }
   }
-  const pool = getPool();
-  const { rows } = await pool.query<{ database_id: string }>(
-    'SELECT database_id FROM database_rows WHERE id = $1',
-    [id]
-  );
-  return rows[0]?.database_id ?? null;
 }
 
-export async function updateRow(
-  id: string,
-  params: {
-    values?: Record<string, unknown>;
-    tags?: string[];
-    importance?: number;
-    properties: DatabaseProperty[];
-    expected_updated_at?: string;
-  },
-  access: AccessContext = { kind: 'system' }
-): Promise<HydratedRow | null> {
-  const pool = getPool();
-  let committed = false;
-
-  if (!isSystemAccess(access)) {
-    await assertRowWriteAccess(id, access);
+function valueColumn(type: PropertyType): string {
+  switch (type) {
+    case 'number': return 'value_number';
+    case 'date': return 'value_date';
+    case 'checkbox': return 'value_bool';
+    case 'multi_select':
+      return 'value_json';
+    case 'title':
+    case 'text':
+    case 'url':
+    case 'select':
+      return 'value_text';
+    default:
+      throw new Error(`Unsupported property type: ${String(type)}`);
   }
-  if (params.values) {
-    validateRowValues(params.values, params.properties, 'update');
-  }
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    const sets: string[] = ['updated_at = NOW()'];
-    const setValues: unknown[] = [];
-    let idx = 1;
-
-    if (params.tags !== undefined) {
-      sets.push(`tags = $${idx++}`);
-      setValues.push(params.tags);
-    }
-    if (params.importance !== undefined) {
-      sets.push(`importance = $${idx++}`);
-      setValues.push(params.importance);
-    }
-
-    setValues.push(id);
-    if (params.expected_updated_at) {
-      setValues.push(params.expected_updated_at);
-    }
-    const updateResult = await client.query(
-      `UPDATE database_rows SET ${sets.join(', ')} WHERE id = $${idx}${params.expected_updated_at ? ` AND updated_at = $${idx + 1}` : ''}`,
-      setValues
-    );
-    if ((updateResult.rowCount ?? 0) === 0) {
-      await client.query('ROLLBACK');
-      committed = true;
-      await assertRowConflict(id, params.expected_updated_at);
-      return null;
-    }
-
-    if (params.values) {
-      for (const prop of params.properties) {
-        if (!(prop.name in params.values)) continue;
-        const val = params.values[prop.name];
-        const typed = setRowValue(prop, val);
-
-        await client.query(
-          `INSERT INTO database_row_values (row_id, property_id, value_text, value_number, value_date, value_bool, value_json)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           ON CONFLICT (row_id, property_id) DO UPDATE SET
-             value_text = EXCLUDED.value_text,
-             value_number = EXCLUDED.value_number,
-             value_date = EXCLUDED.value_date,
-             value_bool = EXCLUDED.value_bool,
-             value_json = EXCLUDED.value_json`,
-          [
-            id,
-            prop.id,
-            typed.value_text ?? null,
-            typed.value_number ?? null,
-            typed.value_date ?? null,
-            typed.value_bool ?? null,
-            typed.value_json !== undefined ? JSON.stringify(typed.value_json) : null,
-          ]
-        );
-      }
-    }
-
-    await client.query('COMMIT');
-    committed = true;
-  } catch (err) {
-    if (!committed) {
-      await client.query('ROLLBACK');
-    }
-    throw err;
-  } finally {
-    client.release();
-  }
-
-  if (params.values) {
-    try {
-      const currentValues = await loadRowValues(id, params.properties);
-      await updateRowEmbedding(id, currentValues, params.properties);
-    } catch (error) {
-      logEmbeddingFailure(id, error);
-    }
-  }
-
-  const row = await getRow(id, params.properties, access);
-  if (!row) {
-    await assertRowConflict(id, params.expected_updated_at);
-  }
-  return row;
 }
 
-export async function deleteRow(
-  id: string,
-  access: AccessContext = { kind: 'system' },
-  expected_updated_at?: string
-): Promise<boolean> {
-  if (!isSystemAccess(access)) {
-    await assertRowWriteAccess(id, access);
+function filterValue(value: unknown, property: DatabaseProperty): unknown {
+  const typed = typedValue(property, value);
+  switch (property.property_type) {
+    case 'number': return typed.value_number;
+    case 'date': return typed.value_date;
+    case 'checkbox': return typed.value_bool;
+    case 'multi_select':
+      return jsonParameter(typed.value_json);
+    case 'title':
+    case 'text':
+    case 'url':
+    case 'select':
+      return typed.value_text;
+    default:
+      throw new Error(`Unsupported property type: ${String(property.property_type)}`);
   }
-  const pool = getPool();
-  const values: unknown[] = [id];
-  let sql = 'DELETE FROM database_rows WHERE id = $1';
-  if (expected_updated_at) {
-    values.push(expected_updated_at);
-    sql += ' AND updated_at = $2';
-  }
-  const { rowCount } = await pool.query(sql, values);
-  if ((rowCount ?? 0) === 0) {
-    await assertRowConflict(id, expected_updated_at);
-  }
-  return (rowCount ?? 0) > 0;
 }
 
 export async function queryRows(params: {
   database_id: string;
   filters?: RowFilter[];
   sort_by?: string;
+  sort_direction?: 'asc' | 'desc';
+  tags?: string[];
+  include_archived?: boolean;
   limit?: number;
   offset?: number;
-  properties: DatabaseProperty[];
-  access?: AccessContext;
 }): Promise<{ rows: HydratedRow[]; total: number }> {
   const pool = getPool();
-  const access = params.access ?? { kind: 'system' as const };
-
-  if (!isSystemAccess(access)) {
-    await assertDatabaseReadAccess(params.database_id, access);
+  const includeArchived = params.include_archived ?? false;
+  const limit = pagination('limit', params.limit, 50);
+  const offset = pagination('offset', params.offset, 0);
+  if (params.sort_direction !== undefined && params.sort_direction !== 'asc' && params.sort_direction !== 'desc') {
+    throw new Error('sort_direction must be asc or desc');
+  }
+  if (params.sort_direction !== undefined && params.sort_by === undefined) {
+    throw new Error('sort_direction requires sort_by');
   }
 
-  const propByName = new Map(params.properties.map((p) => [p.name, p]));
-  assertKnownQueryProperties(params.filters, params.sort_by, propByName);
-  const limit = normalizePaginationValue('limit', params.limit, 50);
-  const offset = normalizePaginationValue('offset', params.offset, 0);
+  const database = await loadDatabaseSchema(params.database_id, includeArchived, pool);
+  if (!database) throw new Error(`Database ${params.database_id} not found`);
+  await requireActiveWorkspace(database.workspace_id);
+  const propertiesByName = new Map(database.properties.map((property) => [property.name, property]));
+  assertFilters(params.filters, propertiesByName);
+  if (params.sort_by && !propertiesByName.has(params.sort_by)) {
+    throw new Error(`Unknown sort property: ${params.sort_by}`);
+  }
+  if (params.sort_by && propertiesByName.get(params.sort_by)?.property_type === 'multi_select') {
+    throw new Error('multi_select properties cannot be used for sorting');
+  }
 
-  const conditions: string[] = ['r.database_id = $1'];
-  const values: unknown[] = [params.database_id];
-  let idx = 2;
+  const conditions = [
+    'r.database_id = $1',
+    '($2::boolean OR r.archived_at IS NULL)',
+    '($3::text[] IS NULL OR r.tags && $3::text[])',
+  ];
+  const values: unknown[] = [
+    params.database_id,
+    includeArchived,
+    params.tags?.length ? params.tags : null,
+  ];
 
-  if (params.filters) {
-    for (const filter of params.filters) {
-      const prop = propByName.get(filter.property);
-      if (!prop) continue;
+  for (const filter of params.filters ?? []) {
+    const property = propertiesByName.get(filter.property)!;
+    const column = valueColumn(property.property_type);
+    values.push(property.id);
+    const propertyParameter = `$${values.length}`;
 
-      const col = getValueColumn(prop.property_type);
-
-      switch (filter.operator) {
-        case 'is_empty':
-          conditions.push(
-            `NOT EXISTS (SELECT 1 FROM database_row_values v WHERE v.row_id = r.id AND v.property_id = $${idx} AND ${col} IS NOT NULL)`
-          );
-          values.push(prop.id);
-          idx++;
-          break;
-        case 'eq':
-          conditions.push(
-            `EXISTS (SELECT 1 FROM database_row_values v WHERE v.row_id = r.id AND v.property_id = $${idx} AND ${col} = $${idx + 1})`
-          );
-          values.push(prop.id, coerceValue(filter.value, prop.property_type));
-          idx += 2;
-          break;
-        case 'neq':
-          conditions.push(
-            `NOT EXISTS (SELECT 1 FROM database_row_values v WHERE v.row_id = r.id AND v.property_id = $${idx} AND ${col} = $${idx + 1})`
-          );
-          values.push(prop.id, coerceValue(filter.value, prop.property_type));
-          idx += 2;
-          break;
-        case 'gt':
-          conditions.push(
-            `EXISTS (SELECT 1 FROM database_row_values v WHERE v.row_id = r.id AND v.property_id = $${idx} AND ${col} > $${idx + 1})`
-          );
-          values.push(prop.id, coerceValue(filter.value, prop.property_type));
-          idx += 2;
-          break;
-        case 'lt':
-          conditions.push(
-            `EXISTS (SELECT 1 FROM database_row_values v WHERE v.row_id = r.id AND v.property_id = $${idx} AND ${col} < $${idx + 1})`
-          );
-          values.push(prop.id, coerceValue(filter.value, prop.property_type));
-          idx += 2;
-          break;
-        case 'contains':
-          conditions.push(
-            `EXISTS (SELECT 1 FROM database_row_values v WHERE v.row_id = r.id AND v.property_id = $${idx} AND ${getContainsExpression(prop.property_type)} ILIKE $${idx + 1})`
-          );
-          values.push(prop.id, `%${filter.value}%`);
-          idx += 2;
-          break;
-      }
+    if (filter.operator === 'is_empty') {
+      conditions.push(
+        `NOT EXISTS (SELECT 1 FROM database_row_values v
+         WHERE v.row_id = r.id AND v.property_id = ${propertyParameter} AND v.${column} IS NOT NULL)`
+      );
+      continue;
     }
+
+    if (filter.operator === 'contains') {
+      values.push(filter.value);
+      conditions.push(property.property_type === 'multi_select'
+        ? `EXISTS (SELECT 1 FROM database_row_values v
+           WHERE v.row_id = r.id AND v.property_id = ${propertyParameter}
+             AND v.value_json ? $${values.length}::text)`
+        : `EXISTS (SELECT 1 FROM database_row_values v
+           WHERE v.row_id = r.id AND v.property_id = ${propertyParameter}
+             AND STRPOS(LOWER(v.${column}::text), LOWER($${values.length}::text)) > 0)`);
+      continue;
+    }
+
+    const normalizedValue = filterValue(filter.value, property);
+    if (normalizedValue == null) {
+      if (filter.operator !== 'eq' && filter.operator !== 'neq') {
+        throw new Error(`${filter.operator} filters cannot compare against null`);
+      }
+      conditions.push(
+        `${filter.operator === 'eq' ? 'NOT ' : ''}EXISTS (SELECT 1 FROM database_row_values v
+         WHERE v.row_id = r.id AND v.property_id = ${propertyParameter} AND v.${column} IS NOT NULL)`
+      );
+      continue;
+    }
+
+    values.push(normalizedValue);
+    const valueParameter = `$${values.length}${column === 'value_json' ? '::jsonb' : ''}`;
+    const comparison = filter.operator === 'eq'
+      ? '='
+      : filter.operator === 'neq'
+        ? '='
+        : filter.operator === 'gt'
+          ? '>'
+          : '<';
+    conditions.push(
+      `${filter.operator === 'neq' ? 'NOT ' : ''}EXISTS (SELECT 1 FROM database_row_values v
+       WHERE v.row_id = r.id AND v.property_id = ${propertyParameter}
+         AND v.${column} ${comparison} ${valueParameter})`
+    );
   }
 
   const where = `WHERE ${conditions.join(' AND ')}`;
-
   const { rows: countRows } = await pool.query<{ count: string }>(
     `SELECT COUNT(*) AS count FROM database_rows r ${where}`,
     values
   );
-  const total = parseInt(countRows[0].count);
+  const total = Number.parseInt(countRows[0]?.count ?? '0', 10);
 
-  let orderBy = 'r.created_at DESC';
   const rowValues = [...values];
+  let orderBy = 'r.updated_at DESC, r.created_at DESC';
   if (params.sort_by) {
-    const sortProp = propByName.get(params.sort_by);
-    if (sortProp) {
-      rowValues.push(sortProp.id);
-      orderBy = `(SELECT ${getValueColumn(sortProp.property_type)} FROM database_row_values v WHERE v.row_id = r.id AND v.property_id = $${rowValues.length} LIMIT 1) ASC NULLS LAST`;
-    }
+    const property = propertiesByName.get(params.sort_by)!;
+    rowValues.push(property.id);
+    const direction = params.sort_direction === 'desc' ? 'DESC' : 'ASC';
+    orderBy = `(SELECT v.${valueColumn(property.property_type)} FROM database_row_values v
+      WHERE v.row_id = r.id AND v.property_id = $${rowValues.length} LIMIT 1)
+      ${direction} NULLS LAST, r.created_at DESC`;
   }
-
   rowValues.push(limit, offset);
-  const limitParam = rowValues.length - 1;
-  const offsetParam = rowValues.length;
-
-  const { rows: rowRows } = await pool.query<DatabaseRow>(
-    `SELECT r.* FROM database_rows r ${where} ORDER BY ${orderBy} LIMIT $${limitParam} OFFSET $${offsetParam}`,
+  const { rows } = await pool.query<DatabaseRow>(
+    `SELECT ${ROW_SELECT}
+     FROM database_rows r
+     ${where}
+     ORDER BY ${orderBy}
+     LIMIT $${rowValues.length - 1} OFFSET $${rowValues.length}`,
     rowValues
   );
-
-  if (rowRows.length === 0) return { rows: [], total };
-
-  const rowIds = rowRows.map((r) => r.id);
-  const { rows: valRows } = await pool.query<RowValue>(
-    'SELECT * FROM database_row_values WHERE row_id = ANY($1)',
-    [rowIds]
-  );
-
-  const propMap = new Map(params.properties.map((p) => [p.id, p]));
-  const valsByRow = new Map<string, RowValue[]>();
-  for (const val of valRows) {
-    if (!valsByRow.has(val.row_id)) valsByRow.set(val.row_id, []);
-    valsByRow.get(val.row_id)!.push(val);
-  }
-
-  const hydratedRows: HydratedRow[] = rowRows.map((row) => {
-    const rowVals = valsByRow.get(row.id) ?? [];
-    const values: Record<string, unknown> = {};
-    for (const val of rowVals) {
-      const prop = propMap.get(val.property_id);
-      if (prop) values[prop.name] = extractRowValue(val, prop.property_type);
-    }
-    return { ...row, values };
-  });
-
-  return { rows: hydratedRows, total };
+  return { rows: await hydrateRows(rows, database.properties, pool), total };
 }
 
-export async function countRows(params: {
-  database_id: string;
-  filters?: RowFilter[];
-  properties: DatabaseProperty[];
-  access?: AccessContext;
-}): Promise<number> {
-  const result = await queryRows({ ...params, limit: 0, offset: 0 });
-  return result.total;
-}
-
-export async function bulkCreateRows(params: {
-  database_id: string;
-  rows: Array<{
-    values: Record<string, unknown>;
+export async function updateRow(
+  id: string,
+  params: {
+    revision: number;
+    values?: Record<string, unknown>;
     tags?: string[];
-    source?: string;
     importance?: number;
-    expires_in_days?: number;
-  }>;
-  properties: DatabaseProperty[];
-  access?: AccessContext;
-}): Promise<HydratedRow[]> {
-  const pool = getPool();
-  const access = params.access ?? { kind: 'system' as const };
-  if (!isSystemAccess(access)) {
-    await assertDatabaseWriteAccess(params.database_id, access);
   }
-  for (const row of params.rows) {
-    validateRowValues(row.values, params.properties, 'create');
+): Promise<HydratedRow | null> {
+  assertRevision(params.revision);
+  assertImportance(params.importance);
+  if (params.values !== undefined && Object.keys(params.values).length === 0) {
+    throw new Error('Row value updates must contain at least one property');
+  }
+  if (params.values === undefined && params.tags === undefined && params.importance === undefined) {
+    throw new Error('At least one row field is required');
   }
 
-  const client = await pool.connect();
-  const createdRows: DatabaseRow[] = [];
+  const client = await getPool().connect();
   try {
     await client.query('BEGIN');
-    for (const row of params.rows) {
-      const created = await insertRowInTransaction(client, {
-        database_id: params.database_id,
-        properties: params.properties,
-        ...row,
-      });
-      createdRows.push(created);
+    const { rows: identityRows } = await client.query<{ database_id: string }>(
+      'SELECT database_id FROM database_rows WHERE id = $1',
+      [id]
+    );
+    const identity = identityRows[0];
+    if (!identity) {
+      await client.query('ROLLBACK');
+      return null;
     }
+    const database = await loadDatabaseSchema(identity.database_id, false, client, true);
+    if (!database) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    await requireActiveWorkspace(database.workspace_id, client);
+
+    const { rows: selectedRows } = await client.query<DatabaseRow & { workspace_id: string }>(
+      `SELECT ${ROW_SELECT}, d.workspace_id
+       FROM database_rows r
+       JOIN databases d ON d.id = r.database_id
+       WHERE r.id = $1 AND r.database_id = $2
+         AND r.archived_at IS NULL AND d.archived_at IS NULL
+       FOR UPDATE OF r`,
+      [id, identity.database_id]
+    );
+    const selected = selectedRows[0];
+    if (!selected) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    const { workspace_id: workspaceId, ...currentRow } = selected;
+    if (workspaceId !== database.workspace_id) {
+      throw new Error(`Row ${id} changed databases during update`);
+    }
+    if (currentRow.revision !== params.revision) {
+      throw new Error(`Conflict: row ${id} is at revision ${currentRow.revision}, not ${params.revision}`);
+    }
+    const properties = database.properties;
+    if (params.values !== undefined) assertRowValues(params.values, properties, 'update');
+
+    const sets = ['revision = revision + 1', 'updated_at = NOW()'];
+    const values: unknown[] = [];
+    let index = 1;
+    if (params.tags !== undefined) {
+      sets.unshift(`tags = $${index++}`);
+      values.push(params.tags);
+    }
+    if (params.importance !== undefined) {
+      sets.unshift(`importance = $${index++}`);
+      values.push(params.importance);
+    }
+    values.push(id, params.revision);
+    const { rows } = await client.query<DatabaseRow>(
+      `UPDATE database_rows
+       SET ${sets.join(', ')}
+       WHERE id = $${index++} AND revision = $${index} AND archived_at IS NULL
+       RETURNING ${ROW_COLUMNS}`,
+      values
+    );
+    if (!rows[0]) await assertRowRevision(id, params.revision, client);
+    if (params.values !== undefined) {
+      await writeRowValues(client, id, params.values, properties);
+    }
+    const hydrated = rows[0] ? (await hydrateRows(rows, properties, client))[0] : null;
     await client.query('COMMIT');
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
-
-  for (let index = 0; index < createdRows.length; index++) {
-    const row = params.rows[index];
-    try {
-      await updateRowEmbedding(createdRows[index].id, row.values, params.properties);
-    } catch (error) {
-      logEmbeddingFailure(createdRows[index].id, error);
-    }
-  }
-
-  const results: HydratedRow[] = [];
-  for (let index = 0; index < createdRows.length; index++) {
-    const hydrated = await getRow(createdRows[index].id, params.properties, access);
-    if (!hydrated) {
-      throw new Error(`Row ${createdRows[index].id} not found after bulk creation`);
-    }
-    results.push(hydrated);
-  }
-  return results;
-}
-
-export async function cleanupExpired(
-  access: AccessContext = { kind: 'system' }
-): Promise<{ pages_deleted: number; rows_deleted: number }> {
-  const pool = getPool();
-  const client = await pool.connect();
-  const now = new Date().toISOString();
-  void access;
-  try {
-    await client.query('BEGIN');
-    await client.query(
-      `DELETE FROM links l
-       WHERE EXISTS (
-         SELECT 1
-         FROM pages p
-         WHERE p.expires_at IS NOT NULL
-           AND p.expires_at < $1
-           AND (
-             (l.from_type = 'page' AND l.from_id = p.id)
-             OR (l.to_type = 'page' AND l.to_id = p.id)
-           )
-       )
-       OR EXISTS (
-         SELECT 1
-         FROM database_rows r
-         WHERE r.expires_at IS NOT NULL
-           AND r.expires_at < $1
-           AND (
-             (l.from_type = ANY($2) AND l.from_id = r.id)
-             OR (l.to_type = ANY($2) AND l.to_id = r.id)
-           )
-       )`,
-      [now, ['row', 'database_row']]
-    );
-    const pageResult = await client.query(
-      'DELETE FROM pages WHERE expires_at IS NOT NULL AND expires_at < $1',
-      [now]
-    );
-    const rowResult = await client.query(
-      'DELETE FROM database_rows WHERE expires_at IS NOT NULL AND expires_at < $1',
-      [now]
-    );
-
-    await client.query('COMMIT');
-    return {
-      pages_deleted: pageResult.rowCount ?? 0,
-      rows_deleted: rowResult.rowCount ?? 0,
-    };
+    return hydrated;
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -750,98 +712,75 @@ export async function cleanupExpired(
   }
 }
 
-function getValueColumn(propType: string): string {
-  switch (propType) {
-    case 'number': return 'value_number';
-    case 'date': return 'value_date';
-    case 'checkbox': return 'value_bool';
-    case 'select':
-    case 'multi_select':
-    case 'files':
-    case 'relation':
-      return 'value_json';
-    default: return 'value_text';
-  }
-}
+async function setRowArchived(
+  id: string,
+  revision: number,
+  archived: boolean
+): Promise<HydratedRow | null> {
+  assertRevision(revision);
+  const client = await getPool().connect();
+  let transactionOpen = false;
+  try {
+    await client.query('BEGIN');
+    transactionOpen = true;
 
-function getContainsExpression(propType: string): string {
-  const valueColumn = getValueColumn(propType);
-  switch (propType) {
-    case 'number':
-    case 'date':
-    case 'checkbox':
-      return `${valueColumn}::text`;
-    case 'select':
-    case 'multi_select':
-    case 'files':
-    case 'relation':
-      return 'value_json::text';
-    default:
-      return valueColumn;
-  }
-}
-
-function coerceValue(value: unknown, propType: string): unknown {
-  if (propType === 'number') return Number(value);
-  if (propType === 'checkbox') return parseCheckboxValue(value, 'filter');
-  if (['select', 'multi_select', 'files', 'relation'].includes(propType)) {
-    return value !== undefined ? JSON.stringify(value) : null;
-  }
-  return value;
-}
-
-async function updateRowEmbedding(
-  rowId: string,
-  values: Record<string, unknown>,
-  properties: DatabaseProperty[]
-): Promise<void> {
-  const textParts: string[] = [];
-
-  // Title first
-  const titleProp = properties.find((p) => p.property_type === 'title');
-  if (titleProp && values[titleProp.name] != null) {
-    textParts.push(String(values[titleProp.name]));
-  }
-
-  // Then text/url/email fields
-  for (const prop of properties) {
-    if (prop.property_type === 'title') continue;
-    if (['text', 'url', 'email'].includes(prop.property_type)) {
-      const val = values[prop.name];
-      if (val != null && String(val).trim()) {
-        textParts.push(String(val));
-      }
+    const { rows: identityRows } = await client.query<{ database_id: string }>(
+      'SELECT database_id FROM database_rows WHERE id = $1',
+      [id]
+    );
+    const identity = identityRows[0];
+    if (!identity) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return null;
     }
-  }
 
-  const pool = getPool();
-  if (textParts.length === 0) {
-    await pool.query('UPDATE database_rows SET embedding = NULL WHERE id = $1', [rowId]);
-    return;
-  }
+    // Match create/update lock ordering: database first, then row, then the
+    // workspace trigger. Database archive therefore cannot overtake this write.
+    const database = await loadDatabaseSchema(identity.database_id, false, client, true);
+    if (!database) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return null;
+    }
+    await requireActiveWorkspace(database.workspace_id, client);
 
-  const text = textParts.join('\n');
-  const vec = await embed(text);
-  await pool.query('UPDATE database_rows SET embedding = $1 WHERE id = $2', [vectorToSql(vec), rowId]);
+    const { rows } = await client.query<DatabaseRow>(
+      `UPDATE database_rows
+       SET archived_at = ${archived ? 'NOW()' : 'NULL'},
+           revision = revision + 1,
+           updated_at = NOW()
+       WHERE id = $1 AND database_id = $2 AND revision = $3
+         AND archived_at IS ${archived ? 'NULL' : 'NOT NULL'}
+       RETURNING ${ROW_COLUMNS}`,
+      [id, identity.database_id, revision]
+    );
+    if (!rows[0]) await assertRowRevision(id, revision, client);
+    const hydrated = rows[0]
+      ? (await hydrateRows(rows, database.properties, client))[0]
+      : null;
+
+    await client.query('COMMIT');
+    transactionOpen = false;
+    return hydrated;
+  } catch (error) {
+    if (transactionOpen) await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
-async function loadRowValues(
-  rowId: string,
-  properties: DatabaseProperty[]
-): Promise<Record<string, unknown>> {
-  const pool = getPool();
-  const { rows } = await pool.query<RowValue>(
-    'SELECT * FROM database_row_values WHERE row_id = $1',
-    [rowId]
-  );
+export function archiveRow(
+  id: string,
+  revision: number
+): Promise<HydratedRow | null> {
+  return setRowArchived(id, revision, true);
+}
 
-  const propMap = new Map(properties.map((property) => [property.id, property]));
-  const values: Record<string, unknown> = {};
-  for (const row of rows) {
-    const property = propMap.get(row.property_id);
-    if (property) {
-      values[property.name] = extractRowValue(row, property.property_type);
-    }
-  }
-  return values;
+export function restoreRow(
+  id: string,
+  revision: number
+): Promise<HydratedRow | null> {
+  return setRowArchived(id, revision, false);
 }

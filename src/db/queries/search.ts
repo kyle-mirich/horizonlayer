@@ -1,16 +1,11 @@
-import type { AccessContext } from '../access.js';
 import { getPool } from '../client.js';
-import { embed, vectorToSql } from '../../embeddings/index.js';
-import { assertSessionReadAccess } from './accessControl.js';
+import {
+  requireActiveWorkspace,
+  requireDatabase,
+  requireSession,
+} from './scopeGuards.js';
 
-export type SearchMode =
-  | 'similarity'
-  | 'similarity_recency'
-  | 'similarity_importance'
-  | 'full_text'
-  | 'grep'
-  | 'regex'
-  | 'hybrid';
+export type SearchContentType = 'pages' | 'rows';
 
 export interface SearchResult {
   id: string;
@@ -18,683 +13,334 @@ export interface SearchResult {
   title: string;
   score: number;
   snippet: string;
-  workspace_id: string | null;
+  workspace_id: string;
+  session_id: string | null;
+  database_id: string | null;
   tags: string[];
+  updated_at: string;
 }
 
-function assertSafeRegexQuery(query: string): void {
-  if (query.length > 512) {
-    throw new Error('Regex query cannot exceed 512 characters');
-  }
-  try {
-    new RegExp(query);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid regex query: ${message}`);
-  }
+interface PageSearchRow {
+  id: string;
+  workspace_id: string;
+  session_id: string | null;
+  title: string;
+  tags: string[] | null;
+  updated_at: string;
+  score: number | string;
+  snippet: string | null;
 }
 
-export async function search(params: {
-  query: string;
-  mode: SearchMode;
-  content_types?: ('pages' | 'rows')[];
-  workspace_id?: string;
-  session_id?: string;
-  database_id?: string;
-  tags?: string[];
-  min_importance?: number;
-  limit?: number;
-  access?: AccessContext;
-}): Promise<SearchResult[]> {
-  const contentTypes = params.content_types ?? ['pages', 'rows'];
-  const limit = params.limit ?? 20;
-  const access = params.access ?? { kind: 'system' as const };
+interface RowSearchRow {
+  id: string;
+  workspace_id: string;
+  database_id: string;
+  title: string | null;
+  tags: string[] | null;
+  updated_at: string;
+  score: number | string;
+  snippet: string | null;
+}
 
-  if (params.mode === 'regex') {
-    assertSafeRegexQuery(params.query);
+function normalizeLimit(value: number | undefined): number {
+  const limit = value ?? 20;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('limit must be an integer between 1 and 100');
   }
+  return limit;
+}
 
-  if (params.session_id) {
-    const session = await assertSessionReadAccess(params.session_id, access);
-    if (params.workspace_id && params.workspace_id !== session.workspace_id) {
-      throw new Error('session_id must belong to the requested workspace');
-    }
+function normalizeQuery(value: string): string {
+  if (typeof value !== 'string') throw new Error('query cannot be empty');
+  const query = value.trim();
+  if (!query) throw new Error('query cannot be empty');
+  if (query.length > 1_000) throw new Error('query cannot exceed 1000 characters');
+  return query;
+}
+
+function normalizeContentTypes(value: SearchContentType[] | undefined): SearchContentType[] {
+  const contentTypes = value ?? ['pages', 'rows'];
+  if (contentTypes.length === 0) {
+    throw new Error('content_types must contain at least one item');
   }
-
-  let vec: number[] | null = null;
-  if (params.mode !== 'full_text' && params.mode !== 'grep' && params.mode !== 'regex') {
-    vec = await embed(params.query);
+  if (contentTypes.some((contentType) => contentType !== 'pages' && contentType !== 'rows')) {
+    throw new Error('content_types may only contain pages or rows');
   }
+  return [...new Set(contentTypes)];
+}
 
-  const results: SearchResult[] = [];
-
-  if (contentTypes.includes('pages') && !params.database_id) {
-    const pageResults = await searchPages({
-      query: params.query,
-      mode: params.mode,
-      vec,
-      workspace_id: params.workspace_id,
-      session_id: params.session_id,
-      tags: params.tags,
-      min_importance: params.min_importance,
-      limit,
-      access,
-    });
-    results.push(...pageResults);
+function resolveContentTypes(
+  value: SearchContentType[] | undefined,
+  params: { database_id?: string; session_id?: string }
+): SearchContentType[] {
+  if (params.session_id && params.database_id) {
+    throw new Error('session_id and database_id cannot be combined');
   }
 
-  if (contentTypes.includes('rows')) {
-    const rowResults = await searchRows({
-      query: params.query,
-      mode: params.mode,
-      vec,
-      workspace_id: params.workspace_id,
-      database_id: params.database_id,
-      tags: params.tags,
-      min_importance: params.min_importance,
-      limit,
-      access,
-    });
-    results.push(...rowResults);
+  if (value === undefined) {
+    if (params.session_id) return ['pages'];
+    if (params.database_id) return ['rows'];
+    return ['pages', 'rows'];
   }
 
-  results.sort((a, b) => b.score - a.score);
-  return results.slice(0, limit);
+  const contentTypes = normalizeContentTypes(value);
+  if (params.session_id && (contentTypes.length !== 1 || contentTypes[0] !== 'pages')) {
+    throw new Error('session_id can only be used with page search');
+  }
+  if (params.database_id && (contentTypes.length !== 1 || contentTypes[0] !== 'rows')) {
+    throw new Error('database_id can only be used with row search');
+  }
+  return contentTypes;
 }
 
-// Truncate text to ~200 chars at a word boundary for snippets
-function truncate(text: string, max = 200): string {
-  if (text.length <= max) return text;
-  const cut = text.lastIndexOf(' ', max);
-  return text.slice(0, cut > 0 ? cut : max) + '…';
-}
-
-function pageKeywordScoreExpression(qParam: number): string {
-  return `(
-    ts_rank(to_tsvector('english', p.title), plainto_tsquery('english', $${qParam}))
-    + COALESCE((
-      SELECT SUM(ts_rank(to_tsvector('english', b_score.content), plainto_tsquery('english', $${qParam})))
-      FROM blocks b_score
-      WHERE b_score.page_id = p.id
-        AND to_tsvector('english', b_score.content) @@ plainto_tsquery('english', $${qParam})
-    ), 0)
-  )`;
-}
-
-function pageKeywordMatchExpression(qParam: number): string {
-  return `(
-    to_tsvector('english', p.title) @@ plainto_tsquery('english', $${qParam})
-    OR EXISTS (
-      SELECT 1
-      FROM blocks b
-      WHERE b.page_id = p.id
-        AND to_tsvector('english', b.content) @@ plainto_tsquery('english', $${qParam})
-    )
-  )`;
-}
-
-function rowValueTextExpression(alias: string): string {
-  return `COALESCE(${alias}.value_text, ${alias}.value_json::text, ${alias}.value_number::text, ${alias}.value_date::text, ${alias}.value_bool::text, '')`;
-}
-
-function rowValueDisplayExpression(alias: string): string {
-  return `COALESCE(${alias}.value_text, ${alias}.value_json::text, ${alias}.value_number::text, ${alias}.value_date::text, ${alias}.value_bool::text)`;
-}
-
-function rowValueTsVectorExpression(alias: string): string {
-  return `to_tsvector('english', ${rowValueTextExpression(alias)})`;
-}
-
-function rowKeywordScoreExpression(qParam: number): string {
-  return `COALESCE((
-    SELECT SUM(ts_rank(${rowValueTsVectorExpression('v_score')}, plainto_tsquery('english', $${qParam})))
-    FROM database_row_values v_score
-    WHERE v_score.row_id = r.id
-      AND ${rowValueTsVectorExpression('v_score')} @@ plainto_tsquery('english', $${qParam})
-  ), 0)`;
-}
-
-function rowKeywordMatchExpression(qParam: number): string {
-  return `EXISTS (
-    SELECT 1
-    FROM database_row_values v
-    WHERE v.row_id = r.id
-      AND ${rowValueTsVectorExpression('v')} @@ plainto_tsquery('english', $${qParam})
-  )`;
+function normalizeImportance(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error('min_importance must be a number between 0 and 1');
+  }
+  return value;
 }
 
 async function searchPages(params: {
   query: string;
-  mode: SearchMode;
-  vec: number[] | null;
-  workspace_id?: string;
+  workspace_id: string;
   session_id?: string;
   tags?: string[];
   min_importance?: number;
   limit: number;
-  access: AccessContext;
 }): Promise<SearchResult[]> {
+  const values: unknown[] = [params.workspace_id];
+  const conditions = ['p.workspace_id = $1', 'p.archived_at IS NULL'];
+  let index = 2;
+  if (params.session_id) {
+    conditions.push(`p.session_id = $${index++}`);
+    values.push(params.session_id);
+  }
+  if (params.tags?.length) {
+    conditions.push(`p.tags && $${index++}`);
+    values.push(params.tags);
+  }
+  if (params.min_importance !== undefined) {
+    conditions.push(`p.importance >= $${index++}`);
+    values.push(params.min_importance);
+  }
+  const queryIndex = index++;
+  values.push(params.query);
+  const limitIndex = index;
+  values.push(params.limit);
+
   const pool = getPool();
-
-  if (params.mode === 'full_text') {
-    const conditions = ['true'];
-    const values: unknown[] = [];
-    let idx = 1;
-
-    if (params.workspace_id) { conditions.push(`p.workspace_id = $${idx++}`); values.push(params.workspace_id); }
-    if (params.session_id) { conditions.push(`p.session_id = $${idx++}`); values.push(params.session_id); }
-    if (params.tags?.length) { conditions.push(`p.tags && $${idx++}`); values.push(params.tags); }
-    if (params.min_importance != null) { conditions.push(`p.importance >= $${idx++}`); values.push(params.min_importance); }
-    void params.access;
-    values.push(params.query);
-
-    const keywordScore = pageKeywordScoreExpression(idx);
-    const keywordMatch = pageKeywordMatchExpression(idx);
-
-    const { rows } = await pool.query<{
-      id: string; title: string; workspace_id: string | null; tags: string[];
-      score: number; snippet: string | null;
-    }>(
-      `SELECT p.id, p.title, p.workspace_id, p.tags,
-              (${keywordScore})::float AS score,
-              COALESCE(
-                (SELECT b.content
-                 FROM blocks b
-                 WHERE b.page_id = p.id
-                   AND to_tsvector('english', b.content) @@ plainto_tsquery('english', $${idx})
-                 ORDER BY b.position
-                 LIMIT 1),
-                (SELECT b.content
-                 FROM blocks b
-                 WHERE b.page_id = p.id AND b.content != ''
-                 ORDER BY b.position LIMIT 1),
-                p.title
-              ) AS snippet
+  const { rows } = await pool.query<PageSearchRow>(
+    `WITH page_documents AS (
+       SELECT p.id,
+              p.workspace_id,
+              p.session_id,
+              p.title,
+              p.tags,
+              p.importance,
+              p.updated_at,
+              COALESCE(string_agg(b.content, E'\n' ORDER BY b.position), '') AS body
        FROM pages p
+       LEFT JOIN blocks b
+         ON b.page_id = p.id
+        AND b.archived_at IS NULL
        WHERE ${conditions.join(' AND ')}
-         AND ${keywordMatch}
-       ORDER BY score DESC
-       LIMIT ${params.limit}`,
-      values
-    );
-
-    return rows.map((r) => ({
-      id: r.id, type: 'page' as const, title: r.title, score: r.score,
-      snippet: truncate(r.snippet ?? r.title),
-      workspace_id: r.workspace_id, tags: r.tags,
-    }));
-  }
-
-  if (params.mode === 'grep') {
-    const conditions = ['true'];
-    const values: unknown[] = [];
-    let idx = 1;
-
-    if (params.workspace_id) { conditions.push(`p.workspace_id = $${idx++}`); values.push(params.workspace_id); }
-    if (params.session_id) { conditions.push(`p.session_id = $${idx++}`); values.push(params.session_id); }
-    if (params.tags?.length) { conditions.push(`p.tags && $${idx++}`); values.push(params.tags); }
-    if (params.min_importance != null) { conditions.push(`p.importance >= $${idx++}`); values.push(params.min_importance); }
-    void params.access;
-
-    values.push(`%${params.query}%`);
-    const qParam = idx++;
-
-    const { rows } = await pool.query<{
-      id: string; title: string; workspace_id: string | null; tags: string[];
-      score: number; snippet: string | null;
-    }>(
-      `SELECT p.id, p.title, p.workspace_id, p.tags,
-              (
-                CASE WHEN p.title ILIKE $${qParam} THEN 2 ELSE 0 END
-                + COALESCE((
-                  SELECT COUNT(*)
-                  FROM blocks b_score
-                  WHERE b_score.page_id = p.id
-                    AND b_score.content ILIKE $${qParam}
-                ), 0)
-              )::float AS score,
-              COALESCE(
-                (SELECT b.content
-                 FROM blocks b
-                 WHERE b.page_id = p.id AND b.content ILIKE $${qParam}
-                 ORDER BY b.position
-                 LIMIT 1),
-                p.title
-              ) AS snippet
-       FROM pages p
-       WHERE ${conditions.join(' AND ')}
-         AND (
-           p.title ILIKE $${qParam}
-           OR EXISTS (
-             SELECT 1 FROM blocks b
-             WHERE b.page_id = p.id
-               AND b.content ILIKE $${qParam}
-           )
-         )
-       ORDER BY score DESC, p.updated_at DESC
-       LIMIT ${params.limit}`,
-      values
-    );
-
-    return rows.map((r) => ({
-      id: r.id, type: 'page' as const, title: r.title, score: r.score,
-      snippet: truncate(r.snippet ?? r.title),
-      workspace_id: r.workspace_id, tags: r.tags,
-    }));
-  }
-
-  if (params.mode === 'regex') {
-    const conditions = ['true'];
-    const values: unknown[] = [];
-    let idx = 1;
-
-    if (params.workspace_id) { conditions.push(`p.workspace_id = $${idx++}`); values.push(params.workspace_id); }
-    if (params.session_id) { conditions.push(`p.session_id = $${idx++}`); values.push(params.session_id); }
-    if (params.tags?.length) { conditions.push(`p.tags && $${idx++}`); values.push(params.tags); }
-    if (params.min_importance != null) { conditions.push(`p.importance >= $${idx++}`); values.push(params.min_importance); }
-    void params.access;
-
-    values.push(params.query);
-    const qParam = idx++;
-
-    const { rows } = await pool.query<{
-      id: string; title: string; workspace_id: string | null; tags: string[];
-      score: number; snippet: string | null;
-    }>(
-      `SELECT p.id, p.title, p.workspace_id, p.tags,
-              (
-                CASE WHEN p.title ~* $${qParam} THEN 2 ELSE 0 END
-                + COALESCE((
-                  SELECT COUNT(*)
-                  FROM blocks b_score
-                  WHERE b_score.page_id = p.id
-                    AND b_score.content ~* $${qParam}
-                ), 0)
-              )::float AS score,
-              COALESCE(
-                (SELECT b.content
-                 FROM blocks b
-                 WHERE b.page_id = p.id AND b.content ~* $${qParam}
-                 ORDER BY b.position
-                 LIMIT 1),
-                p.title
-              ) AS snippet
-       FROM pages p
-       WHERE ${conditions.join(' AND ')}
-         AND (
-           p.title ~* $${qParam}
-           OR EXISTS (
-             SELECT 1 FROM blocks b
-             WHERE b.page_id = p.id
-               AND b.content ~* $${qParam}
-           )
-         )
-       ORDER BY score DESC, p.updated_at DESC
-       LIMIT ${params.limit}`,
-      values
-    );
-
-    return rows.map((r) => ({
-      id: r.id, type: 'page' as const, title: r.title, score: r.score,
-      snippet: truncate(r.snippet ?? r.title),
-      workspace_id: r.workspace_id, tags: r.tags,
-    }));
-  }
-
-  // Vector-based modes
-  const conditions: string[] = ['p.embedding IS NOT NULL'];
-  const values: unknown[] = [];
-  let idx = 1;
-
-  if (params.workspace_id) { conditions.push(`p.workspace_id = $${idx++}`); values.push(params.workspace_id); }
-  if (params.session_id) { conditions.push(`p.session_id = $${idx++}`); values.push(params.session_id); }
-  if (params.tags?.length) { conditions.push(`p.tags && $${idx++}`); values.push(params.tags); }
-  if (params.min_importance != null) { conditions.push(`p.importance >= $${idx++}`); values.push(params.min_importance); }
-  void params.access;
-
-  values.push(vectorToSql(params.vec!));
-  const vecParam = idx++;
-
-  let scoreExpr: string;
-  switch (params.mode) {
-    case 'similarity':
-      scoreExpr = `1 - (p.embedding <=> $${vecParam}::vector)`;
-      break;
-    case 'similarity_recency':
-      scoreExpr = `0.7 * (1 - (p.embedding <=> $${vecParam}::vector)) + 0.3 * EXP(-EXTRACT(EPOCH FROM (NOW() - p.created_at)) / (30 * 86400))`;
-      break;
-    case 'similarity_importance':
-      scoreExpr = `0.6 * (1 - (p.embedding <=> $${vecParam}::vector)) + 0.4 * p.importance`;
-      break;
-    case 'hybrid': {
-      values.push(params.query);
-      const ftsParam = idx++;
-      scoreExpr = `0.5 * (1 - (p.embedding <=> $${vecParam}::vector))
-        + 0.2 * p.importance
-        + 0.2 * EXP(-EXTRACT(EPOCH FROM (NOW() - p.created_at)) / (30 * 86400))
-        + 0.1 * (${pageKeywordScoreExpression(ftsParam)})`;
-      break;
-    }
-    default:
-      scoreExpr = `1 - (p.embedding <=> $${vecParam}::vector)`;
-  }
-
-  const where = `WHERE ${conditions.join(' AND ')}`;
-
-  const { rows } = await pool.query<{
-    id: string; title: string; workspace_id: string | null; tags: string[];
-    score: number; snippet: string | null;
-  }>(
-    `SELECT p.id, p.title, p.workspace_id, p.tags,
-            (${scoreExpr}) AS score,
-            (SELECT b.content FROM blocks b
-             WHERE b.page_id = p.id AND b.content != ''
-             ORDER BY b.position LIMIT 1) AS snippet
-     FROM pages p
-     ${where}
-     ORDER BY score DESC
-     LIMIT ${params.limit}`,
+       GROUP BY p.id
+     ), ranked AS (
+       SELECT *,
+              to_tsvector('simple', title || ' ' || body) AS document,
+              GREATEST(similarity(title, $${queryIndex}), similarity(body, $${queryIndex})) AS fuzzy_score
+       FROM page_documents
+     )
+     SELECT id,
+            workspace_id,
+            session_id,
+            title,
+            tags,
+            updated_at,
+            (
+              CASE
+                WHEN document @@ websearch_to_tsquery('simple', $${queryIndex})
+                  THEN ts_rank_cd(document, websearch_to_tsquery('simple', $${queryIndex}))
+                ELSE 0
+              END
+              + fuzzy_score * 0.5
+              + importance * 0.05
+            )::float AS score,
+            LEFT(CASE WHEN body <> '' THEN body ELSE title END, 400) AS snippet
+     FROM ranked
+     WHERE document @@ websearch_to_tsquery('simple', $${queryIndex})
+        OR fuzzy_score >= 0.08
+        OR STRPOS(LOWER(title), LOWER($${queryIndex})) > 0
+        OR STRPOS(LOWER(body), LOWER($${queryIndex})) > 0
+     ORDER BY score DESC, updated_at DESC
+     LIMIT $${limitIndex}`,
     values
   );
 
-  return rows.map((r) => ({
-    id: r.id, type: 'page' as const, title: r.title, score: r.score,
-    snippet: truncate(r.snippet ?? r.title),
-    workspace_id: r.workspace_id, tags: r.tags,
+  return rows.map((row) => ({
+    id: row.id,
+    type: 'page',
+    title: row.title,
+    score: Number(row.score),
+    snippet: row.snippet ?? row.title,
+    workspace_id: row.workspace_id,
+    session_id: row.session_id ?? null,
+    database_id: null,
+    tags: row.tags ?? [],
+    updated_at: row.updated_at,
   }));
 }
 
 async function searchRows(params: {
   query: string;
-  mode: SearchMode;
-  vec: number[] | null;
-  workspace_id?: string;
+  workspace_id: string;
   database_id?: string;
   tags?: string[];
   min_importance?: number;
   limit: number;
-  access: AccessContext;
 }): Promise<SearchResult[]> {
+  const values: unknown[] = [params.workspace_id];
+  const conditions = [
+    'd.workspace_id = $1',
+    'd.archived_at IS NULL',
+    'r.archived_at IS NULL',
+  ];
+  let index = 2;
+  if (params.database_id) {
+    conditions.push(`r.database_id = $${index++}`);
+    values.push(params.database_id);
+  }
+  if (params.tags?.length) {
+    conditions.push(`r.tags && $${index++}`);
+    values.push(params.tags);
+  }
+  if (params.min_importance !== undefined) {
+    conditions.push(`r.importance >= $${index++}`);
+    values.push(params.min_importance);
+  }
+  const queryIndex = index++;
+  values.push(params.query);
+  const limitIndex = index;
+  values.push(params.limit);
+
   const pool = getPool();
-
-  if (params.mode === 'full_text') {
-    const conditions: string[] = ['true'];
-    const values: unknown[] = [];
-    let idx = 1;
-
-    if (params.database_id) { conditions.push(`r.database_id = $${idx++}`); values.push(params.database_id); }
-    if (params.workspace_id) { conditions.push(`d.workspace_id = $${idx++}`); values.push(params.workspace_id); }
-    if (params.tags?.length) { conditions.push(`r.tags && $${idx++}`); values.push(params.tags); }
-    if (params.min_importance != null) { conditions.push(`r.importance >= $${idx++}`); values.push(params.min_importance); }
-    void params.access;
-
-    values.push(params.query);
-    const qParam = idx++;
-    const keywordMatch = rowKeywordMatchExpression(qParam);
-    const keywordScore = rowKeywordScoreExpression(qParam);
-
-    const { rows } = await pool.query<{
-      id: string; database_id: string; workspace_id: string | null; tags: string[];
-      score: number; title: string | null; snippet: string | null;
-    }>(
-      `SELECT r.id, r.database_id, d.workspace_id, r.tags,
-              (${keywordScore})::float AS score,
-              (SELECT v.value_text
-               FROM database_row_values v
-               JOIN database_properties p ON p.id = v.property_id
-               WHERE v.row_id = r.id
-                 AND p.property_type = 'title'
-               LIMIT 1) AS title,
-              (SELECT ${rowValueDisplayExpression('v2')}
-               FROM database_row_values v2
-               WHERE v2.row_id = r.id
-                 AND ${rowValueTsVectorExpression('v2')} @@ plainto_tsquery('english', $${qParam})
-               LIMIT 1) AS snippet
+  const { rows } = await pool.query<RowSearchRow>(
+    `WITH row_documents AS (
+       SELECT r.id,
+              d.workspace_id,
+              r.database_id,
+              r.tags,
+              r.importance,
+              r.updated_at,
+              COALESCE(
+                MAX(v.value_text) FILTER (WHERE p.property_type = 'title'),
+                'Row ' || LEFT(r.id::text, 8)
+              ) AS title,
+              COALESCE(
+                string_agg(
+                  COALESCE(v.value_text, v.value_number::text, v.value_date::text, v.value_bool::text, v.value_json::text, ''),
+                  E'\n' ORDER BY p.position
+                ) FILTER (WHERE p.id IS NOT NULL),
+                ''
+              ) AS body
        FROM database_rows r
        JOIN databases d ON d.id = r.database_id
+       LEFT JOIN database_row_values v ON v.row_id = r.id
+       LEFT JOIN database_properties p
+         ON p.id = v.property_id
+        AND p.database_id = r.database_id
+        AND p.archived_at IS NULL
        WHERE ${conditions.join(' AND ')}
-         AND ${keywordMatch}
-       ORDER BY score DESC, r.updated_at DESC
-       LIMIT ${params.limit}`,
-      values
-    );
-
-    return rows.map((r) => ({
-      id: r.id, type: 'row' as const,
-      title: r.title ?? '(untitled row)',
-      score: r.score,
-      snippet: truncate(r.snippet ?? r.title ?? ''),
-      workspace_id: r.workspace_id, tags: r.tags,
-    }));
-  }
-
-  if (params.mode === 'grep') {
-    const conditions: string[] = ['true'];
-    const values: unknown[] = [];
-    let idx = 1;
-
-    if (params.database_id) { conditions.push(`r.database_id = $${idx++}`); values.push(params.database_id); }
-    if (params.workspace_id) { conditions.push(`d.workspace_id = $${idx++}`); values.push(params.workspace_id); }
-    if (params.tags?.length) { conditions.push(`r.tags && $${idx++}`); values.push(params.tags); }
-    if (params.min_importance != null) { conditions.push(`r.importance >= $${idx++}`); values.push(params.min_importance); }
-    void params.access;
-
-    values.push(`%${params.query}%`);
-    const qParam = idx++;
-
-    const { rows } = await pool.query<{
-      id: string; database_id: string; workspace_id: string | null; tags: string[];
-      score: number; title: string | null; snippet: string | null;
-    }>(
-      `SELECT r.id, r.database_id, d.workspace_id, r.tags,
-              (
-                COALESCE((
-                  SELECT COUNT(*)
-                  FROM database_row_values v_score
-                  WHERE v_score.row_id = r.id
-                    AND (
-                      v_score.value_text ILIKE $${qParam}
-                      OR v_score.value_json::text ILIKE $${qParam}
-                      OR v_score.value_number::text ILIKE $${qParam}
-                      OR v_score.value_date::text ILIKE $${qParam}
-                      OR v_score.value_bool::text ILIKE $${qParam}
-                    )
-                ), 0)
-              )::float AS score,
-              (SELECT v.value_text
-               FROM database_row_values v
-               JOIN database_properties p ON p.id = v.property_id
-               WHERE v.row_id = r.id
-                 AND p.property_type = 'title'
-               LIMIT 1) AS title,
-              (SELECT ${rowValueDisplayExpression('v2')}
-               FROM database_row_values v2
-               WHERE v2.row_id = r.id
-                 AND (
-                   v2.value_text ILIKE $${qParam}
-                   OR v2.value_json::text ILIKE $${qParam}
-                   OR v2.value_number::text ILIKE $${qParam}
-                   OR v2.value_date::text ILIKE $${qParam}
-                   OR v2.value_bool::text ILIKE $${qParam}
-                 )
-               LIMIT 1) AS snippet
-       FROM database_rows r
-       JOIN databases d ON d.id = r.database_id
-       WHERE ${conditions.join(' AND ')}
-         AND EXISTS (
-           SELECT 1
-           FROM database_row_values v
-           WHERE v.row_id = r.id
-             AND (
-               v.value_text ILIKE $${qParam}
-               OR v.value_json::text ILIKE $${qParam}
-               OR v.value_number::text ILIKE $${qParam}
-               OR v.value_date::text ILIKE $${qParam}
-               OR v.value_bool::text ILIKE $${qParam}
-             )
-         )
-       ORDER BY score DESC, r.updated_at DESC
-       LIMIT ${params.limit}`,
-      values
-    );
-
-    return rows.map((r) => ({
-      id: r.id, type: 'row' as const,
-      title: r.title ?? '(untitled row)',
-      score: r.score,
-      snippet: truncate(r.snippet ?? r.title ?? ''),
-      workspace_id: r.workspace_id, tags: r.tags,
-    }));
-  }
-
-  if (params.mode === 'regex') {
-    const conditions: string[] = ['true'];
-    const values: unknown[] = [];
-    let idx = 1;
-
-    if (params.database_id) { conditions.push(`r.database_id = $${idx++}`); values.push(params.database_id); }
-    if (params.workspace_id) { conditions.push(`d.workspace_id = $${idx++}`); values.push(params.workspace_id); }
-    if (params.tags?.length) { conditions.push(`r.tags && $${idx++}`); values.push(params.tags); }
-    if (params.min_importance != null) { conditions.push(`r.importance >= $${idx++}`); values.push(params.min_importance); }
-    void params.access;
-
-    values.push(params.query);
-    const qParam = idx++;
-
-    const { rows } = await pool.query<{
-      id: string; database_id: string; workspace_id: string | null; tags: string[];
-      score: number; title: string | null; snippet: string | null;
-    }>(
-      `SELECT r.id, r.database_id, d.workspace_id, r.tags,
-              (
-                COALESCE((
-                  SELECT COUNT(*)
-                  FROM database_row_values v_score
-                  WHERE v_score.row_id = r.id
-                    AND (
-                      v_score.value_text ~* $${qParam}
-                      OR v_score.value_json::text ~* $${qParam}
-                      OR v_score.value_number::text ~* $${qParam}
-                      OR v_score.value_date::text ~* $${qParam}
-                      OR v_score.value_bool::text ~* $${qParam}
-                    )
-                ), 0)
-              )::float AS score,
-              (SELECT v.value_text
-               FROM database_row_values v
-               JOIN database_properties p ON p.id = v.property_id
-               WHERE v.row_id = r.id
-                 AND p.property_type = 'title'
-               LIMIT 1) AS title,
-              (SELECT ${rowValueDisplayExpression('v2')}
-               FROM database_row_values v2
-               WHERE v2.row_id = r.id
-                 AND (
-                   v2.value_text ~* $${qParam}
-                   OR v2.value_json::text ~* $${qParam}
-                   OR v2.value_number::text ~* $${qParam}
-                   OR v2.value_date::text ~* $${qParam}
-                   OR v2.value_bool::text ~* $${qParam}
-                 )
-               LIMIT 1) AS snippet
-       FROM database_rows r
-       JOIN databases d ON d.id = r.database_id
-       WHERE ${conditions.join(' AND ')}
-         AND EXISTS (
-           SELECT 1
-           FROM database_row_values v
-           WHERE v.row_id = r.id
-             AND (
-               v.value_text ~* $${qParam}
-               OR v.value_json::text ~* $${qParam}
-               OR v.value_number::text ~* $${qParam}
-               OR v.value_date::text ~* $${qParam}
-               OR v.value_bool::text ~* $${qParam}
-             )
-         )
-       ORDER BY score DESC, r.updated_at DESC
-       LIMIT ${params.limit}`,
-      values
-    );
-
-    return rows.map((r) => ({
-      id: r.id, type: 'row' as const,
-      title: r.title ?? '(untitled row)',
-      score: r.score,
-      snippet: truncate(r.snippet ?? r.title ?? ''),
-      workspace_id: r.workspace_id, tags: r.tags,
-    }));
-  }
-
-  const conditions: string[] = ['r.embedding IS NOT NULL'];
-  const values: unknown[] = [];
-  let idx = 1;
-
-  if (params.database_id) { conditions.push(`r.database_id = $${idx++}`); values.push(params.database_id); }
-  if (params.workspace_id) { conditions.push(`d.workspace_id = $${idx++}`); values.push(params.workspace_id); }
-  if (params.tags?.length) { conditions.push(`r.tags && $${idx++}`); values.push(params.tags); }
-  if (params.min_importance != null) { conditions.push(`r.importance >= $${idx++}`); values.push(params.min_importance); }
-  void params.access;
-
-  values.push(vectorToSql(params.vec!));
-  const vecParam = idx++;
-
-  let scoreExpr: string;
-  switch (params.mode) {
-    case 'similarity':
-      scoreExpr = `1 - (r.embedding <=> $${vecParam}::vector)`;
-      break;
-    case 'similarity_recency':
-      scoreExpr = `0.7 * (1 - (r.embedding <=> $${vecParam}::vector)) + 0.3 * EXP(-EXTRACT(EPOCH FROM (NOW() - r.created_at)) / (30 * 86400))`;
-      break;
-    case 'similarity_importance':
-      scoreExpr = `0.6 * (1 - (r.embedding <=> $${vecParam}::vector)) + 0.4 * r.importance`;
-      break;
-    case 'hybrid': {
-      values.push(params.query);
-      const ftsParam = idx++;
-      scoreExpr = `0.5 * (1 - (r.embedding <=> $${vecParam}::vector))
-        + 0.2 * r.importance
-        + 0.2 * EXP(-EXTRACT(EPOCH FROM (NOW() - r.created_at)) / (30 * 86400))
-        + 0.1 * (${rowKeywordScoreExpression(ftsParam)})`;
-      break;
-    }
-    default:
-      scoreExpr = `1 - (r.embedding <=> $${vecParam}::vector)`;
-  }
-
-  const where = `WHERE ${conditions.join(' AND ')}`;
-
-  const { rows } = await pool.query<{
-    id: string; database_id: string; workspace_id: string | null; tags: string[];
-    score: number; title: string | null; snippet: string | null;
-  }>(
-    `SELECT r.id, r.database_id, d.workspace_id, r.tags,
-            (${scoreExpr}) AS score,
-            (SELECT v.value_text
-             FROM database_row_values v
-             JOIN database_properties p ON p.id = v.property_id
-             WHERE v.row_id = r.id AND p.property_type = 'title'
-             LIMIT 1) AS title,
-            (SELECT v2.value_text
-             FROM database_row_values v2
-             JOIN database_properties p2 ON p2.id = v2.property_id
-             WHERE v2.row_id = r.id AND p2.property_type = 'text'
-               AND v2.value_text IS NOT NULL AND v2.value_text != ''
-             LIMIT 1) AS snippet
-     FROM database_rows r
-     JOIN databases d ON d.id = r.database_id
-     ${where}
-     ORDER BY score DESC
-     LIMIT ${params.limit}`,
+       GROUP BY r.id, d.workspace_id
+     ), ranked AS (
+       SELECT *,
+              to_tsvector('simple', title || ' ' || body) AS document,
+              GREATEST(similarity(title, $${queryIndex}), similarity(body, $${queryIndex})) AS fuzzy_score
+       FROM row_documents
+     )
+     SELECT id,
+            workspace_id,
+            database_id,
+            title,
+            tags,
+            updated_at,
+            (
+              CASE
+                WHEN document @@ websearch_to_tsquery('simple', $${queryIndex})
+                  THEN ts_rank_cd(document, websearch_to_tsquery('simple', $${queryIndex}))
+                ELSE 0
+              END
+              + fuzzy_score * 0.5
+              + importance * 0.05
+            )::float AS score,
+            LEFT(CASE WHEN body <> '' THEN body ELSE title END, 400) AS snippet
+     FROM ranked
+     WHERE document @@ websearch_to_tsquery('simple', $${queryIndex})
+        OR fuzzy_score >= 0.08
+        OR STRPOS(LOWER(title), LOWER($${queryIndex})) > 0
+        OR STRPOS(LOWER(body), LOWER($${queryIndex})) > 0
+     ORDER BY score DESC, updated_at DESC
+     LIMIT $${limitIndex}`,
     values
   );
 
-  return rows.map((r) => ({
-    id: r.id, type: 'row' as const,
-    title: r.title ?? '(untitled row)',
-    score: r.score,
-    snippet: truncate(r.snippet ?? r.title ?? ''),
-    workspace_id: r.workspace_id, tags: r.tags,
+  return rows.map((row) => ({
+    id: row.id,
+    type: 'row',
+    title: row.title ?? '(untitled row)',
+    score: Number(row.score),
+    snippet: row.snippet ?? row.title ?? '',
+    workspace_id: row.workspace_id,
+    session_id: null,
+    database_id: row.database_id,
+    tags: row.tags ?? [],
+    updated_at: row.updated_at,
   }));
+}
+
+export async function search(params: {
+  query: string;
+  workspace_id: string;
+  content_types?: SearchContentType[];
+  session_id?: string;
+  database_id?: string;
+  tags?: string[];
+  min_importance?: number;
+  limit?: number;
+}): Promise<SearchResult[]> {
+  if (typeof params.workspace_id !== 'string' || !params.workspace_id.trim()) {
+    throw new Error('workspace_id is required');
+  }
+  const query = normalizeQuery(params.query);
+  const limit = normalizeLimit(params.limit);
+  const contentTypes = new Set(resolveContentTypes(params.content_types, params));
+  const minImportance = normalizeImportance(params.min_importance);
+  await requireActiveWorkspace(params.workspace_id);
+
+  if (params.session_id) {
+    const session = await requireSession(params.session_id);
+    if (session.workspace_id !== params.workspace_id) {
+      throw new Error('session_id must belong to the requested workspace');
+    }
+  }
+  if (params.database_id) {
+    const database = await requireDatabase(params.database_id);
+    if (database.workspace_id !== params.workspace_id) {
+      throw new Error('database_id must belong to the requested workspace');
+    }
+  }
+
+  const [pages, rows] = await Promise.all([
+    contentTypes.has('pages')
+      ? searchPages({ ...params, query, limit, min_importance: minImportance })
+      : Promise.resolve([]),
+    contentTypes.has('rows')
+      ? searchRows({ ...params, query, limit, min_importance: minImportance })
+      : Promise.resolve([]),
+  ]);
+
+  return [...pages, ...rows]
+    .sort((left, right) => right.score - left.score || right.updated_at.localeCompare(left.updated_at))
+    .slice(0, limit);
 }

@@ -9,6 +9,7 @@ DB_USER="${DB_USER:-postgres}"
 DB_PASS="${DB_PASSWORD:-${DB_USER}}"
 DB_PORT="${DB_PORT:-}"
 selected_db_port=""
+export COMPOSE_PROJECT_NAME="horizonlayer-smoke-$$"
 
 select_db_port() {
   if [[ -n "$DB_PORT" ]]; then
@@ -48,7 +49,9 @@ EOF
 cleanup() {
   local exit_code=$?
 
-  docker compose stop db >/dev/null 2>&1 || true
+  DB_PORT="${selected_db_port:-${DB_PORT:-5432}}" \
+    DB_NAME="$DB_NAME" DB_USER="$DB_USER" DB_PASSWORD="$DB_PASS" \
+    docker compose down -v --remove-orphans >/dev/null 2>&1 || true
 
   exit "$exit_code"
 }
@@ -72,7 +75,7 @@ wait_for_db() {
 }
 
 selected_db_port="$(select_db_port)"
-DATABASE_URL="${DATABASE_URL:-postgres://${DB_USER}:${DB_PASS}@localhost:${selected_db_port}/${DB_NAME}}"
+DATABASE_URL="postgres://${DB_USER}:${DB_PASS}@127.0.0.1:${selected_db_port}/${DB_NAME}"
 
 echo "Starting local Postgres on 127.0.0.1:${selected_db_port}..."
 DB_PORT="$selected_db_port" DB_NAME="$DB_NAME" DB_USER="$DB_USER" DB_PASSWORD="$DB_PASS" docker compose up -d db

@@ -1,30 +1,40 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const clientQueryMock = vi.fn();
-const poolQueryMock = vi.fn();
-const releaseMock = vi.fn();
-const connectMock = vi.fn();
+const mocks = vi.hoisted(() => ({
+  requireSession: vi.fn(),
+  requireActiveSession: vi.fn(),
+  lockActiveSessionForChildWrite: vi.fn(),
+  requireActiveWorkspace: vi.fn(),
+  clientQuery: vi.fn(),
+  connect: vi.fn(),
+  poolQuery: vi.fn(),
+  release: vi.fn(),
+  touchSession: vi.fn(),
+}));
 
 vi.mock('../client.js', () => ({
   getPool: () => ({
-    connect: connectMock,
-    query: poolQueryMock,
+    connect: mocks.connect,
+    query: mocks.poolQuery,
   }),
 }));
 
-vi.mock('./accessControl.js', () => ({
-  assertSessionReadAccess: vi.fn().mockResolvedValue(undefined),
-  assertSessionWriteAccess: vi.fn().mockResolvedValue({ workspace_id: 'ws-1' }),
-  assertWorkspaceReadAccess: vi.fn().mockResolvedValue(undefined),
-  assertWorkspaceWriteAccess: vi.fn().mockResolvedValue(undefined),
+vi.mock('./scopeGuards.js', () => ({
+  lockActiveSessionForChildWrite: mocks.lockActiveSessionForChildWrite,
+  requireActiveSession: mocks.requireActiveSession,
+  requireActiveWorkspace: mocks.requireActiveWorkspace,
+  requireSession: mocks.requireSession,
+}));
+
+vi.mock('./sessions.js', () => ({
+  touchSession: mocks.touchSession,
 }));
 
 function buildRun(overrides: Record<string, unknown> = {}) {
   return {
     id: 'run-1',
     workspace_id: 'ws-1',
-    task_id: null,
-    parent_run_id: null,
+    session_id: 'session-1',
     agent_name: 'planner',
     title: null,
     status: 'running',
@@ -41,166 +51,76 @@ function buildRun(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function mockLockedRun(run: ReturnType<typeof buildRun>): void {
+  mocks.clientQuery.mockImplementation(async (sql: string) => {
+    if (sql === 'BEGIN' || sql === 'ROLLBACK') {
+      return { rowCount: 0, rows: [] };
+    }
+    if (sql.includes('FROM agent_runs') && sql.includes('FOR UPDATE')) {
+      return { rows: [run] };
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  });
+}
+
 describe('run query state machine', () => {
   beforeEach(() => {
-    clientQueryMock.mockReset();
-    poolQueryMock.mockReset();
-    releaseMock.mockReset();
-    connectMock.mockReset();
-    connectMock.mockResolvedValue({
-      query: clientQueryMock,
-      release: releaseMock,
+    for (const mock of Object.values(mocks)) mock.mockReset();
+    mocks.connect.mockResolvedValue({
+      query: mocks.clientQuery,
+      release: mocks.release,
     });
+    mocks.requireSession.mockResolvedValue({ workspace_id: 'ws-1' });
+    mocks.requireActiveSession.mockResolvedValue({ workspace_id: 'ws-1' });
+    mocks.lockActiveSessionForChildWrite.mockResolvedValue({ workspace_id: 'ws-1' });
+    mocks.requireActiveWorkspace.mockResolvedValue(undefined);
+    mocks.touchSession.mockResolvedValue(undefined);
   });
 
-  it('rejects checkpoints on non-running runs', async () => {
-    clientQueryMock.mockImplementation(async (sql: string) => {
-      if (sql === 'BEGIN' || sql === 'ROLLBACK') {
-        return { rowCount: 0, rows: [] };
-      }
-      if (sql.includes('SELECT * FROM agent_runs WHERE id = $1 LIMIT 1 FOR UPDATE')) {
-        return {
-          rows: [
-            buildRun({
-              status: 'completed',
-            }),
-          ],
-        };
-      }
-      throw new Error(`Unexpected query: ${sql}`);
-    });
+  it('rejects blank agent names before starting a run', async () => {
+    const { startRun } = await import('./runs.js');
+
+    await expect(startRun({
+      agent_name: '  ',
+      workspace_id: 'ws-1',
+    })).rejects.toThrow('agent_name is required');
+    expect(mocks.connect).not.toHaveBeenCalled();
+  });
+
+  it('rejects checkpoints on terminal runs and rolls back', async () => {
+    mockLockedRun(buildRun({ status: 'completed' }));
 
     const { checkpointRun } = await import('./runs.js');
-    await expect(
-      checkpointRun({
-        run_id: 'run-1',
-        summary: 'done',
-      })
-    ).rejects.toThrow('Run run-1 is already completed, cannot checkpoint');
-    expect(releaseMock).toHaveBeenCalled();
+    await expect(checkpointRun({
+      run_id: 'run-1',
+      summary: 'too late',
+    })).rejects.toThrow('Run run-1 is already completed, cannot checkpoint');
+
+    expect(mocks.clientQuery.mock.calls.at(-1)?.[0]).toBe('ROLLBACK');
+    expect(mocks.release).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects terminal transitions on non-running runs', async () => {
-    poolQueryMock.mockImplementation(async (sql: string) => {
-      if (sql === 'SELECT * FROM agent_runs WHERE id = $1 LIMIT 1') {
-        return {
-          rows: [
-            buildRun({
-              status: 'failed',
-            }),
-          ],
-        };
-      }
-      if (sql.includes('SELECT *') && sql.includes('FROM run_checkpoints')) {
-        return { rows: [] };
-      }
-      throw new Error(`Unexpected query: ${sql}`);
-    });
+  it('rejects finishing terminal runs and rolls back', async () => {
+    mockLockedRun(buildRun({ status: 'failed' }));
 
-    const { completeRun } = await import('./runs.js');
-    await expect(
-      completeRun({
-        run_id: 'run-1',
-      })
-    ).rejects.toThrow('Run run-1 is already failed, cannot complete');
-    expect(connectMock).not.toHaveBeenCalled();
+    const { finishRun } = await import('./runs.js');
+    await expect(finishRun({
+      outcome: 'completed',
+      run_id: 'run-1',
+    })).rejects.toThrow('Run run-1 is already failed, cannot finish');
+
+    expect(mocks.clientQuery.mock.calls.at(-1)?.[0]).toBe('ROLLBACK');
+    expect(mocks.release).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects starting a run with a task from another workspace', async () => {
-    poolQueryMock.mockImplementation(async (sql: string) => {
-      if (sql.includes('FROM tasks')) {
-        return {
-          rows: [{ session_id: null, workspace_id: 'ws-2' }],
-        };
-      }
-      throw new Error(`Unexpected query: ${sql}`);
-    });
+  it('rejects error_message for non-failed outcomes before checking out a client', async () => {
+    const { finishRun } = await import('./runs.js');
 
-    const { startRun } = await import('./runs.js');
-    await expect(
-      startRun({
-        agent_name: 'planner',
-        task_id: 'task-1',
-        workspace_id: 'ws-1',
-      })
-    ).rejects.toThrow('task_id must belong to workspace ws-1');
-    expect(connectMock).not.toHaveBeenCalled();
-  });
-
-  it('rejects starting a run when the parent run session does not match', async () => {
-    poolQueryMock.mockImplementation(async (sql: string) => {
-      if (sql.includes('FROM agent_runs')) {
-        return {
-          rows: [{ session_id: null, workspace_id: 'ws-1' }],
-        };
-      }
-      throw new Error(`Unexpected query: ${sql}`);
-    });
-
-    const { startRun } = await import('./runs.js');
-    await expect(
-      startRun({
-        agent_name: 'planner',
-        parent_run_id: 'run-0',
-        session_id: 'session-1',
-        workspace_id: 'ws-1',
-      })
-    ).rejects.toThrow('parent_run_id must belong to the requested session');
-    expect(connectMock).not.toHaveBeenCalled();
-  });
-
-  it('rejects checkpoints from an agent that does not own the run', async () => {
-    clientQueryMock.mockImplementation(async (sql: string) => {
-      if (sql === 'BEGIN' || sql === 'ROLLBACK') {
-        return { rowCount: 0, rows: [] };
-      }
-      if (sql.includes('SELECT * FROM agent_runs WHERE id = $1 LIMIT 1 FOR UPDATE')) {
-        return {
-          rows: [
-            buildRun({
-              agent_name: 'planner',
-            }),
-          ],
-        };
-      }
-      throw new Error(`Unexpected query: ${sql}`);
-    });
-
-    const { checkpointRun } = await import('./runs.js');
-    await expect(
-      checkpointRun({
-        agent_name: 'worker',
-        run_id: 'run-1',
-        summary: 'not mine',
-      })
-    ).rejects.toThrow('Run run-1 is owned by planner, not worker');
-    expect(releaseMock).toHaveBeenCalled();
-  });
-
-  it('rejects terminal transitions from an agent that does not own the run', async () => {
-    poolQueryMock.mockImplementation(async (sql: string) => {
-      if (sql === 'SELECT * FROM agent_runs WHERE id = $1 LIMIT 1') {
-        return {
-          rows: [
-            buildRun({
-              agent_name: 'planner',
-            }),
-          ],
-        };
-      }
-      if (sql.includes('SELECT *') && sql.includes('FROM run_checkpoints')) {
-        return { rows: [] };
-      }
-      throw new Error(`Unexpected query: ${sql}`);
-    });
-
-    const { completeRun } = await import('./runs.js');
-    await expect(
-      completeRun({
-        agent_name: 'worker',
-        run_id: 'run-1',
-      })
-    ).rejects.toThrow('Run run-1 is owned by planner, not worker');
-    expect(connectMock).not.toHaveBeenCalled();
+    await expect(finishRun({
+      error_message: 'not applicable',
+      outcome: 'completed',
+      run_id: 'run-1',
+    })).rejects.toThrow('error_message is only valid when outcome is failed');
+    expect(mocks.connect).not.toHaveBeenCalled();
   });
 });

@@ -1,13 +1,25 @@
 import { getPool, type PoolClient } from '../client.js';
-import type { AccessContext } from '../access.js';
 import {
-  assertSessionReadAccess,
-  assertSessionWriteAccess,
-  assertWorkspaceReadAccess,
-  assertWorkspaceWriteAccess,
-} from './accessControl.js';
+  requireActiveSession,
+  requireActiveWorkspace,
+  requireSession,
+} from './scopeGuards.js';
 
 export type SessionStatus = 'active' | 'closed';
+
+const SESSION_COLUMNS = `
+  id,
+  workspace_id,
+  title,
+  status,
+  summary,
+  metadata,
+  started_at,
+  last_activity_at,
+  ended_at,
+  created_at,
+  updated_at
+`;
 
 export interface Session {
   id: string;
@@ -25,7 +37,6 @@ export interface Session {
 
 export interface SessionWithCounts extends Session {
   page_count: number;
-  task_count: number;
   run_count: number;
 }
 
@@ -33,24 +44,12 @@ export interface SessionResumePage {
   id: string;
   parent_page_id: string | null;
   title: string;
+  revision: number;
   importance: number;
   tags: string[];
   created_at: string;
   updated_at: string;
   content_preview: string;
-}
-
-export interface SessionResumeTask {
-  id: string;
-  title: string;
-  status: string;
-  priority: number;
-  owner_agent_name: string | null;
-  handoff_target_agent_name: string | null;
-  blocker_reason: string | null;
-  last_event_at: string;
-  created_at: string;
-  updated_at: string;
 }
 
 export interface SessionRunCheckpoint {
@@ -65,8 +64,8 @@ export interface SessionRunCheckpoint {
 
 export interface SessionResumeRun {
   id: string;
-  task_id: string | null;
-  parent_run_id: string | null;
+  workspace_id: string;
+  session_id: string | null;
   agent_name: string;
   title: string | null;
   status: string;
@@ -90,25 +89,22 @@ export interface SessionResumeSearchHit {
   updated_at: string;
 }
 
-export interface SessionResumeBundle {
-  session: SessionWithCounts;
-  recent_pages: SessionResumePage[];
-  open_and_recent_tasks: SessionResumeTask[];
-  recent_runs: SessionResumeRun[];
-  search_hits: SessionResumeSearchHit[];
+export interface SessionResumeCollectionStatus {
+  complete: boolean;
+  has_more: boolean;
+  limit: number;
+  returned: number;
 }
 
-export interface SessionResumeBundleResult {
-  bytes: number;
-  bundle?: SessionResumeBundle;
-  file_path?: string;
-  max_bytes: number;
-  preview?: {
-    recent_page_count: number;
-    recent_run_count: number;
-    search_hit_count: number;
-    session: SessionWithCounts;
-    task_count: number;
+export interface SessionResumeResult {
+  session: SessionWithCounts;
+  recent_pages: SessionResumePage[];
+  recent_runs: SessionResumeRun[];
+  search_hits: SessionResumeSearchHit[];
+  collection_status: {
+    recent_pages: SessionResumeCollectionStatus;
+    recent_runs: SessionResumeCollectionStatus;
+    search_hits: SessionResumeCollectionStatus;
   };
   truncated: boolean;
 }
@@ -125,23 +121,48 @@ function defaultSessionTitle(): string {
   return `Session ${new Date().toISOString()}`;
 }
 
+function boundedInteger(name: string, value: number | undefined, fallback: number, max: number): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved < 0 || resolved > max) {
+    throw new Error(`${name} must be an integer between 0 and ${max}`);
+  }
+  return resolved;
+}
+
 function truncate(text: string, max = 400): string {
   if (text.length <= max) return text;
   const cut = text.lastIndexOf(' ', max);
   return `${text.slice(0, cut > 0 ? cut : max)}...`;
 }
 
-function jsonBytes(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value, null, 2), 'utf8');
+function boundedRecord(
+  value: Record<string, unknown> | undefined,
+  maxBytes: number
+): { value: Record<string, unknown>; truncated: boolean } {
+  const record = value ?? {};
+  if (Buffer.byteLength(JSON.stringify(record), 'utf8') <= maxBytes) {
+    return { value: record, truncated: false };
+  }
+  return {
+    value: { _truncated: true },
+    truncated: true,
+  };
 }
 
-function resumePreview(bundle: SessionResumeBundle): NonNullable<SessionResumeBundleResult['preview']> {
+function boundedCollection<T>(records: T[], limit: number): {
+  items: T[];
+  status: SessionResumeCollectionStatus;
+} {
+  const hasMore = records.length > limit;
+  const items = hasMore ? records.slice(0, limit) : records;
   return {
-    recent_page_count: bundle.recent_pages.length,
-    recent_run_count: bundle.recent_runs.length,
-    search_hit_count: bundle.search_hits.length,
-    session: bundle.session,
-    task_count: bundle.open_and_recent_tasks.length,
+    items,
+    status: {
+      complete: !hasMore,
+      has_more: hasMore,
+      limit,
+      returned: items.length,
+    },
   };
 }
 
@@ -150,10 +171,8 @@ export async function createSession(params: {
   title?: string;
   summary?: string;
   metadata?: Record<string, unknown>;
-  access?: AccessContext;
 }): Promise<Session> {
-  const access = params.access ?? { kind: 'system' as const };
-  await assertWorkspaceWriteAccess(params.workspace_id, access);
+  await requireActiveWorkspace(params.workspace_id);
   const pool = getPool();
   const { rows } = await pool.query<Session>(
     `INSERT INTO sessions (
@@ -163,7 +182,7 @@ export async function createSession(params: {
        metadata
      )
      VALUES ($1, $2, $3, $4)
-     RETURNING *`,
+     RETURNING ${SESSION_COLUMNS}`,
     [
       params.workspace_id,
       params.title ?? defaultSessionTitle(),
@@ -174,11 +193,8 @@ export async function createSession(params: {
   return rows[0];
 }
 
-export async function closeSession(
-  sessionId: string,
-  access: AccessContext = { kind: 'system' }
-): Promise<Session | null> {
-  const sessionAccess = await assertSessionWriteAccess(sessionId, access);
+export async function closeSession(sessionId: string): Promise<Session | null> {
+  const sessionScope = await requireActiveSession(sessionId);
   const pool = getPool();
   const { rows } = await pool.query<Session>(
     `UPDATE sessions
@@ -188,8 +204,9 @@ export async function closeSession(
          updated_at = NOW()
      WHERE id = $1
        AND workspace_id = $2
-     RETURNING *`,
-    [sessionId, sessionAccess.workspace_id]
+       AND status = 'active'
+     RETURNING ${SESSION_COLUMNS}`,
+    [sessionId, sessionScope.workspace_id]
   );
   return rows[0] ?? null;
 }
@@ -198,46 +215,43 @@ export async function getSession(
   sessionId: string,
   params: {
     workspace_id?: string;
-    access?: AccessContext;
   } = {}
 ): Promise<SessionWithCounts | null> {
-  const access = params.access ?? { kind: 'system' as const };
-  const sessionAccess = await assertSessionReadAccess(sessionId, access);
-  ensureWorkspaceMatch(sessionAccess.workspace_id, params.workspace_id);
+  const sessionScope = await requireSession(sessionId);
+  ensureWorkspaceMatch(sessionScope.workspace_id, params.workspace_id);
   const pool = getPool();
   const { rows } = await pool.query<SessionWithCounts>(
-    `SELECT s.*,
-            (SELECT COUNT(*) FROM pages WHERE session_id = s.id)::int AS page_count,
-            (SELECT COUNT(*) FROM tasks WHERE session_id = s.id)::int AS task_count,
+    `SELECT s.id, s.workspace_id, s.title, s.status, s.summary, s.metadata,
+            s.started_at, s.last_activity_at, s.ended_at, s.created_at, s.updated_at,
+            (SELECT COUNT(*) FROM pages WHERE session_id = s.id AND archived_at IS NULL)::int AS page_count,
             (SELECT COUNT(*) FROM agent_runs WHERE session_id = s.id)::int AS run_count
      FROM sessions s
      WHERE s.id = $1
        AND s.workspace_id = $2
      LIMIT 1`,
-    [sessionId, sessionAccess.workspace_id]
+    [sessionId, sessionScope.workspace_id]
   );
   return rows[0] ?? null;
 }
 
 export async function listSessions(params: {
   workspace_id: string;
+  status?: SessionStatus[];
   limit?: number;
   offset?: number;
-  access?: AccessContext;
 }): Promise<Session[]> {
-  const access = params.access ?? { kind: 'system' as const };
-  await assertWorkspaceReadAccess(params.workspace_id, access);
+  await requireActiveWorkspace(params.workspace_id);
   const pool = getPool();
-  const limit = params.limit ?? 50;
-  const offset = params.offset ?? 0;
+  const limit = boundedInteger('limit', params.limit, 50, 101);
+  const offset = boundedInteger('offset', params.offset, 0, 1_000_000);
   const { rows } = await pool.query<Session>(
-    `SELECT *
+    `SELECT ${SESSION_COLUMNS}
      FROM sessions
      WHERE workspace_id = $1
+       AND ($2::text[] IS NULL OR status = ANY($2))
      ORDER BY last_activity_at DESC, created_at DESC
-     LIMIT ${limit}
-     OFFSET ${offset}`,
-    [params.workspace_id]
+     LIMIT $3 OFFSET $4`,
+    [params.workspace_id, params.status?.length ? params.status : null, limit, offset]
   );
   return rows;
 }
@@ -254,36 +268,34 @@ export async function touchSession(
     `UPDATE sessions
      SET last_activity_at = NOW(),
          updated_at = NOW()
-     WHERE id = $1`,
+     WHERE id = $1
+       AND status = 'active'`,
     [sessionId]
   );
 }
 
-export async function getSessionResumeBundle(params: {
+export async function resumeSession(params: {
   session_id: string;
   workspace_id?: string;
   max_items?: number;
-  max_bytes?: number;
-  access?: AccessContext;
-}): Promise<SessionResumeBundleResult | null> {
-  const access = params.access ?? { kind: 'system' as const };
+}): Promise<SessionResumeResult | null> {
   const session = await getSession(params.session_id, {
     workspace_id: params.workspace_id,
-    access,
   });
   if (!session) {
     return null;
   }
 
-  const maxItems = params.max_items ?? 10;
-  const maxBytes = params.max_bytes ?? 32768;
+  const maxItems = boundedInteger('max_items', params.max_items, 10, 100);
+  const searchLimit = Math.min(maxItems, 5);
   const pool = getPool();
 
-  const [recentPagesResult, recentTasksResult, recentRunsResult] = await Promise.all([
+  const [recentPagesResult, recentRunsResult] = await Promise.all([
     pool.query<SessionResumePage>(
       `SELECT p.id,
               p.parent_page_id,
               p.title,
+              p.revision,
               p.importance,
               p.tags,
               p.created_at,
@@ -295,6 +307,7 @@ export async function getSessionResumeBundle(params: {
                     SELECT content, position
                     FROM blocks
                     WHERE page_id = p.id
+                      AND archived_at IS NULL
                       AND content <> ''
                     ORDER BY position ASC
                     LIMIT 8
@@ -304,34 +317,27 @@ export async function getSessionResumeBundle(params: {
               ) AS content_preview
        FROM pages p
        WHERE p.session_id = $1
+         AND p.archived_at IS NULL
        ORDER BY p.updated_at DESC
        LIMIT $2`,
-      [params.session_id, maxItems]
-    ),
-    pool.query<SessionResumeTask>(
-      `SELECT id,
-              title,
-              status,
-              priority,
-              owner_agent_name,
-              handoff_target_agent_name,
-              blocker_reason,
-              last_event_at,
-              created_at,
-              updated_at
-       FROM tasks
-       WHERE session_id = $1
-       ORDER BY
-         CASE
-           WHEN status IN ('done', 'failed', 'cancelled') THEN 1
-           ELSE 0
-         END ASC,
-         last_event_at DESC
-       LIMIT $2`,
-      [params.session_id, maxItems]
+      [params.session_id, maxItems + 1]
     ),
     pool.query<SessionResumeRun>(
-      `SELECT r.*,
+      `SELECT r.id,
+              r.workspace_id,
+              r.session_id,
+              r.agent_name,
+              r.title,
+              r.status,
+              r.metadata,
+              r.result,
+              r.error_message,
+              r.latest_checkpoint_sequence,
+              r.latest_checkpoint_at,
+              r.started_at,
+              r.finished_at,
+              r.created_at,
+              r.updated_at,
               checkpoint.latest_checkpoint
        FROM agent_runs r
        LEFT JOIN LATERAL (
@@ -347,24 +353,24 @@ export async function getSessionResumeBundle(params: {
        WHERE r.session_id = $1
        ORDER BY r.started_at DESC
        LIMIT $2`,
-      [params.session_id, maxItems]
+      [params.session_id, maxItems + 1]
     ),
   ]);
 
   let searchHits: SessionResumeSearchHit[] = [];
   const resumeQuery = (session.summary ?? '').trim() || session.title.trim();
   if (resumeQuery.length > 0) {
-    const ilikeQuery = `%${resumeQuery}%`;
     const { rows } = await pool.query<SessionResumeSearchHit>(
       `SELECT p.id,
               p.title,
               (
-                CASE WHEN p.title ILIKE $2 THEN 2 ELSE 0 END
+                CASE WHEN STRPOS(LOWER(p.title), LOWER($2)) > 0 THEN 2 ELSE 0 END
                 + COALESCE((
                   SELECT COUNT(*)
                   FROM blocks b_score
                   WHERE b_score.page_id = p.id
-                    AND b_score.content ILIKE $2
+                    AND b_score.archived_at IS NULL
+                    AND STRPOS(LOWER(b_score.content), LOWER($2)) > 0
                 ), 0)
               )::float AS score,
               COALESCE(
@@ -372,7 +378,8 @@ export async function getSessionResumeBundle(params: {
                   SELECT b.content
                   FROM blocks b
                   WHERE b.page_id = p.id
-                    AND b.content ILIKE $2
+                    AND b.archived_at IS NULL
+                    AND STRPOS(LOWER(b.content), LOWER($2)) > 0
                   ORDER BY b.position ASC
                   LIMIT 1
                 ),
@@ -381,95 +388,73 @@ export async function getSessionResumeBundle(params: {
               p.updated_at
        FROM pages p
        WHERE p.session_id = $1
+         AND p.archived_at IS NULL
          AND (
-           p.title ILIKE $2
+           STRPOS(LOWER(p.title), LOWER($2)) > 0
            OR EXISTS (
              SELECT 1
              FROM blocks b
              WHERE b.page_id = p.id
-               AND b.content ILIKE $2
+               AND b.archived_at IS NULL
+               AND STRPOS(LOWER(b.content), LOWER($2)) > 0
            )
          )
        ORDER BY score DESC, p.updated_at DESC
        LIMIT $3`,
-      [params.session_id, ilikeQuery, Math.min(maxItems, 5)]
+      [params.session_id, resumeQuery, searchLimit + 1]
     );
-    searchHits = rows.map((row) => ({
-      ...row,
-      snippet: truncate(row.snippet),
-    }));
+    searchHits = rows;
   }
 
-  const bundle: SessionResumeBundle = {
-    session,
-    recent_pages: recentPagesResult.rows.map((page) => ({
-      ...page,
-      content_preview: truncate(page.content_preview, 1200),
-    })),
-    open_and_recent_tasks: recentTasksResult.rows,
-    recent_runs: recentRunsResult.rows,
-    search_hits: searchHits,
+  const recentPages = boundedCollection(recentPagesResult.rows, maxItems);
+  const recentRuns = boundedCollection(recentRunsResult.rows, maxItems);
+  const boundedSearchHits = boundedCollection(searchHits, searchLimit);
+  const collectionStatus = {
+    recent_pages: recentPages.status,
+    recent_runs: recentRuns.status,
+    search_hits: boundedSearchHits.status,
+  };
+  let truncated = Object.values(collectionStatus).some((status) => status.has_more);
+  const boundRecord = (value: Record<string, unknown> | undefined, maxBytes: number) => {
+    const bounded = boundedRecord(value, maxBytes);
+    truncated ||= bounded.truncated;
+    return bounded.value;
+  };
+  const boundText = (value: string, max: number) => {
+    const bounded = truncate(value, max);
+    truncated ||= bounded !== value;
+    return bounded;
   };
 
-  let serialized = JSON.stringify(bundle, null, 2);
-  let bytes = Buffer.byteLength(serialized, 'utf8');
-  if (bytes > maxBytes) {
-    const compactBundle: SessionResumeBundle = {
-      ...bundle,
-      recent_pages: bundle.recent_pages.map((page) => ({
-        ...page,
-        content_preview: truncate(page.content_preview, 200),
-      })),
-      recent_runs: bundle.recent_runs.map((run) => ({
-        ...run,
-        latest_checkpoint: run.latest_checkpoint
-          ? {
-            ...run.latest_checkpoint,
-            summary: run.latest_checkpoint.summary
-              ? truncate(run.latest_checkpoint.summary, 200)
-              : null,
-            state: {},
-            metadata: {},
-          }
-          : null,
-      })),
-      search_hits: bundle.search_hits.map((hit) => ({
-        ...hit,
-        snippet: truncate(hit.snippet, 200),
-      })),
-    };
-    serialized = JSON.stringify(compactBundle, null, 2);
-    bytes = Buffer.byteLength(serialized, 'utf8');
-    const preview = resumePreview(compactBundle);
-    if (bytes > maxBytes) {
-      const previewBytes = jsonBytes(preview);
-      if (previewBytes <= maxBytes) {
-        return {
-          bytes: previewBytes,
-          max_bytes: maxBytes,
-          preview,
-          truncated: true,
-        };
-      }
-      return {
-        bytes: 0,
-        max_bytes: maxBytes,
-        truncated: true,
-      };
-    }
-    return {
-      bundle: compactBundle,
-      bytes,
-      max_bytes: maxBytes,
-      preview,
-      truncated: true,
-    };
-  }
-
   return {
-    bundle,
-    bytes,
-    max_bytes: maxBytes,
-    truncated: false,
+    session: {
+      ...session,
+      metadata: boundRecord(session.metadata, 4_096),
+    },
+    recent_pages: recentPages.items.map((page) => ({
+      ...page,
+      content_preview: boundText(page.content_preview, 1_200),
+    })),
+    recent_runs: recentRuns.items.map((run) => ({
+      ...run,
+      metadata: boundRecord(run.metadata, 4_096),
+      result: boundRecord(run.result, 8_192),
+      latest_checkpoint: run.latest_checkpoint
+        ? {
+          ...run.latest_checkpoint,
+          summary: run.latest_checkpoint.summary
+            ? boundText(run.latest_checkpoint.summary, 1_000)
+            : null,
+          state: boundRecord(run.latest_checkpoint.state, 8_192),
+          metadata: boundRecord(run.latest_checkpoint.metadata, 4_096),
+        }
+        : null,
+    })),
+    search_hits: boundedSearchHits.items.map((hit) => ({
+      ...hit,
+      snippet: boundText(hit.snippet, 400),
+    })),
+    collection_status: collectionStatus,
+    truncated,
   };
 }

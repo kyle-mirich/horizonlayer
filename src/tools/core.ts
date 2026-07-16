@@ -1,155 +1,166 @@
-import { z } from 'zod';
 import type { AppServer } from '../mcp.js';
-import { createWorkspace } from '../db/queries/workspaces.js';
+import {
+  archiveWorkspace,
+  createWorkspace,
+  getWorkspace,
+  listWorkspaces,
+  restoreWorkspace,
+  updateWorkspace,
+} from '../db/queries/workspaces.js';
 import {
   closeSession,
   createSession,
-  getSessionResumeBundle,
+  resumeSession,
+  listSessions,
 } from '../db/queries/sessions.js';
 import {
   appendPageBlocks,
+  archivePage,
+  archivePageBlock,
   createPage,
+  getPage,
+  listPages,
+  restorePage,
+  restorePageBlock,
+  updatePage,
+  updatePageBlock,
 } from '../db/queries/pages.js';
+import {
+  addDatabaseProperty,
+  archiveDatabase,
+  archiveDatabaseProperty,
+  createDatabase,
+  getDatabase,
+  listDatabases,
+  restoreDatabase,
+  restoreDatabaseProperty,
+  updateDatabase,
+  updateDatabaseProperty,
+} from '../db/queries/databases.js';
+import {
+  archiveRow,
+  createRow,
+  getRow,
+  queryRows,
+  restoreRow,
+  updateRow,
+} from '../db/queries/rows.js';
+import {
+  archiveLink,
+  createLink,
+  listLinks,
+  restoreLink,
+} from '../db/queries/links.js';
 import { search } from '../db/queries/search.js';
 import {
-  claimTask,
-  completeTask,
-  createTask,
-  failTask,
-  handoffTask,
-  heartbeatTask,
-  listTasks,
-} from '../db/queries/tasks.js';
-import {
   checkpointRun,
-  completeRun,
-  failRun,
+  finishRun,
+  getRun,
+  listRuns,
   startRun,
 } from '../db/queries/runs.js';
-import { accessFromSession, errorEnvelope, errorEnvelopeFromUnknown, successEnvelope } from './common.js';
+import {
+  DatabaseSchema,
+  CORE_TOOL_OUTPUT_SCHEMAS,
+  LinkSchema,
+  PageSchema,
+  RowSchema,
+  RunSchema,
+  SearchSchema,
+  SessionSchema,
+  WorkspaceSchema,
+} from './schemas.js';
+import { errorEnvelopeFromUnknown, successEnvelope } from './common.js';
 
-const SessionActionEnum = z.enum(['start', 'resume', 'close']);
+const DEFAULT_LIMIT = 50;
 
-const SessionSchema = z.object({
-  action: SessionActionEnum.describe('Session action to run'),
-  workspace_id: z.string().uuid().optional().describe('Existing workspace ID for action=start/resume'),
-  workspace_name: z.string().min(1).max(500).optional().describe('Workspace name to create when workspace_id is omitted'),
-  session_id: z.string().uuid().optional().describe('Session ID for action=resume/close'),
-  title: z.string().min(1).max(500).optional().describe('Session title for action=start'),
-  summary: z.string().optional().describe('Session summary for action=start'),
-  max_items: z.number().int().positive().max(100).optional().describe('Per-section limit for action=resume'),
-}).strict();
+function paginated<T>(records: T[], requestedLimit?: number, requestedOffset?: number) {
+  const limit = requestedLimit ?? DEFAULT_LIMIT;
+  const offset = requestedOffset ?? 0;
+  const hasMore = records.length > limit;
+  return {
+    items: hasMore ? records.slice(0, limit) : records,
+    page: {
+      has_more: hasMore,
+      limit,
+      next_offset: hasMore ? offset + limit : null,
+      offset,
+    },
+  };
+}
 
-const MemoryActionEnum = z.enum(['append', 'search']);
-
-const MemorySchema = z.object({
-  action: MemoryActionEnum.describe('Memory action to run'),
-  workspace_id: z.string().uuid().optional().describe('Workspace scope'),
-  session_id: z.string().uuid().optional().describe('Optional session scope'),
-  page_id: z.string().uuid().optional().describe('Existing page to append to'),
-  title: z.string().min(1).max(500).optional().describe('Page title when appending without page_id'),
-  content: z.string().optional().describe('Text to store for action=append'),
-  query: z.string().min(1).optional().describe('Search query for action=search'),
-  tags: z.array(z.string()).optional().describe('Tags for append or search filtering'),
-  limit: z.number().int().positive().max(100).optional().describe('Result limit for search'),
-}).strict();
-
-const CoordinationActionEnum = z.enum([
-  'task_create',
-  'task_list',
-  'task_claim',
-  'task_heartbeat',
-  'task_complete',
-  'task_fail',
-  'task_handoff',
-  'run_start',
-  'run_checkpoint',
-  'run_complete',
-  'run_fail',
-]);
-
-const CoordinationSchema = z.object({
-  action: CoordinationActionEnum.describe('Coordination action to run'),
-  workspace_id: z.string().uuid().optional().describe('Workspace scope'),
-  session_id: z.string().uuid().optional().describe('Optional session scope'),
-  task_id: z.string().uuid().optional().describe('Task ID for task/run actions'),
-  run_id: z.string().uuid().optional().describe('Run ID for run actions'),
-  title: z.string().min(1).max(500).optional().describe('Task or run title'),
-  description: z.string().optional().describe('Task description'),
-  priority: z.number().int().min(0).optional().describe('Task priority'),
-  owner_agent_name: z.string().min(1).max(255).optional().describe('Initial task owner'),
-  created_by_agent_name: z.string().min(1).max(255).optional().describe('Agent creating a task'),
-  agent_name: z.string().min(1).max(255).optional().describe('Agent performing the action'),
-  target_agent_name: z.string().min(1).max(255).optional().describe('Handoff target agent'),
-  lease_seconds: z.number().int().positive().max(86400).optional().describe('Lease duration for task claims/heartbeats'),
-  status: z.array(z.enum(['pending', 'ready', 'claimed', 'blocked', 'handoff_pending', 'done', 'failed', 'cancelled'])).optional().describe('Task status filters'),
-  payload: z.record(z.unknown()).optional().describe('Structured task payload'),
-  blocker_reason: z.string().optional().describe('Failure or blocker reason'),
-  summary: z.string().optional().describe('Checkpoint summary'),
-  state: z.record(z.unknown()).optional().describe('Checkpoint state'),
-  result: z.record(z.unknown()).optional().describe('Run completion/failure result'),
-  error_message: z.string().optional().describe('Run failure message'),
-  limit: z.number().int().positive().max(500).optional().describe('List limit'),
-}).strict();
-
-function textBlocks(content: string) {
-  return [{ block_type: 'text' as const, content }];
+function queryLimit(limit?: number): number {
+  return (limit ?? DEFAULT_LIMIT) + 1;
 }
 
 export function registerCoreTools(server: AppServer): void {
   server.addTool({
-    name: 'session',
-    description: 'Core session lifecycle: start, resume, and close agent work',
-    parameters: SessionSchema,
-    execute: async (params, context) => {
+    name: 'workspace',
+    description: 'Discover and manage durable workspace scopes. Call list before create to reuse existing knowledge.',
+    parameters: WorkspaceSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.workspace,
+    execute: async (params) => {
       const action = params.action;
       try {
-        const access = accessFromSession(context.session);
-
         switch (action) {
-          case 'start': {
-            if (params.workspace_id) {
-              const session = await createSession({
-                workspace_id: params.workspace_id,
-                title: params.title,
-                summary: params.summary,
-                access,
-              });
-              return successEnvelope({ action, result: { session } });
-            }
-
-            const workspace = await createWorkspace(
-              params.workspace_name ?? `workspace-${new Date().toISOString()}`,
-              undefined,
-              undefined,
-              undefined,
-              access
-            );
-            const session = await createSession({
-              workspace_id: workspace.id,
-              title: params.title,
-              summary: params.summary,
-              access,
-            });
-            return successEnvelope({ action, result: { workspace, session } });
+          case 'create':
+            return successEnvelope({ action, result: await createWorkspace(params) });
+          case 'list': {
+            const records = await listWorkspaces({ ...params, limit: queryLimit(params.limit) });
+            return successEnvelope({ action, result: paginated(records, params.limit, params.offset) });
           }
+          case 'get': {
+            const workspace = await getWorkspace(params.workspace_id, {
+              include_archived: params.include_archived,
+            });
+            if (!workspace) throw new Error(`Workspace ${params.workspace_id} not found`);
+            return successEnvelope({ action, result: workspace });
+          }
+          case 'update': {
+            const workspace = await updateWorkspace(params.workspace_id, params);
+            if (!workspace) throw new Error(`Workspace ${params.workspace_id} not found`);
+            return successEnvelope({ action, result: workspace });
+          }
+          case 'archive': {
+            const workspace = await archiveWorkspace(params.workspace_id, params.revision);
+            if (!workspace) throw new Error(`Workspace ${params.workspace_id} not found`);
+            return successEnvelope({ action, result: workspace });
+          }
+          case 'restore': {
+            const workspace = await restoreWorkspace(params.workspace_id, params.revision);
+            if (!workspace) throw new Error(`Workspace ${params.workspace_id} not found`);
+            return successEnvelope({ action, result: workspace });
+          }
+        }
+      } catch (error) {
+        return errorEnvelopeFromUnknown(action, error);
+      }
+    },
+  });
 
+  server.addTool({
+    name: 'session',
+    description: 'Start, list, resume, and close agent work sessions inside an existing workspace.',
+    parameters: SessionSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.session,
+    execute: async (params) => {
+      const action = params.action;
+      try {
+        switch (action) {
+          case 'start':
+            return successEnvelope({ action, result: await createSession(params) });
+          case 'list': {
+            const records = await listSessions({ ...params, limit: queryLimit(params.limit) });
+            return successEnvelope({ action, result: paginated(records, params.limit, params.offset) });
+          }
           case 'resume': {
-            if (!params.session_id) return errorEnvelope(action, 'session_id is required for session action=resume');
-            const bundle = await getSessionResumeBundle({
-              session_id: params.session_id,
-              workspace_id: params.workspace_id,
-              max_items: params.max_items,
-              access,
-            });
-            if (!bundle) return errorEnvelope(action, `Session ${params.session_id} not found`);
-            return successEnvelope({ action, result: bundle });
+            const session = await resumeSession(params);
+            if (!session) throw new Error(`Session ${params.session_id} not found`);
+            return successEnvelope({ action, result: session });
           }
-
           case 'close': {
-            if (!params.session_id) return errorEnvelope(action, 'session_id is required for session action=close');
-            const session = await closeSession(params.session_id, access);
-            if (!session) return errorEnvelope(action, `Session ${params.session_id} not found`);
+            const session = await closeSession(params.session_id);
+            if (!session) throw new Error(`Session ${params.session_id} not found`);
             return successEnvelope({ action, result: session });
           }
         }
@@ -160,60 +171,78 @@ export function registerCoreTools(server: AppServer): void {
   });
 
   server.addTool({
-    name: 'memory',
-    description: 'Core memory actions: append concise notes and search stored context',
-    parameters: MemorySchema,
-    execute: async (params, context) => {
+    name: 'page',
+    description: 'Store and edit unstructured knowledge as nested pages and ordered text blocks.',
+    parameters: PageSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.page,
+    execute: async (params) => {
       const action = params.action;
       try {
-        const access = accessFromSession(context.session);
-
         switch (action) {
-          case 'append': {
-            if (!params.content) return errorEnvelope(action, 'content is required for memory action=append');
-            if (params.page_id) {
-              const blocks = await appendPageBlocks(
-                params.page_id,
-                textBlocks(params.content),
-                access,
-                undefined,
-                params.session_id
-              );
-              return successEnvelope({ action, result: blocks });
-            }
-            if (!params.workspace_id) {
-              return errorEnvelope(action, 'workspace_id is required when memory action=append does not target page_id');
-            }
+          case 'create': {
             const page = await createPage({
-              title: params.title ?? `Journal ${new Date().toISOString()}`,
-              workspace_id: params.workspace_id,
-              session_id: params.session_id,
-              tags: params.tags,
-              blocks: textBlocks(params.content),
-              access,
+              ...params,
+              blocks: params.blocks?.map((block) => ({
+                ...block,
+                block_type: block.block_type ?? 'text',
+              })),
             });
             return successEnvelope({ action, result: page });
           }
-
-          case 'search': {
-            const query = params.query;
-            if (!query) return errorEnvelope(action, 'query is required for memory action=search');
-            const limit = params.limit ?? 20;
-            const results = await search({
-              query,
-              mode: 'hybrid',
-              content_types: ['pages'],
-              workspace_id: params.workspace_id,
+          case 'get': {
+            const page = await getPage(params.page_id, {
               session_id: params.session_id,
-              tags: params.tags,
-              limit,
-              access,
+              include_archived: params.include_archived,
+              block_limit: params.block_limit,
+              block_offset: params.block_offset,
             });
-            return successEnvelope({
-              action,
-              result: results,
-              meta: { limit, total_available: results.length },
-            });
+            if (!page) throw new Error(`Page ${params.page_id} not found`);
+            return successEnvelope({ action, result: page });
+          }
+          case 'list': {
+            const records = await listPages({ ...params, limit: queryLimit(params.limit) });
+            return successEnvelope({ action, result: paginated(records, params.limit, params.offset) });
+          }
+          case 'update': {
+            const page = await updatePage(params.page_id, params);
+            if (!page) throw new Error(`Page ${params.page_id} not found`);
+            return successEnvelope({ action, result: page });
+          }
+          case 'append': {
+            const result = await appendPageBlocks(
+              params.page_id,
+              params.blocks.map((block) => ({
+                ...block,
+                block_type: block.block_type ?? 'text',
+              })),
+              { revision: params.revision, session_id: params.session_id }
+            );
+            return successEnvelope({ action, result });
+          }
+          case 'block_update': {
+            const block = await updatePageBlock(params.block_id, params);
+            if (!block) throw new Error(`Block ${params.block_id} not found`);
+            return successEnvelope({ action, result: block });
+          }
+          case 'archive': {
+            const page = await archivePage(params.page_id, params.revision);
+            if (!page) throw new Error(`Page ${params.page_id} not found`);
+            return successEnvelope({ action, result: page });
+          }
+          case 'restore': {
+            const page = await restorePage(params.page_id, params.revision);
+            if (!page) throw new Error(`Page ${params.page_id} not found`);
+            return successEnvelope({ action, result: page });
+          }
+          case 'block_archive': {
+            const block = await archivePageBlock(params.block_id, params.revision);
+            if (!block) throw new Error(`Block ${params.block_id} not found`);
+            return successEnvelope({ action, result: block });
+          }
+          case 'block_restore': {
+            const block = await restorePageBlock(params.block_id, params.revision);
+            if (!block) throw new Error(`Block ${params.block_id} not found`);
+            return successEnvelope({ action, result: block });
           }
         }
       } catch (error) {
@@ -223,167 +252,210 @@ export function registerCoreTools(server: AppServer): void {
   });
 
   server.addTool({
-    name: 'coordination',
-    description: 'Core task and run coordination with leases, handoffs, and checkpoints',
-    parameters: CoordinationSchema,
-    execute: async (params, context) => {
+    name: 'database',
+    description: 'Manage structured database schemas and typed properties. Row data is handled by the row tool.',
+    parameters: DatabaseSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.database,
+    execute: async (params) => {
       const action = params.action;
       try {
-        const access = accessFromSession(context.session);
-
         switch (action) {
-          case 'task_create': {
-            if (!params.workspace_id) return errorEnvelope(action, 'workspace_id is required for coordination action=task_create');
-            if (!params.title) return errorEnvelope(action, 'title is required for coordination action=task_create');
-            const task = await createTask({
-              workspace_id: params.workspace_id,
-              session_id: params.session_id,
-              title: params.title,
-              description: params.description,
-              priority: params.priority,
-              owner_agent_name: params.owner_agent_name,
-              created_by_agent_name: params.created_by_agent_name,
-              access,
+          case 'create': {
+            const database = await createDatabase({
+              ...params,
             });
-            return successEnvelope({ action, result: task });
+            return successEnvelope({ action, result: database });
           }
-
-          case 'task_list': {
-            if (!params.workspace_id) return errorEnvelope(action, 'workspace_id is required for coordination action=task_list');
-            const limit = params.limit ?? 50;
-            const tasks = await listTasks({
-              workspace_id: params.workspace_id,
-              session_id: params.session_id,
-              status: params.status,
-              owner_agent_name: params.owner_agent_name,
-              limit,
-              offset: 0,
-              access,
-            });
-            return successEnvelope({ action, result: tasks, meta: { limit } });
+          case 'list': {
+            const records = await listDatabases({ ...params, limit: queryLimit(params.limit) });
+            return successEnvelope({ action, result: paginated(records, params.limit, params.offset) });
           }
-
-          case 'task_claim': {
-            if (!params.workspace_id) return errorEnvelope(action, 'workspace_id is required for coordination action=task_claim');
-            if (!params.agent_name) return errorEnvelope(action, 'agent_name is required for coordination action=task_claim');
-            const task = await claimTask({
-              workspace_id: params.workspace_id,
-              session_id: params.session_id,
-              agent_name: params.agent_name,
-              task_id: params.task_id,
-              lease_seconds: params.lease_seconds,
-              access,
+          case 'get': {
+            const database = await getDatabase(params.database_id, {
+              include_archived: params.include_archived,
             });
-            if (!task) return errorEnvelope(action, 'No claimable task found');
-            return successEnvelope({ action, result: task });
+            if (!database) throw new Error(`Database ${params.database_id} not found`);
+            return successEnvelope({ action, result: database });
           }
-
-          case 'task_heartbeat': {
-            if (!params.task_id) return errorEnvelope(action, 'task_id is required for coordination action=task_heartbeat');
-            if (!params.agent_name) return errorEnvelope(action, 'agent_name is required for coordination action=task_heartbeat');
-            const task = await heartbeatTask({
-              task_id: params.task_id,
-              agent_name: params.agent_name,
-              lease_seconds: params.lease_seconds,
-              access,
-            });
-            if (!task) return errorEnvelope(action, `Task ${params.task_id} is not actively leased by ${params.agent_name}`);
-            return successEnvelope({ action, result: task });
+          case 'update': {
+            const database = await updateDatabase(params.database_id, params);
+            if (!database) throw new Error(`Database ${params.database_id} not found`);
+            return successEnvelope({ action, result: database });
           }
-
-          case 'task_complete': {
-            if (!params.task_id) return errorEnvelope(action, 'task_id is required for coordination action=task_complete');
-            if (!params.agent_name) return errorEnvelope(action, 'agent_name is required for coordination action=task_complete');
-            const task = await completeTask({
-              task_id: params.task_id,
-              agent_name: params.agent_name,
-              payload: params.payload,
-              access,
-            });
-            if (!task) return errorEnvelope(action, `Task ${params.task_id} not found`);
-            return successEnvelope({ action, result: task });
+          case 'archive': {
+            const database = await archiveDatabase(params.database_id, params.revision);
+            if (!database) throw new Error(`Database ${params.database_id} not found`);
+            return successEnvelope({ action, result: database });
           }
-
-          case 'task_fail': {
-            if (!params.task_id) return errorEnvelope(action, 'task_id is required for coordination action=task_fail');
-            if (!params.agent_name) return errorEnvelope(action, 'agent_name is required for coordination action=task_fail');
-            const task = await failTask({
-              task_id: params.task_id,
-              agent_name: params.agent_name,
-              blocker_reason: params.blocker_reason,
-              payload: params.payload,
-              access,
-            });
-            if (!task) return errorEnvelope(action, `Task ${params.task_id} not found`);
-            return successEnvelope({ action, result: task });
+          case 'restore': {
+            const database = await restoreDatabase(params.database_id, params.revision);
+            if (!database) throw new Error(`Database ${params.database_id} not found`);
+            return successEnvelope({ action, result: database });
           }
-
-          case 'task_handoff': {
-            if (!params.task_id) return errorEnvelope(action, 'task_id is required for coordination action=task_handoff');
-            if (!params.target_agent_name) return errorEnvelope(action, 'target_agent_name is required for coordination action=task_handoff');
-            const task = await handoffTask({
-              task_id: params.task_id,
-              actor_agent_name: params.agent_name,
-              target_agent_name: params.target_agent_name,
-              payload: params.payload,
-              access,
+          case 'property_add':
+            return successEnvelope({
+              action,
+              result: await addDatabaseProperty(params.database_id, {
+                database_revision: params.revision,
+                ...params.property,
+              }),
             });
-            if (!task) return errorEnvelope(action, `Task ${params.task_id} not found`);
-            return successEnvelope({ action, result: task });
+          case 'property_update': {
+            const property = await updateDatabaseProperty(params.property_id, params);
+            if (!property) throw new Error(`Database property ${params.property_id} not found`);
+            return successEnvelope({ action, result: property });
           }
+          case 'property_archive': {
+            const property = await archiveDatabaseProperty(params.property_id, params.revision);
+            if (!property) throw new Error(`Database property ${params.property_id} not found`);
+            return successEnvelope({ action, result: property });
+          }
+          case 'property_restore': {
+            const property = await restoreDatabaseProperty(params.property_id, params.revision);
+            if (!property) throw new Error(`Database property ${params.property_id} not found`);
+            return successEnvelope({ action, result: property });
+          }
+        }
+      } catch (error) {
+        return errorEnvelopeFromUnknown(action, error);
+      }
+    },
+  });
 
-          case 'run_start': {
-            if (!params.workspace_id) return errorEnvelope(action, 'workspace_id is required for coordination action=run_start');
-            if (!params.agent_name) return errorEnvelope(action, 'agent_name is required for coordination action=run_start');
-            const run = await startRun({
-              workspace_id: params.workspace_id,
-              session_id: params.session_id,
-              task_id: params.task_id,
-              agent_name: params.agent_name,
-              title: params.title,
-              access,
+  server.addTool({
+    name: 'row',
+    description: 'Create, query, update, archive, and restore typed rows. Row value keys, filter properties, and sort_by are exact database property names.',
+    parameters: RowSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.row,
+    execute: async (params) => {
+      const action = params.action;
+      try {
+        switch (action) {
+          case 'create':
+            return successEnvelope({ action, result: await createRow(params) });
+          case 'get': {
+            const row = await getRow(params.row_id, {
+              include_archived: params.include_archived,
             });
+            if (!row) throw new Error(`Row ${params.row_id} not found`);
+            return successEnvelope({ action, result: row });
+          }
+          case 'query': {
+            const result = await queryRows({
+              ...params,
+              limit: queryLimit(params.limit),
+              sort_by: 'sort_by' in params ? params.sort_by : undefined,
+              sort_direction: 'sort_direction' in params ? params.sort_direction : undefined,
+            });
+            const page = paginated(result.rows, params.limit, params.offset);
+            return successEnvelope({ action, result: { ...page, total: result.total } });
+          }
+          case 'update': {
+            const row = await updateRow(params.row_id, params);
+            if (!row) throw new Error(`Row ${params.row_id} not found`);
+            return successEnvelope({ action, result: row });
+          }
+          case 'archive': {
+            const row = await archiveRow(params.row_id, params.revision);
+            if (!row) throw new Error(`Row ${params.row_id} not found`);
+            return successEnvelope({ action, result: row });
+          }
+          case 'restore': {
+            const row = await restoreRow(params.row_id, params.revision);
+            if (!row) throw new Error(`Row ${params.row_id} not found`);
+            return successEnvelope({ action, result: row });
+          }
+        }
+      } catch (error) {
+        return errorEnvelopeFromUnknown(action, error);
+      }
+    },
+  });
+
+  server.addTool({
+    name: 'link',
+    description: 'Create and inspect explicit same-workspace relationships between pages, databases, rows, blocks, and workspaces.',
+    parameters: LinkSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.link,
+    execute: async (params) => {
+      const action = params.action;
+      try {
+        switch (action) {
+          case 'create':
+            return successEnvelope({ action, result: await createLink(params) });
+          case 'list': {
+            const records = await listLinks({ ...params, limit: queryLimit(params.limit) });
+            return successEnvelope({ action, result: paginated(records, params.limit, params.offset) });
+          }
+          case 'archive': {
+            const link = await archiveLink(params.link_id, params.revision);
+            if (!link) throw new Error(`Link ${params.link_id} not found`);
+            return successEnvelope({ action, result: link });
+          }
+          case 'restore': {
+            const link = await restoreLink(params.link_id, params.revision);
+            if (!link) throw new Error(`Link ${params.link_id} not found`);
+            return successEnvelope({ action, result: link });
+          }
+        }
+      } catch (error) {
+        return errorEnvelopeFromUnknown(action, error);
+      }
+    },
+  });
+
+  server.addTool({
+    name: 'search',
+    description: 'Search page and row knowledge inside one workspace using PostgreSQL full-text and typo-tolerant ranking.',
+    annotations: { readOnlyHint: true, idempotentHint: true },
+    parameters: SearchSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.search,
+    execute: async (params) => {
+      const action = 'search';
+      try {
+        const records = await search(params);
+        return successEnvelope({
+          action,
+          result: { items: records },
+          meta: { limit: params.limit ?? 20 },
+        });
+      } catch (error) {
+        return errorEnvelopeFromUnknown(action, error);
+      }
+    },
+  });
+
+  server.addTool({
+    name: 'run',
+    description: 'Optional execution journal for one agent attempt: start, inspect, checkpoint resumable state, and finish. Not a task queue.',
+    parameters: RunSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.run,
+    execute: async (params) => {
+      const action = params.action;
+      try {
+        switch (action) {
+          case 'start':
+            return successEnvelope({ action, result: await startRun(params) });
+          case 'get': {
+            const run = await getRun(params.run_id, {
+              checkpoint_limit: params.checkpoint_limit,
+              checkpoint_offset: params.checkpoint_offset,
+            });
+            if (!run) throw new Error(`Run ${params.run_id} not found`);
             return successEnvelope({ action, result: run });
           }
-
-          case 'run_checkpoint': {
-            if (!params.run_id) return errorEnvelope(action, 'run_id is required for coordination action=run_checkpoint');
-            if (!params.agent_name) return errorEnvelope(action, 'agent_name is required for coordination action=run_checkpoint');
-            const run = await checkpointRun({
-              run_id: params.run_id,
-              agent_name: params.agent_name,
-              summary: params.summary,
-              state: params.state,
-              access,
-            });
-            if (!run) return errorEnvelope(action, `Run ${params.run_id} not found`);
+          case 'list': {
+            const records = await listRuns({ ...params, limit: queryLimit(params.limit) });
+            return successEnvelope({ action, result: paginated(records, params.limit, params.offset) });
+          }
+          case 'checkpoint': {
+            const run = await checkpointRun(params);
+            if (!run) throw new Error(`Run ${params.run_id} not found`);
             return successEnvelope({ action, result: run });
           }
-
-          case 'run_complete': {
-            if (!params.run_id) return errorEnvelope(action, 'run_id is required for coordination action=run_complete');
-            if (!params.agent_name) return errorEnvelope(action, 'agent_name is required for coordination action=run_complete');
-            const run = await completeRun({
-              run_id: params.run_id,
-              agent_name: params.agent_name,
-              result: params.result,
-              access,
-            });
-            if (!run) return errorEnvelope(action, `Run ${params.run_id} not found`);
-            return successEnvelope({ action, result: run });
-          }
-
-          case 'run_fail': {
-            if (!params.run_id) return errorEnvelope(action, 'run_id is required for coordination action=run_fail');
-            if (!params.agent_name) return errorEnvelope(action, 'agent_name is required for coordination action=run_fail');
-            const run = await failRun({
-              run_id: params.run_id,
-              agent_name: params.agent_name,
-              result: params.result,
-              error_message: params.error_message,
-              access,
-            });
-            if (!run) return errorEnvelope(action, `Run ${params.run_id} not found`);
+          case 'finish': {
+            const run = await finishRun(params);
+            if (!run) throw new Error(`Run ${params.run_id} not found`);
             return successEnvelope({ action, result: run });
           }
         }

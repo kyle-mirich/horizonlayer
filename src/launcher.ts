@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { pathToFileURL } from 'node:url';
 import pg from 'pg';
 
 const { Client } = pg;
 
-type ManagedDbConfig = {
+export type ManagedDbConfig = {
   containerName: string;
   database: string;
   host: string;
@@ -18,10 +20,14 @@ type ManagedDbConfig = {
 };
 
 class FriendlyBootstrapError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly details?: string) {
     super(message);
     this.name = 'FriendlyBootstrapError';
   }
+}
+
+interface PostgresErrorLike {
+  code?: string;
 }
 
 function parseNumber(value: string | undefined, fallback: number): number {
@@ -34,15 +40,15 @@ function quoteIdentifier(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
-function buildManagedDbConfig(): ManagedDbConfig {
+export function buildManagedDbConfig(): ManagedDbConfig {
   return {
     containerName: process.env.HORIZONLAYER_DOCKER_CONTAINER_NAME ?? 'horizonlayer-postgres',
-    database: process.env.HORIZONLAYER_DB_NAME ?? 'horizon_layer',
-    host: process.env.HORIZONLAYER_DB_HOST ?? '127.0.0.1',
-    image: process.env.HORIZONLAYER_DOCKER_IMAGE ?? 'pgvector/pgvector:pg17',
-    password: process.env.HORIZONLAYER_DB_PASSWORD ?? 'postgres',
-    port: parseNumber(process.env.HORIZONLAYER_DB_PORT, 5432),
-    user: process.env.HORIZONLAYER_DB_USER ?? 'postgres',
+    database: process.env.DB_NAME ?? 'horizon_layer',
+    host: process.env.DB_HOST ?? '127.0.0.1',
+    image: process.env.HORIZONLAYER_DOCKER_IMAGE ?? 'postgres:17',
+    password: process.env.DB_PASSWORD ?? 'postgres',
+    port: parseNumber(process.env.DB_PORT, 5432),
+    user: process.env.DB_USER ?? 'postgres',
     volumeName: process.env.HORIZONLAYER_DOCKER_VOLUME_NAME ?? 'horizonlayer-postgres-data',
   };
 }
@@ -51,30 +57,63 @@ function buildDatabaseUrl(config: ManagedDbConfig, database: string): string {
   return `postgres://${encodeURIComponent(config.user)}:${encodeURIComponent(config.password)}@${config.host}:${config.port}/${database}`;
 }
 
-function runDocker(args: string[], allowFailure = false): string {
+function runDocker(args: string[], extraEnv: Record<string, string> = {}): string {
   const result = spawnSync('docker', args, {
     encoding: 'utf8',
+    env: {
+      ...process.env,
+      ...extraEnv,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  if (!allowFailure) {
-    if (result.error) {
-      throw new FriendlyBootstrapError(
-        'Docker is required for the default local setup, but the `docker` command was not found.\n'
-        + 'Install Docker Desktop or set DATABASE_URL to an existing PostgreSQL instance.'
-      );
-    }
-    if (result.status !== 0) {
-      const details = (result.stderr || result.stdout || `docker ${args.join(' ')} failed`).trim();
-      throw new FriendlyBootstrapError(
-        'Docker is installed, but it is not available right now.\n'
-        + 'Start Docker Desktop and try again, or set DATABASE_URL to an existing PostgreSQL instance.\n'
-        + `Docker said: ${details}`
-      );
-    }
+  if (result.error) {
+    throw new FriendlyBootstrapError(
+      'Docker is required for the default local setup, but the `docker` command was not found.\n'
+      + 'Install Docker Desktop or set DATABASE_URL to an existing PostgreSQL instance.'
+    );
+  }
+  if (result.status !== 0) {
+    const details = (result.stderr || result.stdout || `docker ${args.join(' ')} failed`).trim();
+    throw new FriendlyBootstrapError(
+      'Docker is installed, but it is not available right now.\n'
+      + 'Start Docker Desktop and try again, or set DATABASE_URL to an existing PostgreSQL instance.\n'
+      + `Docker said: ${details}`,
+      details
+    );
   }
 
   return (result.stdout ?? '').trim();
+}
+
+export function buildManagedPostgresDockerRun(config: ManagedDbConfig): {
+  args: string[];
+  env: Record<string, string>;
+} {
+  return {
+    args: [
+      'run',
+      '-d',
+      '--name',
+      config.containerName,
+      '-e',
+      'POSTGRES_DB',
+      '-e',
+      'POSTGRES_USER',
+      '-e',
+      'POSTGRES_PASSWORD',
+      '-p',
+      `${config.host}:${config.port}:5432`,
+      '-v',
+      `${config.volumeName}:/var/lib/postgresql/data`,
+      config.image,
+    ],
+    env: {
+      POSTGRES_DB: config.database,
+      POSTGRES_PASSWORD: config.password,
+      POSTGRES_USER: config.user,
+    },
+  };
 }
 
 async function canConnect(url: string): Promise<boolean> {
@@ -111,7 +150,14 @@ async function ensureDatabaseExists(config: ManagedDbConfig): Promise<void> {
       return;
     }
 
-    await client.query(`CREATE DATABASE ${quoteIdentifier(config.database)}`);
+    try {
+      await client.query(`CREATE DATABASE ${quoteIdentifier(config.database)}`);
+    } catch (error) {
+      if ((error as PostgresErrorLike).code !== '42P04') {
+        throw error;
+      }
+      // Another launcher created the same database after our existence check.
+    }
   } finally {
     await client.end();
   }
@@ -134,6 +180,28 @@ function getContainerStatus(containerName: string): 'missing' | 'running' | 'sto
   return (result.stdout ?? '').trim() === 'running' ? 'running' : 'stopped';
 }
 
+function isContainerNameConflict(error: unknown): error is FriendlyBootstrapError {
+  return error instanceof FriendlyBootstrapError
+    && /container name .* already in use/i.test(error.details ?? '');
+}
+
+function startManagedContainer(config: ManagedDbConfig): void {
+  const dockerRun = buildManagedPostgresDockerRun(config);
+  try {
+    runDocker(dockerRun.args, dockerRun.env);
+  } catch (error) {
+    if (!isContainerNameConflict(error)) throw error;
+
+    const convergedStatus = getContainerStatus(config.containerName);
+    if (convergedStatus === 'running') return;
+    if (convergedStatus === 'stopped') {
+      runDocker(['start', config.containerName]);
+      return;
+    }
+    throw error;
+  }
+}
+
 async function ensureManagedPostgres(config: ManagedDbConfig): Promise<string> {
   const adminUrl = buildDatabaseUrl(config, 'postgres');
   const databaseUrl = buildDatabaseUrl(config, config.database);
@@ -148,23 +216,7 @@ async function ensureManagedPostgres(config: ManagedDbConfig): Promise<string> {
   const status = getContainerStatus(config.containerName);
   if (status === 'missing') {
     console.error(`Starting local Postgres container '${config.containerName}' on ${config.host}:${config.port}...`);
-    runDocker([
-      'run',
-      '-d',
-      '--name',
-      config.containerName,
-      '-e',
-      `POSTGRES_DB=${config.database}`,
-      '-e',
-      `POSTGRES_USER=${config.user}`,
-      '-e',
-      `POSTGRES_PASSWORD=${config.password}`,
-      '-p',
-      `${config.host}:${config.port}:5432`,
-      '-v',
-      `${config.volumeName}:/var/lib/postgresql/data`,
-      config.image,
-    ]);
+    startManagedContainer(config);
   } else if (status === 'stopped') {
     console.error(`Starting existing Postgres container '${config.containerName}'...`);
     runDocker(['start', config.containerName]);
@@ -194,8 +246,19 @@ async function main(): Promise<void> {
   await runServer();
 }
 
-main().catch((err) => {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(`Fatal error: ${message}`);
-  process.exit(1);
-});
+function isMainModule(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  main().catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Fatal error: ${message}`);
+    process.exit(1);
+  });
+}

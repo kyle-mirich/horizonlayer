@@ -5,19 +5,19 @@ const clientQueryMock = vi.fn();
 const releaseMock = vi.fn();
 const connectMock = vi.fn();
 const appendBlocksMock = vi.fn();
-const deleteBlockMock = vi.fn();
+const archiveBlockMock = vi.fn();
 const getBlocksForPageMock = vi.fn();
-const getBlocksTextMock = vi.fn();
+const restoreBlockMock = vi.fn();
 const updateBlockMock = vi.fn();
-const embedMock = vi.fn();
-const vectorToSqlMock = vi.fn();
 const touchSessionMock = vi.fn();
-const assertBlockWriteAccessMock = vi.fn();
-const assertPageReadAccessMock = vi.fn();
-const assertPageWriteAccessMock = vi.fn();
-const assertSessionReadAccessMock = vi.fn();
-const assertSessionWriteAccessMock = vi.fn();
-const assertWorkspaceWriteAccessMock = vi.fn();
+const requireBlockMock = vi.fn();
+const requirePageMock = vi.fn();
+const requireSessionMock = vi.fn();
+const requireActiveSessionMock = vi.fn();
+const lockActiveSessionForChildWriteMock = vi.fn();
+const requireActivePageMock = vi.fn();
+const lockActivePageForChildWriteMock = vi.fn();
+const requireActiveWorkspaceMock = vi.fn();
 
 vi.mock('../client.js', () => ({
   getPool: () => ({
@@ -28,28 +28,25 @@ vi.mock('../client.js', () => ({
 
 vi.mock('./blocks.js', () => ({
   appendBlocks: appendBlocksMock,
-  deleteBlock: deleteBlockMock,
+  archiveBlock: archiveBlockMock,
   getBlocksForPage: getBlocksForPageMock,
-  getBlocksText: getBlocksTextMock,
+  restoreBlock: restoreBlockMock,
   updateBlock: updateBlockMock,
-}));
-
-vi.mock('../../embeddings/index.js', () => ({
-  embed: embedMock,
-  vectorToSql: vectorToSqlMock,
 }));
 
 vi.mock('./sessions.js', () => ({
   touchSession: touchSessionMock,
 }));
 
-vi.mock('./accessControl.js', () => ({
-  assertBlockWriteAccess: assertBlockWriteAccessMock,
-  assertPageReadAccess: assertPageReadAccessMock,
-  assertPageWriteAccess: assertPageWriteAccessMock,
-  assertSessionReadAccess: assertSessionReadAccessMock,
-  assertSessionWriteAccess: assertSessionWriteAccessMock,
-  assertWorkspaceWriteAccess: assertWorkspaceWriteAccessMock,
+vi.mock('./scopeGuards.js', () => ({
+  lockActivePageForChildWrite: lockActivePageForChildWriteMock,
+  lockActiveSessionForChildWrite: lockActiveSessionForChildWriteMock,
+  requireActivePage: requireActivePageMock,
+  requireActiveSession: requireActiveSessionMock,
+  requireActiveWorkspace: requireActiveWorkspaceMock,
+  requireBlock: requireBlockMock,
+  requirePage: requirePageMock,
+  requireSession: requireSessionMock,
 }));
 
 function page(overrides: Record<string, unknown> = {}) {
@@ -59,15 +56,12 @@ function page(overrides: Record<string, unknown> = {}) {
     session_id: 'session-1',
     parent_page_id: null,
     title: 'Page',
-    icon: null,
-    cover_url: null,
     tags: [],
-    source: null,
     importance: 0.5,
-    expires_at: null,
+    revision: 1,
+    archived_at: null,
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',
-    last_accessed_at: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };
 }
@@ -80,329 +74,404 @@ function block(overrides: Record<string, unknown> = {}) {
     content: 'Body',
     position: 0,
     metadata: {},
+    revision: 1,
+    archived_at: null,
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };
 }
 
-describe('page query contracts', () => {
+describe('page persistence contract', () => {
   beforeEach(() => {
     poolQueryMock.mockReset();
     clientQueryMock.mockReset();
     releaseMock.mockReset();
     connectMock.mockReset();
     appendBlocksMock.mockReset();
-    deleteBlockMock.mockReset();
+    archiveBlockMock.mockReset();
     getBlocksForPageMock.mockReset();
-    getBlocksTextMock.mockReset();
+    restoreBlockMock.mockReset();
     updateBlockMock.mockReset();
-    embedMock.mockReset();
-    vectorToSqlMock.mockReset();
     touchSessionMock.mockReset();
-    assertBlockWriteAccessMock.mockReset();
-    assertPageReadAccessMock.mockReset();
-    assertPageWriteAccessMock.mockReset();
-    assertSessionReadAccessMock.mockReset();
-    assertSessionWriteAccessMock.mockReset();
-    assertWorkspaceWriteAccessMock.mockReset();
+    requireBlockMock.mockReset();
+    requirePageMock.mockReset();
+    requireSessionMock.mockReset();
+    requireActiveSessionMock.mockReset();
+    lockActiveSessionForChildWriteMock.mockReset();
+    requireActivePageMock.mockReset();
+    lockActivePageForChildWriteMock.mockReset();
+    requireActiveWorkspaceMock.mockReset();
+
     connectMock.mockResolvedValue({ query: clientQueryMock, release: releaseMock });
     appendBlocksMock.mockResolvedValue([block()]);
-    deleteBlockMock.mockResolvedValue({ page_id: 'page-1' });
+    archiveBlockMock.mockResolvedValue(block({ revision: 2, archived_at: '2026-01-02T00:00:00.000Z' }));
     getBlocksForPageMock.mockResolvedValue([block()]);
-    getBlocksTextMock.mockReturnValue('Body');
-    updateBlockMock.mockResolvedValue(block({ content: 'Updated' }));
-    embedMock.mockResolvedValue([0.1, 0.2]);
-    vectorToSqlMock.mockReturnValue('[0.1,0.2]');
-    assertBlockWriteAccessMock.mockResolvedValue({ page_id: 'page-1', session_id: 'session-1' });
-    assertPageReadAccessMock.mockResolvedValue({ workspace_id: 'ws-1', parent_page_id: null, session_id: 'session-1' });
-    assertPageWriteAccessMock.mockResolvedValue({ workspace_id: 'ws-1', parent_page_id: null, session_id: 'session-1' });
-    assertSessionReadAccessMock.mockResolvedValue({ workspace_id: 'ws-1' });
-    assertSessionWriteAccessMock.mockResolvedValue({ workspace_id: 'ws-1' });
-    assertWorkspaceWriteAccessMock.mockResolvedValue(undefined);
+    restoreBlockMock.mockResolvedValue(block({ revision: 3, archived_at: null }));
+    updateBlockMock.mockResolvedValue(block({ content: 'Updated', revision: 2 }));
+    touchSessionMock.mockResolvedValue(undefined);
+    requireBlockMock.mockResolvedValue({
+      page_id: 'page-1',
+      workspace_id: 'ws-1',
+      session_id: 'session-1',
+    });
+    requirePageMock.mockResolvedValue({
+      workspace_id: 'ws-1',
+      parent_page_id: null,
+      session_id: 'session-1',
+    });
+    requireSessionMock.mockResolvedValue({ workspace_id: 'ws-1' });
+    requireActiveSessionMock.mockResolvedValue({ workspace_id: 'ws-1' });
+    lockActiveSessionForChildWriteMock.mockResolvedValue({ workspace_id: 'ws-1' });
+    requireActivePageMock.mockResolvedValue({
+      workspace_id: 'ws-1',
+      parent_page_id: null,
+      session_id: 'session-1',
+    });
+    lockActivePageForChildWriteMock.mockResolvedValue({
+      workspace_id: 'ws-1',
+      parent_page_id: null,
+      session_id: 'session-1',
+    });
+    requireActiveWorkspaceMock.mockResolvedValue(undefined);
   });
 
-  it('creates pages with parent/session inheritance, blocks, session touch, and embedding update', async () => {
-    clientQueryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [page()] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
-    poolQueryMock.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+  it('creates a workspace-scoped page with initial blocks and session touch in one transaction', async () => {
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT') return { rows: [] };
+      if (sql.includes('INSERT INTO pages')) return { rows: [page()] };
+      throw new Error(`Unexpected query: ${sql}`);
+    });
 
     const { createPage } = await import('./pages.js');
     const created = await createPage({
       title: 'Page',
       parent_page_id: 'parent-1',
       blocks: [{ block_type: 'text', content: 'Body' }],
-      expires_in_days: 1,
     });
 
-    expect(created.blocks).toHaveLength(1);
-    expect(assertPageWriteAccessMock).toHaveBeenCalledWith('parent-1', { kind: 'system' });
-    expect(appendBlocksMock).toHaveBeenCalledWith('page-1', [{ block_type: 'text', content: 'Body' }], expect.any(Object));
+    expect(created).toMatchObject({ revision: 1, blocks: [{ id: 'block-1' }] });
+    expect(requireActivePageMock).toHaveBeenCalledWith('parent-1');
+    expect(lockActivePageForChildWriteMock).toHaveBeenCalledWith(
+      'parent-1',
+      expect.objectContaining({ query: clientQueryMock })
+    );
+    expect(requireActiveSessionMock).toHaveBeenCalledWith('session-1');
+    expect(lockActiveSessionForChildWriteMock).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({ query: clientQueryMock })
+    );
+    expect(lockActivePageForChildWriteMock.mock.invocationCallOrder[0]).toBeLessThan(
+      lockActiveSessionForChildWriteMock.mock.invocationCallOrder[0]
+    );
+    const insertIndex = clientQueryMock.mock.calls.findIndex(([sql]) =>
+      String(sql).includes('INSERT INTO pages')
+    );
+    expect(lockActiveSessionForChildWriteMock.mock.invocationCallOrder[0]).toBeLessThan(
+      clientQueryMock.mock.invocationCallOrder[insertIndex]
+    );
+    expect(requireActivePageMock.mock.invocationCallOrder[0]).toBeLessThan(
+      connectMock.mock.invocationCallOrder[0]
+    );
+    expect(appendBlocksMock).toHaveBeenCalledWith(
+      'page-1',
+      [{ block_type: 'text', content: 'Body' }],
+      expect.any(Object)
+    );
     expect(touchSessionMock).toHaveBeenCalledWith('session-1', expect.any(Object));
-    expect(embedMock).toHaveBeenCalledWith('Page\nBody');
+    expect(clientQueryMock.mock.calls[0]?.[0]).toBe('BEGIN');
+    expect(clientQueryMock.mock.calls.at(-1)?.[0]).toBe('COMMIT');
+
+    const insertSql = String(clientQueryMock.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO pages'))?.[0]);
+    expect(insertSql).toContain('RETURNING');
+    expect(insertSql).not.toContain('RETURNING *');
+    expect(insertSql).toContain('workspace_id');
+    expect(insertSql).toContain('importance');
   });
 
-  it('rejects invalid parent and session workspace combinations before inserting', async () => {
-    assertPageWriteAccessMock.mockResolvedValueOnce({ workspace_id: null, session_id: null });
+  it('finishes ownership validation before checking out a client', async () => {
+    requireActivePageMock.mockResolvedValueOnce({
+      workspace_id: null,
+      parent_page_id: null,
+      session_id: null,
+    });
     const { createPage } = await import('./pages.js');
 
     await expect(createPage({ title: 'Page', parent_page_id: 'parent-1' })).rejects.toThrow(
       'Parent page parent-1 is not associated with a workspace'
     );
+    await expect(createPage({ title: 'Page' })).rejects.toThrow(
+      'workspace_id is required for page creation'
+    );
 
-    assertPageWriteAccessMock.mockResolvedValueOnce({ workspace_id: 'ws-1', session_id: 'session-2' });
-    await expect(createPage({
-      title: 'Page',
-      parent_page_id: 'parent-1',
-      workspace_id: 'ws-2',
-    })).rejects.toThrow('workspace_id must match the parent page workspace');
-
-    assertSessionWriteAccessMock.mockResolvedValueOnce({ workspace_id: 'ws-2' });
+    requireActiveSessionMock.mockResolvedValueOnce({ workspace_id: 'ws-2' });
     await expect(createPage({
       title: 'Page',
       workspace_id: 'ws-1',
       session_id: 'session-1',
     })).rejects.toThrow('session_id must belong to the target workspace');
 
-    assertPageWriteAccessMock.mockResolvedValueOnce({ workspace_id: 'ws-1', session_id: 'session-2' });
+    requireActiveSessionMock.mockRejectedValueOnce(
+      new Error('Session session-closed is closed and cannot be modified')
+    );
     await expect(createPage({
       title: 'Page',
-      parent_page_id: 'parent-1',
-      session_id: 'session-1',
-    })).rejects.toThrow('session_id must match the parent page session');
+      workspace_id: 'ws-1',
+      session_id: 'session-closed',
+    })).rejects.toThrow('Session session-closed is closed and cannot be modified');
 
-    expect(clientQueryMock).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO pages'), expect.anything());
+    expect(connectMock).not.toHaveBeenCalled();
   });
 
-  it('returns null for missing session-scoped pages without loading blocks', async () => {
-    poolQueryMock.mockResolvedValueOnce({ rows: [] });
-
-    const { getPage } = await import('./pages.js');
-    await expect(getPage('missing', { kind: 'system' }, 'session-1')).resolves.toBeNull();
-
-    expect(assertSessionReadAccessMock).toHaveBeenCalledWith('session-1', { kind: 'system' });
-    expect(getBlocksForPageMock).not.toHaveBeenCalled();
-  });
-
-  it('supports no-op page updates without rebuilding embeddings', async () => {
+  it('uses a plain explicit SELECT for reads and hides archived pages by default', async () => {
     poolQueryMock.mockResolvedValueOnce({ rows: [page()] });
 
-    const { updatePage } = await import('./pages.js');
-    await expect(updatePage('page-1', {})).resolves.toMatchObject({ id: 'page-1' });
+    const { getPage } = await import('./pages.js');
+    await expect(getPage('page-1', { session_id: 'session-1' })).resolves.toMatchObject({
+      id: 'page-1',
+      blocks: [{ id: 'block-1' }],
+      blocks_page: { has_more: false, limit: 50, next_offset: null, offset: 0 },
+    });
 
-    expect(poolQueryMock).toHaveBeenCalledWith('SELECT * FROM pages WHERE id = $1', ['page-1']);
-    expect(getBlocksForPageMock).not.toHaveBeenCalled();
-    expect(embedMock).not.toHaveBeenCalled();
+    const [sql, values] = poolQueryMock.mock.calls[0];
+    expect(String(sql).trimStart()).toMatch(/^SELECT/);
+    expect(sql).toContain('($2::boolean OR archived_at IS NULL)');
+    expect(sql).toContain('session_id = $3');
+    expect(sql).not.toContain('SELECT *');
+    expect(sql).not.toContain('UPDATE pages');
+    expect(values).toEqual(['page-1', false, 'session-1']);
+    expect(requirePageMock).toHaveBeenCalledWith('page-1');
+    expect(requireSessionMock).toHaveBeenCalledWith('session-1');
+    expect(getBlocksForPageMock).toHaveBeenCalledWith('page-1', {
+      include_archived: undefined,
+      limit: 51,
+      offset: 0,
+    });
   });
 
-  it('returns null and false for missing non-stale page updates and deletes', async () => {
+  it('allows archived pages to be fetched only when explicitly requested', async () => {
+    poolQueryMock.mockResolvedValueOnce({
+      rows: [page({ revision: 2, archived_at: '2026-01-02T00:00:00.000Z' })],
+    });
+
+    const { getPage } = await import('./pages.js');
+    await expect(getPage('page-1', { include_archived: true })).resolves.toMatchObject({
+      archived_at: '2026-01-02T00:00:00.000Z',
+    });
+    expect(poolQueryMock.mock.calls[0]?.[1]).toEqual(['page-1', true]);
+    expect(getBlocksForPageMock).toHaveBeenCalledWith('page-1', expect.objectContaining({
+      include_archived: true,
+    }));
+  });
+
+  it('returns honest bounded block pagination and validates page block bounds', async () => {
+    poolQueryMock.mockResolvedValue({ rows: [page()] });
+    getBlocksForPageMock.mockResolvedValueOnce([
+      block({ id: 'block-1', position: 0 }),
+      block({ id: 'block-2', position: 1 }),
+      block({ id: 'block-3', position: 2 }),
+    ]);
+    const { getPage } = await import('./pages.js');
+
+    await expect(getPage('page-1', { block_limit: 2, block_offset: 4 })).resolves.toMatchObject({
+      blocks: [{ id: 'block-1' }, { id: 'block-2' }],
+      blocks_page: { has_more: true, limit: 2, next_offset: 6, offset: 4 },
+    });
+    expect(getBlocksForPageMock).toHaveBeenCalledWith('page-1', expect.objectContaining({
+      limit: 3,
+      offset: 4,
+    }));
+
+    poolQueryMock.mockClear();
+    await expect(getPage('page-1', { block_limit: 101 })).rejects.toThrow(
+      'block_limit must be an integer between 1 and 100'
+    );
+    await expect(getPage('page-1', { block_offset: -1 })).rejects.toThrow(
+      'block_offset must be an integer between 0 and 1000000'
+    );
+    expect(poolQueryMock).not.toHaveBeenCalled();
+  });
+
+  it('requires a revision and increments it atomically for page updates', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [page({ title: 'Updated', revision: 4 })] });
+
+    const { updatePage } = await import('./pages.js');
+    await expect(updatePage('page-1', {
+      revision: 3,
+      title: 'Updated',
+      tags: ['durable'],
+    })).resolves.toMatchObject({ title: 'Updated', revision: 4 });
+
+    const [sql, values] = poolQueryMock.mock.calls[0];
+    expect(sql).toContain('revision = revision + 1');
+    expect(sql).toContain('AND revision = $4');
+    expect(sql).toContain('AND archived_at IS NULL');
+    expect(sql).not.toContain('RETURNING *');
+    expect(sql).toContain('SET title = $1, tags = $2');
+    expect(values).toEqual(['Updated', ['durable'], 'page-1', 3]);
+    expect(requirePageMock).toHaveBeenCalledWith('page-1');
+  });
+
+  it('distinguishes stale page revisions from missing pages', async () => {
     poolQueryMock
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+      .mockResolvedValueOnce({ rows: [{ revision: 7 }] });
 
-    const { deletePage, updatePage } = await import('./pages.js');
-    await expect(updatePage('missing', { tags: ['lost'] })).resolves.toBeNull();
-    await expect(deletePage('missing')).resolves.toBe(false);
+    const { updatePage } = await import('./pages.js');
+    await expect(updatePage('page-1', { revision: 6, tags: ['stale'] })).rejects.toThrow(
+      'Conflict: page page-1 is at revision 7, not 6'
+    );
 
-    expect(poolQueryMock).toHaveBeenCalledTimes(2);
+    poolQueryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    await expect(updatePage('missing', { revision: 1, tags: ['lost'] })).resolves.toBeNull();
   });
 
-  it('rejects list requests when the session is outside the requested workspace', async () => {
-    assertSessionReadAccessMock.mockResolvedValueOnce({ workspace_id: 'ws-2' });
+  it('lists only within a validated workspace with bounded parameterized pagination', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [page()] });
 
     const { listPages } = await import('./pages.js');
     await expect(listPages({
       workspace_id: 'ws-1',
       session_id: 'session-1',
-    })).rejects.toThrow('session_id must belong to the requested workspace');
+      parent_page_id: 'parent-1',
+      tags: ['durable'],
+      min_importance: 0.6,
+      limit: 5,
+      offset: 2,
+    })).resolves.toHaveLength(1);
 
+    expect(requireActiveWorkspaceMock).toHaveBeenCalledWith('ws-1');
+    expect(requirePageMock).toHaveBeenCalledWith('parent-1');
+    const [sql, values] = poolQueryMock.mock.calls[0];
+    expect(sql).toContain('workspace_id = $1');
+    expect(sql).toContain('archived_at IS NULL');
+    expect(sql).toContain('LIMIT $6 OFFSET $7');
+    expect(sql).not.toContain('SELECT *');
+    expect(values).toEqual(['ws-1', 'session-1', 'parent-1', ['durable'], 0.6, 5, 2]);
+
+    poolQueryMock.mockClear();
+    await expect(listPages({ workspace_id: 'ws-1', limit: 102 })).rejects.toThrow(
+      'limit must be an integer between 0 and 101'
+    );
+    expect(poolQueryMock).not.toHaveBeenCalled();
+    await expect(listPages({ workspace_id: '' })).rejects.toThrow(
+      'workspace_id is required for page listing'
+    );
+  });
+
+  it('rejects cross-workspace session and parent filters before querying pages', async () => {
+    const { listPages } = await import('./pages.js');
+    requireSessionMock.mockResolvedValueOnce({ workspace_id: 'ws-2' });
+    await expect(listPages({ workspace_id: 'ws-1', session_id: 'session-1' })).rejects.toThrow(
+      'session_id must belong to the requested workspace'
+    );
+
+    requirePageMock.mockResolvedValueOnce({ workspace_id: 'ws-2' });
+    await expect(listPages({ workspace_id: 'ws-1', parent_page_id: 'page-2' })).rejects.toThrow(
+      'parent_page_id must belong to the requested workspace'
+    );
     expect(poolQueryMock).not.toHaveBeenCalled();
   });
 
-  it('rejects appends when the requested session does not own the page', async () => {
-    poolQueryMock.mockResolvedValueOnce({ rows: [{ session_id: 'session-2' }] });
+  it('appends blocks against a checked page revision in one transaction', async () => {
+    poolQueryMock.mockResolvedValueOnce({ rows: [{ session_id: 'session-1', revision: 3 }] });
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT') return { rows: [] };
+      if (sql.includes('UPDATE pages')) return { rows: [{ revision: 4 }] };
+      throw new Error(`Unexpected query: ${sql}`);
+    });
 
     const { appendPageBlocks } = await import('./pages.js');
     await expect(appendPageBlocks(
       'page-1',
       [{ block_type: 'text', content: 'More' }],
-      { kind: 'system' },
-      undefined,
-      'session-1'
+      { revision: 3, session_id: 'session-1' }
+    )).resolves.toEqual({ blocks: [block()], page_revision: 4 });
+
+    expect(requirePageMock).toHaveBeenCalledWith('page-1');
+    expect(requireActiveSessionMock).toHaveBeenCalledWith('session-1');
+    const pageUpdate = clientQueryMock.mock.calls.find(([sql]) => String(sql).includes('UPDATE pages'));
+    expect(String(pageUpdate?.[0])).toContain('revision = revision + 1');
+    expect(pageUpdate?.[1]).toEqual(['page-1', 3]);
+    expect(appendBlocksMock).toHaveBeenCalledWith(
+      'page-1',
+      [{ block_type: 'text', content: 'More' }],
+      expect.any(Object)
+    );
+    expect(touchSessionMock).toHaveBeenCalledWith('session-1', expect.any(Object));
+    expect(clientQueryMock.mock.calls.at(-1)?.[0]).toBe('COMMIT');
+  });
+
+  it('rejects stale or cross-session appends before checking out a client', async () => {
+    const { appendPageBlocks } = await import('./pages.js');
+    poolQueryMock.mockResolvedValueOnce({ rows: [{ session_id: 'session-1', revision: 2 }] });
+    await expect(appendPageBlocks(
+      'page-1',
+      [{ block_type: 'text' }],
+      { revision: 1 }
+    )).rejects.toThrow('Conflict: page page-1 is at revision 2, not 1');
+
+    poolQueryMock.mockResolvedValueOnce({ rows: [{ session_id: 'session-2', revision: 2 }] });
+    await expect(appendPageBlocks(
+      'page-1',
+      [{ block_type: 'text' }],
+      { revision: 2, session_id: 'session-1' }
     )).rejects.toThrow('Page page-1 is not associated with session session-1');
 
-    expect(assertSessionWriteAccessMock).toHaveBeenCalledWith('session-1', { kind: 'system' });
     expect(connectMock).not.toHaveBeenCalled();
   });
 
-  it('gets, lists, updates, and deletes pages with access checks and filters', async () => {
-    poolQueryMock
-      .mockResolvedValueOnce({ rows: [page()] })
-      .mockResolvedValueOnce({ rows: [page({ title: 'Updated' })] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [page(), page({ id: 'page-2' })] })
-      .mockResolvedValueOnce({ rowCount: 1, rows: [] });
-
-    const { deletePage, getPage, listPages, updatePage } = await import('./pages.js');
-    await expect(getPage('page-1', { kind: 'user', workspaceIds: ['ws-1'] } as never, 'session-1')).resolves.toMatchObject({
-      id: 'page-1',
-      blocks: [{ id: 'block-1' }],
+  it('updates, archives, and restores blocks while touching their parent page and session', async () => {
+    poolQueryMock.mockResolvedValue({ rows: [{ page_id: 'page-1', session_id: 'session-1' }] });
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT') return { rows: [] };
+      if (sql.includes('UPDATE pages')) return { rows: [{ revision: 2 }] };
+      throw new Error(`Unexpected query: ${sql}`);
     });
-    await expect(updatePage('page-1', { title: 'Updated', icon: 'icon', cover_url: 'https://example.com', tags: ['tag'], importance: 0.9 })).resolves.toMatchObject({
-      title: 'Updated',
+
+    const { archivePageBlock, restorePageBlock, updatePageBlock } = await import('./pages.js');
+    await expect(updatePageBlock('block-1', { revision: 1, content: 'Updated' })).resolves.toMatchObject({
+      block: { revision: 2 },
+      page_revision: 2,
     });
-    await expect(listPages({
-      workspace_id: 'ws-1',
-      session_id: 'session-1',
-      parent_page_id: 'parent-1',
-      tags: ['tag'],
-      min_importance: 0.5,
-      limit: 5,
-      offset: 2,
-    })).resolves.toHaveLength(2);
-    await expect(deletePage('page-1', { kind: 'system' }, '2026-01-01T00:00:00.000Z')).resolves.toBe(true);
-  });
+    await expect(archivePageBlock('block-1', 1)).resolves.toMatchObject({
+      block: { archived_at: expect.any(String) },
+      page_revision: 2,
+    });
+    await expect(restorePageBlock('block-1', 2)).resolves.toMatchObject({
+      block: { archived_at: null },
+      page_revision: 2,
+    });
 
-  it('appends, updates, and deletes page blocks transactionally', async () => {
-    poolQueryMock
-      .mockResolvedValueOnce({ rows: [{ session_id: 'session-1' }] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [{ page_id: 'page-1', session_id: 'session-1' }] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [{ page_id: 'page-1', session_id: 'session-1' }] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
-    clientQueryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [{ title: 'Page' }] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [{ title: 'Page' }] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [{ title: 'Page' }] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
-
-    const { appendPageBlocks, deletePageBlock, updatePageBlock } = await import('./pages.js');
-
-    await expect(appendPageBlocks('page-1', [{ block_type: 'text', content: 'More' }], { kind: 'system' }, undefined, 'session-1')).resolves.toHaveLength(1);
-    await expect(updatePageBlock('block-1', { content: 'Updated' })).resolves.toMatchObject({ content: 'Updated' });
-    await expect(deletePageBlock('block-1')).resolves.toBe(true);
-
+    expect(updateBlockMock).toHaveBeenCalledWith(
+      'block-1',
+      { revision: 1, content: 'Updated' },
+      expect.any(Object)
+    );
+    expect(archiveBlockMock).toHaveBeenCalledWith('block-1', 1, expect.any(Object));
+    expect(restoreBlockMock).toHaveBeenCalledWith('block-1', 2, expect.any(Object));
+    expect(requireBlockMock).toHaveBeenCalledTimes(3);
+    expect(requireBlockMock).toHaveBeenCalledWith('block-1');
+    expect(touchSessionMock).toHaveBeenCalledTimes(3);
     expect(clientQueryMock.mock.calls.filter(([sql]) => sql === 'COMMIT')).toHaveLength(3);
   });
 
-  it('keeps successful block appends when embedding refresh fails', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    poolQueryMock.mockResolvedValueOnce({ rows: [{ session_id: null }] });
-    clientQueryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [{ title: 'Page' }], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
-    embedMock.mockRejectedValueOnce(new Error('embedding unavailable'));
-
-    const { appendPageBlocks } = await import('./pages.js');
-    await expect(appendPageBlocks('page-1', [{ block_type: 'text', content: 'More' }])).resolves.toHaveLength(1);
-
-    expect(consoleError).toHaveBeenCalledWith(
-      'Failed to update page embedding for page-1:',
-      expect.any(Error)
-    );
-    consoleError.mockRestore();
-  });
-
-  it('returns not-found results and detects stale block mutations', async () => {
+  it('archives and restores pages as revision-checked entities with no public hard delete', async () => {
     poolQueryMock
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ page_id: 'page-1', session_id: 'session-1' }] })
-      .mockResolvedValueOnce({ rows: [] });
-    clientQueryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      .mockResolvedValueOnce({ rows: [page({ revision: 2, archived_at: '2026-01-02T00:00:00.000Z' })] })
+      .mockResolvedValueOnce({ rows: [page({ revision: 3, archived_at: null })] });
 
-    const { appendPageBlocks, updatePageBlock, deletePageBlock } = await import('./pages.js');
+    const pageQueries = await import('./pages.js');
+    await expect(pageQueries.archivePage('page-1', 1)).resolves.toMatchObject({ revision: 2 });
+    await expect(pageQueries.restorePage('page-1', 2)).resolves.toMatchObject({ revision: 3 });
 
-    await expect(appendPageBlocks('missing', [{ block_type: 'text' }])).rejects.toThrow('Page missing not found');
-    await expect(updatePageBlock('missing', {})).resolves.toBeNull();
-    await expect(deletePageBlock('block-1', { kind: 'system' }, '2026-01-01T00:00:00.000Z')).resolves.toBe(false);
-  });
-
-  it('returns false for missing block deletes without opening a transaction', async () => {
-    poolQueryMock.mockResolvedValueOnce({ rows: [] });
-
-    const { deletePageBlock } = await import('./pages.js');
-    await expect(deletePageBlock('missing-block')).resolves.toBe(false);
-
-    expect(connectMock).not.toHaveBeenCalled();
-  });
-
-  it('rolls back block update and delete transactions when the low-level block mutation misses', async () => {
-    poolQueryMock
-      .mockResolvedValueOnce({ rows: [{ page_id: 'page-1', session_id: 'session-1' }] })
-      .mockResolvedValueOnce({ rows: [{ page_id: 'page-1', session_id: 'session-1' }] });
-    clientQueryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [{ title: 'Page' }], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [{ title: 'Page' }], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
-    updateBlockMock.mockResolvedValueOnce(null);
-    deleteBlockMock.mockResolvedValueOnce(null);
-
-    const { deletePageBlock, updatePageBlock } = await import('./pages.js');
-    await expect(updatePageBlock('block-1', { content: 'Updated' })).resolves.toBeNull();
-    await expect(deletePageBlock('block-1')).resolves.toBe(false);
-
-    expect(clientQueryMock.mock.calls.filter(([sql]) => sql === 'ROLLBACK')).toHaveLength(2);
-    expect(clientQueryMock.mock.calls.some(([sql]) => sql === 'COMMIT')).toBe(false);
-  });
-
-  it('rolls back block update and delete transactions when low-level mutations throw', async () => {
-    poolQueryMock
-      .mockResolvedValueOnce({ rows: [{ page_id: 'page-1', session_id: 'session-1' }] })
-      .mockResolvedValueOnce({ rows: [{ page_id: 'page-1', session_id: 'session-1' }] });
-    clientQueryMock.mockImplementation(async (sql: string) => {
-      if (sql === 'BEGIN' || sql === 'ROLLBACK') {
-        return { rows: [], rowCount: 0 };
-      }
-      if (sql.includes('UPDATE pages') && sql.includes('RETURNING title')) {
-        return { rows: [{ title: 'Page' }], rowCount: 1 };
-      }
-      if (sql === 'COMMIT') {
-        throw new Error('block mutation should not commit after failure');
-      }
-      throw new Error(`Unexpected query: ${sql}`);
-    });
-    updateBlockMock.mockRejectedValueOnce(new Error('block update failed'));
-    deleteBlockMock.mockRejectedValueOnce(new Error('block delete failed'));
-
-    const { deletePageBlock, updatePageBlock } = await import('./pages.js');
-    await expect(updatePageBlock('block-1', { content: 'Updated' })).rejects.toThrow('block update failed');
-    await expect(deletePageBlock('block-1')).rejects.toThrow('block delete failed');
-
-    expect(clientQueryMock.mock.calls.filter(([sql]) => sql === 'ROLLBACK')).toHaveLength(2);
-    expect(clientQueryMock.mock.calls.some(([sql]) => sql === 'COMMIT')).toBe(false);
-  });
-
-  it('keeps successful page mutations even when embedding refresh fails', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    poolQueryMock
-      .mockResolvedValueOnce({ rows: [page({ title: 'Renamed' })] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
-    embedMock.mockRejectedValueOnce(new Error('embedding unavailable'));
-
-    const { updatePage } = await import('./pages.js');
-    await expect(updatePage('page-1', { title: 'Renamed' })).resolves.toMatchObject({ title: 'Renamed' });
-
-    expect(consoleError).toHaveBeenCalledWith(
-      'Failed to update page embedding for page-1:',
-      expect.any(Error)
-    );
-    consoleError.mockRestore();
+    expect(String(poolQueryMock.mock.calls[0]?.[0])).toContain('archived_at = NOW()');
+    expect(String(poolQueryMock.mock.calls[1]?.[0])).toContain('archived_at = NULL');
+    expect(requirePageMock).toHaveBeenCalledTimes(2);
+    expect(requirePageMock).toHaveBeenCalledWith('page-1');
+    expect(pageQueries).not.toHaveProperty('deletePage');
+    expect(pageQueries).not.toHaveProperty('deletePageBlock');
   });
 });

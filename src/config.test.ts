@@ -1,178 +1,68 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { loadConfig } from './config.js';
 
-const readFileSyncMock = vi.hoisted(() => vi.fn());
-const yamlLoadMock = vi.hoisted(() => vi.fn());
-
-vi.mock('fs', () => ({
-  readFileSync: readFileSyncMock,
-}));
-
-vi.mock('js-yaml', () => ({
-  default: {
-    load: yamlLoadMock,
-  },
-}));
-
-const originalEnv = { ...process.env };
-
-async function loadConfigWith(params: {
-  env?: Record<string, string | undefined>;
-  files: Record<string, unknown>;
-}) {
-  vi.resetModules();
-  readFileSyncMock.mockReset();
-  yamlLoadMock.mockReset();
-
-  process.env = { ...originalEnv, ...params.env };
-
-  readFileSyncMock.mockImplementation((path: string) => {
-    const match = Object.entries(params.files).find(([suffix]) => path.endsWith(suffix));
-    if (!match) {
-      throw new Error(`Missing fixture for ${path}`);
-    }
-    return match[0];
-  });
-  yamlLoadMock.mockImplementation((raw: string) => params.files[raw]);
-
-  return await import('./config.js');
-}
-
-describe('config loading', () => {
-  beforeEach(() => {
-    process.env = { ...originalEnv };
-  });
-
-  afterEach(() => {
-    process.env = { ...originalEnv };
-    vi.resetModules();
-  });
-
-  it('falls back from config.yaml to config.example.yaml and normalizes http transport', async () => {
-    const { config } = await loadConfigWith({
-      files: {
-        'config.example.yaml': {
-          database: {
-            database: 'example_db',
-          },
-          server: {
-            transport: 'http',
-          },
-        },
+describe('environment configuration', () => {
+  it('uses local-first defaults without reading a config file', () => {
+    expect(loadConfig({})).toEqual({
+      database: {
+        connection_timeout_ms: 10_000,
+        database: 'horizon_layer',
+        host: 'localhost',
+        idle_timeout_ms: 30_000,
+        password: '',
+        pool_max: 10,
+        port: 5432,
+        ssl_mode: 'disable',
+        ssl_reject_unauthorized: true,
+        user: 'postgres',
+      },
+      server: {
+        name: 'Horizon Layer',
+        version: '0.0.1',
       },
     });
+  });
 
-    expect(readFileSyncMock.mock.calls.map(([path]) => String(path))).toEqual([
-      expect.stringContaining('config.yaml'),
-      expect.stringContaining('config.example.yaml'),
-    ]);
-    expect(config.database).toMatchObject({
-      database: 'example_db',
-      host: 'localhost',
-      port: 5432,
-      ssl_mode: 'disable',
-    });
-    expect(config.server).toMatchObject({
-      endpoint: '/mcp',
-      host: '127.0.0.1',
-      port: 3000,
-      transport: 'httpStream',
-    });
-    expect(config.dashboard_api).toEqual({
-      enabled: false,
-      host: '127.0.0.1',
-      port: 3737,
+  it('parses explicit environment values into their runtime types', () => {
+    expect(loadConfig({
+      APP_NAME: 'Agent Knowledge',
+      DATABASE_URL: 'postgres://local/test',
+      DB_CONNECTION_TIMEOUT_MS: '5000',
+      DB_IDLE_TIMEOUT_MS: '6000',
+      DB_POOL_MAX: '12',
+      DB_PORT: '6543',
+      DB_SSL_MODE: 'require',
+      DB_SSL_REJECT_UNAUTHORIZED: 'off',
+    })).toMatchObject({
+      database: {
+        connection_timeout_ms: 5000,
+        idle_timeout_ms: 6000,
+        pool_max: 12,
+        port: 6543,
+        ssl_mode: 'require',
+        ssl_reject_unauthorized: false,
+        url: 'postgres://local/test',
+      },
+      server: { name: 'Agent Knowledge', version: '0.0.1' },
     });
   });
 
-  it('lets environment variables override nested YAML values with parsed types', async () => {
-    const { config } = await loadConfigWith({
-      env: {
-        APP_NAME: 'Env App',
-        DASHBOARD_API_ENABLED: 'yes',
-        DASHBOARD_API_HOST: '0.0.0.0',
-        DASHBOARD_API_PORT: '4747',
-        DB_POOL_MAX: '12',
-        DB_SSL_REJECT_UNAUTHORIZED: 'off',
-        PORT: '8080',
-        SERVER_TRANSPORT: 'stdio',
-      },
-      files: {
-        'config.yaml': {
-          dashboard_api: {
-            enabled: false,
-            host: '127.0.0.1',
-            port: 3737,
-          },
-          database: {
-            database: 'file_db',
-            pool_max: 3,
-            ssl_reject_unauthorized: true,
-          },
-          server: {
-            name: 'File App',
-            port: 3000,
-            transport: 'httpStream',
-          },
-        },
-      },
-    });
-
-    expect(config.server).toMatchObject({
-      name: 'Env App',
-      port: 8080,
-      transport: 'stdio',
-    });
-    expect(config.dashboard_api).toEqual({
-      enabled: true,
-      host: '0.0.0.0',
-      port: 4747,
-    });
-    expect(config.database).toMatchObject({
-      database: 'file_db',
-      pool_max: 12,
-      ssl_reject_unauthorized: false,
-    });
+  it('accepts explicit true boolean values', () => {
+    expect(loadConfig({ DB_SSL_REJECT_UNAUTHORIZED: 'yes' }).database.ssl_reject_unauthorized)
+      .toBe(true);
   });
 
-  it('ignores empty and non-finite numeric environment values', async () => {
-    const { config } = await loadConfigWith({
-      env: {
-        DB_PORT: 'not-a-number',
-        EMBEDDING_DIMENSIONS: '',
-        PORT: 'Infinity',
-      },
-      files: {
-        'config.yaml': {
-          database: {
-            port: 6543,
-          },
-          embedding: {
-            dimensions: 768,
-          },
-          server: {
-            port: 4000,
-            transport: 'httpStream',
-          },
-        },
-      },
-    });
-
-    expect(config.database.port).toBe(6543);
-    expect(config.embedding.dimensions).toBe(768);
-    expect(config.server.port).toBe(4000);
+  it('rejects ambiguous boolean values', () => {
+    expect(() => loadConfig({ DB_SSL_REJECT_UNAUTHORIZED: 'sometimes' })).toThrow(
+      'DB_SSL_REJECT_UNAUTHORIZED must be one of: true, false, 1, 0, yes, no, on, off'
+    );
   });
 
-  it('uses schema defaults when no YAML config source is readable', async () => {
-    const { config } = await loadConfigWith({
-      files: {},
-    });
-
-    expect(readFileSyncMock.mock.calls.map(([path]) => String(path))).toEqual([
-      expect.stringContaining('config.yaml'),
-      expect.stringContaining('config.example.yaml'),
-    ]);
-    expect(config.database.database).toBe('horizon_layer');
-    expect(config.server.transport).toBe('stdio');
-    expect(config.dashboard_api.enabled).toBe(false);
+  it('rejects invalid numeric values instead of silently using defaults', () => {
+    expect(() => loadConfig({ DB_PORT: 'not-a-number' })).toThrow(
+      'DB_PORT must be a finite number'
+    );
+    expect(() => loadConfig({ DB_PORT: '70000' })).toThrow();
+    expect(() => loadConfig({ DB_POOL_MAX: '0' })).toThrow();
   });
 });

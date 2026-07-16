@@ -1,52 +1,85 @@
-import { runMigrations } from './db/migrate.js';
+import { initializeDatabase } from './db/initialize.js';
 import { closePool } from './db/client.js';
 import { createAppServer } from './server.js';
-import { config } from './config.js';
-import { startDashboardApiServer, type DashboardApiServer } from './dashboardApi.js';
 
 export async function runServer(): Promise<void> {
-  await runMigrations();
+  let server: ReturnType<typeof createAppServer> | null = null;
+  let shutdownPromise: Promise<void> | null = null;
 
-  let dashboardApiServer: DashboardApiServer | null = null;
-  if (config.dashboard_api.enabled) {
-    dashboardApiServer = await startDashboardApiServer({
-      host: config.dashboard_api.host,
-      port: config.dashboard_api.port,
-    });
-  }
+  const shutdown = (): Promise<void> => {
+    if (!shutdownPromise) {
+      shutdownPromise = Promise.resolve().then(async () => {
+        let firstError: unknown;
 
-  const server = createAppServer();
-  if (config.server.transport === 'httpStream') {
-    await server.start({
-      transportType: 'httpStream',
-      httpStream: {
-        endpoint: config.server.endpoint as `/${string}`,
-        host: config.server.host,
-        port: config.server.port,
-      },
-    });
-  } else {
+        if (server) {
+          try {
+            await server.stop();
+          } catch (error) {
+            firstError = error;
+          }
+        }
+
+        try {
+          await closePool();
+        } catch (error) {
+          firstError ??= error;
+        }
+
+        if (firstError) {
+          throw firstError;
+        }
+      });
+    }
+    return shutdownPromise;
+  };
+
+  try {
+    await initializeDatabase();
+
+    server = createAppServer();
     await server.start({
       transportType: 'stdio',
     });
+  } catch (error) {
+    try {
+      await shutdown();
+    } catch (cleanupError) {
+      const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      console.error(`Runtime cleanup failed after startup error: ${message}`);
+    }
+    throw error;
   }
 
-  const shutdown = async (): Promise<void> => {
-    if (dashboardApiServer) {
-      await dashboardApiServer.close();
-      dashboardApiServer = null;
+  const handleSignal = async (): Promise<void> => {
+    try {
+      await shutdown();
+      process.exit(0);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Runtime shutdown failed: ${message}`);
+      process.exit(1);
     }
-    await server.stop();
-    await closePool();
   };
 
-  process.on('SIGINT', async () => {
-    await shutdown();
-    process.exit(0);
-  });
+  const handleDisconnect = (): void => {
+    void shutdown().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Runtime shutdown failed after stdio disconnect: ${message}`);
+    });
+  };
 
-  process.on('SIGTERM', async () => {
-    await shutdown();
-    process.exit(0);
-  });
+  server.once('disconnect', handleDisconnect);
+  process.stdin.once('end', handleDisconnect);
+  process.stdin.once('close', handleDisconnect);
+  process.once('SIGINT', handleSignal);
+  process.once('SIGTERM', handleSignal);
+
+  if (process.stdin.readableEnded || process.stdin.destroyed) {
+    try {
+      await shutdown();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Runtime shutdown failed after stdio disconnect: ${message}`);
+    }
+  }
 }

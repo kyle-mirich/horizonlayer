@@ -37,6 +37,3 @@ jobs:
           cache: npm
       - run: npm ci
       - run: make smoke-local
-        env:
-          XDG_CACHE_HOME: ${{ github.workspace }}/.cache
-          HF_HOME: ${{ github.workspace }}/.cache/hf

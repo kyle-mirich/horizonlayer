@@ -1,6 +1,6 @@
 DATABASE_URL ?= postgres://postgres:postgres@localhost:5432/horizon_layer
 
-.PHONY: help install db-up db-down db-reset dev dev-stdio build typecheck lint test verify smoke-live smoke-local codex-mcp claude-mcp
+.PHONY: help install db-up db-down db-reset dev build typecheck lint test verify smoke-live smoke-local
 
 help:
 	@printf "%-14s %s\n" "install" "Install dependencies with npm ci"
@@ -11,7 +11,7 @@ help:
 	@printf "%-14s %s\n" "build" "Compile TypeScript"
 	@printf "%-14s %s\n" "test" "Run the unit test suite"
 	@printf "%-14s %s\n" "verify" "Run lint, typecheck, and tests"
-	@printf "%-14s %s\n" "smoke-live" "Run the live smoke test against a running server"
+	@printf "%-14s %s\n" "smoke-live" "Run the stdio MCP smoke test against the configured database"
 	@printf "%-14s %s\n" "smoke-local" "Run the launcher-backed local smoke test"
 
 install:
@@ -27,10 +27,7 @@ db-reset:
 	docker compose down -v
 
 dev:
-	DATABASE_URL=$(DATABASE_URL) APP_NAME="Horizon Layer" npm run dev:stdio
-
-dev-stdio:
-	DATABASE_URL=$(DATABASE_URL) APP_NAME="Horizon Layer" npm run dev:stdio
+	DATABASE_URL=$(DATABASE_URL) APP_NAME="Horizon Layer" npm run dev
 
 build:
 	npm run build
@@ -48,13 +45,7 @@ verify:
 	npm run verify
 
 smoke-live:
-	npm run test:smoke:live
+	DATABASE_URL=$(DATABASE_URL) npm run test:smoke:live
 
 smoke-local:
 	npm run test:smoke:local
-
-codex-mcp:
-	@echo codex mcp add horizonlayer -- npx -y --package=horizonlayer horizonlayer
-
-claude-mcp:
-	@echo claude mcp add -s user horizonlayer -- npx -y --package=horizonlayer horizonlayer

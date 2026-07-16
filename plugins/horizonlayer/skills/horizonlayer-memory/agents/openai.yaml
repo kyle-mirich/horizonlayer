@@ -1,4 +1,0 @@
-interface:
-  display_name: "HorizonLayer Memory"
-  short_description: "Persist and resume agent context."
-  default_prompt: "Store and resume this work in HorizonLayer."

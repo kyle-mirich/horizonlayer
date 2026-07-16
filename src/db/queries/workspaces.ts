@@ -1,4 +1,3 @@
-import type { AccessContext } from '../access.js';
 import { getPool } from '../client.js';
 
 const WORKSPACE_COLUMNS = `
@@ -6,7 +5,8 @@ const WORKSPACE_COLUMNS = `
   name,
   description,
   icon,
-  expires_at,
+  revision,
+  archived_at,
   created_at,
   updated_at
 `;
@@ -16,7 +16,8 @@ export interface Workspace {
   name: string;
   description: string | null;
   icon: string | null;
-  expires_at: string | null;
+  revision: number;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -24,68 +25,83 @@ export interface Workspace {
 export interface WorkspaceWithCounts extends Workspace {
   page_count: number;
   database_count: number;
+  session_count: number;
 }
 
-async function assertWorkspaceConflict(id: string, expectedUpdatedAt?: string): Promise<void> {
-  if (!expectedUpdatedAt) {
-    return;
+function pagination(value: number | undefined, fallback: number, max: number): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved < 0 || resolved > max) {
+    throw new Error(`Pagination value must be an integer between 0 and ${max}`);
   }
+  return resolved;
+}
+
+async function assertWorkspaceRevision(id: string, revision: number): Promise<void> {
   const pool = getPool();
-  const { rows } = await pool.query<{ updated_at: string }>(
-    'SELECT updated_at FROM workspaces WHERE id = $1',
+  const { rows } = await pool.query<{ revision: number }>(
+    'SELECT revision FROM workspaces WHERE id = $1',
     [id]
   );
-  if (rows[0]) {
-    throw new Error(`Conflict: workspace ${id} was modified by another agent`);
+  if (rows[0] && rows[0].revision !== revision) {
+    throw new Error(`Conflict: workspace ${id} is at revision ${rows[0].revision}, not ${revision}`);
   }
 }
 
-export async function createWorkspace(
-  name: string,
-  description?: string,
-  icon?: string,
-  expires_in_days?: number,
-  _access: AccessContext = { kind: 'system' }
-): Promise<Workspace> {
+export async function createWorkspace(params: {
+  name: string;
+  description?: string;
+  icon?: string;
+}): Promise<Workspace> {
+  const name = params.name.trim();
+  if (!name) {
+    throw new Error('Workspace name cannot be empty');
+  }
+
   const pool = getPool();
-  const expiresAt = expires_in_days
-    ? new Date(Date.now() + expires_in_days * 86400000).toISOString()
-    : null;
   const { rows } = await pool.query<Workspace>(
-    `INSERT INTO workspaces (name, description, icon, expires_at)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO workspaces (name, description, icon)
+     VALUES ($1, $2, $3)
      RETURNING ${WORKSPACE_COLUMNS}`,
-    [
-      name,
-      description ?? null,
-      icon ?? null,
-      expiresAt,
-    ]
+    [name, params.description?.trim() || null, params.icon?.trim() || null]
   );
   return rows[0];
 }
 
-export async function listWorkspaces(access: AccessContext = { kind: 'system' }): Promise<Workspace[]> {
+export async function listWorkspaces(params: {
+  include_archived?: boolean;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<Workspace[]> {
   const pool = getPool();
-  void access;
-  const { rows } = await pool.query<Workspace>(`SELECT ${WORKSPACE_COLUMNS} FROM workspaces ORDER BY created_at DESC`);
+  const limit = pagination(params.limit, 50, 101);
+  const offset = pagination(params.offset, 0, 1_000_000);
+
+  const { rows } = await pool.query<Workspace>(
+    `SELECT ${WORKSPACE_COLUMNS}
+     FROM workspaces
+     WHERE ($1::boolean OR archived_at IS NULL)
+     ORDER BY updated_at DESC, created_at DESC
+     LIMIT $2 OFFSET $3`,
+    [params.include_archived ?? false, limit, offset]
+  );
   return rows;
 }
 
 export async function getWorkspace(
   id: string,
-  access: AccessContext = { kind: 'system' }
+  params: { include_archived?: boolean } = {}
 ): Promise<WorkspaceWithCounts | null> {
   const pool = getPool();
-  void access;
 
   const { rows } = await pool.query<WorkspaceWithCounts>(
     `SELECT ${WORKSPACE_COLUMNS},
-       (SELECT COUNT(*) FROM pages WHERE workspace_id = w.id)::int AS page_count,
-       (SELECT COUNT(*) FROM databases WHERE workspace_id = w.id)::int AS database_count
+       (SELECT COUNT(*) FROM pages WHERE workspace_id = w.id AND archived_at IS NULL)::int AS page_count,
+       (SELECT COUNT(*) FROM databases WHERE workspace_id = w.id AND archived_at IS NULL)::int AS database_count,
+       (SELECT COUNT(*) FROM sessions WHERE workspace_id = w.id)::int AS session_count
      FROM workspaces w
-     WHERE w.id = $1`,
-    [id]
+     WHERE w.id = $1
+       AND ($2::boolean OR w.archived_at IS NULL)`,
+    [id, params.include_archived ?? false]
   );
   return rows[0] ?? null;
 }
@@ -93,145 +109,82 @@ export async function getWorkspace(
 export async function updateWorkspace(
   id: string,
   params: {
+    revision: number;
     name?: string;
-    description?: string;
-    icon?: string;
-    expires_in_days?: number;
-    expected_updated_at?: string;
-  },
-  access: AccessContext = { kind: 'system' }
-): Promise<Workspace | null> {
-  const pool = getPool();
-  const current = await getWorkspace(id, access);
-  if (!current) {
-    return null;
+    description?: string | null;
+    icon?: string | null;
   }
-
+): Promise<Workspace | null> {
   const sets: string[] = [];
   const values: unknown[] = [];
-  let idx = 1;
+  let index = 1;
 
-  if (params.name !== undefined) { sets.push(`name = $${idx++}`); values.push(params.name); }
-  if (params.description !== undefined) { sets.push(`description = $${idx++}`); values.push(params.description); }
-  if (params.icon !== undefined) { sets.push(`icon = $${idx++}`); values.push(params.icon); }
-  if (params.expires_in_days !== undefined) {
-    sets.push(`expires_at = $${idx++}`);
-    values.push(new Date(Date.now() + params.expires_in_days * 86400000).toISOString());
+  if (params.name !== undefined) {
+    const name = params.name.trim();
+    if (!name) throw new Error('Workspace name cannot be empty');
+    sets.push(`name = $${index++}`);
+    values.push(name);
   }
-
+  if (params.description !== undefined) {
+    sets.push(`description = $${index++}`);
+    values.push(params.description?.trim() || null);
+  }
+  if (params.icon !== undefined) {
+    sets.push(`icon = $${index++}`);
+    values.push(params.icon?.trim() || null);
+  }
   if (sets.length === 0) {
-    return {
-      id: current.id,
-      name: current.name,
-      description: current.description,
-      icon: current.icon,
-      expires_at: current.expires_at,
-      created_at: current.created_at,
-      updated_at: current.updated_at,
-    };
+    throw new Error('At least one workspace field is required');
   }
 
-  sets.push(`updated_at = NOW()`);
-  values.push(id);
-  if (params.expected_updated_at) {
-    values.push(params.expected_updated_at);
-  }
-  void access;
+  sets.push('revision = revision + 1', 'updated_at = NOW()');
+  values.push(id, params.revision);
 
+  const pool = getPool();
   const { rows } = await pool.query<Workspace>(
     `UPDATE workspaces
      SET ${sets.join(', ')}
-     WHERE id = $${idx}${params.expected_updated_at ? ` AND updated_at = $${idx + 1}` : ''}
+     WHERE id = $${index++}
+       AND revision = $${index}
+       AND archived_at IS NULL
      RETURNING ${WORKSPACE_COLUMNS}`,
     values
   );
-  if (!rows[0]) {
-    await assertWorkspaceConflict(id, params.expected_updated_at);
-  }
+  if (!rows[0]) await assertWorkspaceRevision(id, params.revision);
   return rows[0] ?? null;
 }
 
-export async function deleteWorkspace(
+async function setWorkspaceArchived(
   id: string,
-  access: AccessContext = { kind: 'system' },
-  expected_updated_at?: string
-): Promise<boolean> {
+  revision: number,
+  archived: boolean
+): Promise<Workspace | null> {
   const pool = getPool();
-  const values: unknown[] = [id];
-  let sql = 'DELETE FROM workspaces WHERE id = $1';
-  if (expected_updated_at) {
-    values.push(expected_updated_at);
-    sql += ' AND updated_at = $2';
-  }
-  void access;
-  const { rowCount } = await pool.query(sql, values);
-  if ((rowCount ?? 0) === 0) {
-    await assertWorkspaceConflict(id, expected_updated_at);
-  }
-  return (rowCount ?? 0) > 0;
+  const { rows } = await pool.query<Workspace>(
+    `UPDATE workspaces
+     SET archived_at = ${archived ? 'NOW()' : 'NULL'},
+         revision = revision + 1,
+         updated_at = NOW()
+     WHERE id = $1
+       AND revision = $2
+       AND archived_at IS ${archived ? 'NULL' : 'NOT NULL'}
+     RETURNING ${WORKSPACE_COLUMNS}`,
+    [id, revision]
+  );
+  if (!rows[0]) await assertWorkspaceRevision(id, revision);
+  return rows[0] ?? null;
 }
 
-export async function cleanupExpiredWorkspaces(
-  access: AccessContext = { kind: 'system' }
-): Promise<{ workspaces_deleted: number }> {
-  const pool = getPool();
-  const now = new Date().toISOString();
-  void access;
-  const { rows } = await pool.query<{ id: string }>(
-    'SELECT id FROM workspaces WHERE expires_at IS NOT NULL AND expires_at < $1',
-    [now]
-  );
-  const workspaceIds = rows.map((row) => row.id);
-  if (workspaceIds.length === 0) {
-    return { workspaces_deleted: 0 };
-  }
+export function archiveWorkspace(
+  id: string,
+  revision: number
+): Promise<Workspace | null> {
+  return setWorkspaceArchived(id, revision, true);
+}
 
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query(
-      `DELETE FROM links
-       WHERE (from_type = 'workspace' AND from_id = ANY($1))
-          OR (to_type = 'workspace' AND to_id = ANY($1))
-          OR (from_type = 'page' AND from_id IN (SELECT id FROM pages WHERE workspace_id = ANY($1)))
-          OR (to_type = 'page' AND to_id IN (SELECT id FROM pages WHERE workspace_id = ANY($1)))
-          OR (from_type = 'database' AND from_id IN (SELECT id FROM databases WHERE workspace_id = ANY($1)))
-          OR (to_type = 'database' AND to_id IN (SELECT id FROM databases WHERE workspace_id = ANY($1)))
-          OR (from_type IN ('row', 'database_row') AND from_id IN (
-                SELECT r.id
-                FROM database_rows r
-                JOIN databases d ON d.id = r.database_id
-                WHERE d.workspace_id = ANY($1)
-              ))
-          OR (to_type IN ('row', 'database_row') AND to_id IN (
-                SELECT r.id
-                FROM database_rows r
-                JOIN databases d ON d.id = r.database_id
-                WHERE d.workspace_id = ANY($1)
-              ))
-          OR (from_type = 'block' AND from_id IN (
-                SELECT b.id
-                FROM blocks b
-                JOIN pages p ON p.id = b.page_id
-                WHERE p.workspace_id = ANY($1)
-              ))
-          OR (to_type = 'block' AND to_id IN (
-                SELECT b.id
-                FROM blocks b
-                JOIN pages p ON p.id = b.page_id
-                WHERE p.workspace_id = ANY($1)
-              ))`,
-      [workspaceIds]
-    );
-    await client.query('DELETE FROM pages WHERE workspace_id = ANY($1)', [workspaceIds]);
-    await client.query('DELETE FROM databases WHERE workspace_id = ANY($1)', [workspaceIds]);
-    const { rowCount } = await client.query('DELETE FROM workspaces WHERE id = ANY($1)', [workspaceIds]);
-    await client.query('COMMIT');
-    return { workspaces_deleted: rowCount ?? 0 };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+export function restoreWorkspace(
+  id: string,
+  revision: number
+): Promise<Workspace | null> {
+  return setWorkspaceArchived(id, revision, false);
 }

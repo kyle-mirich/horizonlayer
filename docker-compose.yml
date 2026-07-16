@@ -1,6 +1,6 @@
 services:
   db:
-    image: pgvector/pgvector:pg17
+    image: postgres:17
     environment:
       POSTGRES_DB: ${DB_NAME:-horizon_layer}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}

@@ -1,266 +1,187 @@
 import { randomUUID } from 'node:crypto';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import {
+  asArray,
+  asRecord,
+  callTool,
+  closeClient,
+  createStdioClient,
+  getRevision,
+  getString,
+} from './mcpClient.js';
 
-type JsonObject = Record<string, unknown>;
-
-type ToolEnvelope = {
-  action: string;
-  error: null | { message?: string };
-  meta?: Record<string, unknown>;
-  ok: boolean;
-  result: unknown;
-};
-
-type ToolResponseLike = {
-  content?: Array<{ text?: string; type?: string }>;
-  isError?: boolean;
-};
-
-function assert(condition: unknown, message: string): asserts condition {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-function asRecord(value: unknown, message: string): JsonObject {
-  assert(value != null && typeof value === 'object' && !Array.isArray(value), message);
-  return value as JsonObject;
-}
-
-function asArray(value: unknown, message: string): unknown[] {
-  assert(Array.isArray(value), message);
-  return value;
-}
-
-function asString(value: unknown, message: string): string {
-  assert(typeof value === 'string' && value.length > 0, message);
-  return value;
-}
-
-function getString(record: JsonObject, key: string): string {
-  return asString(record[key], `Expected ${key} to be a string`);
-}
-
-function parseToolEnvelope(name: string, result: unknown): ToolEnvelope {
-  const response = result as ToolResponseLike;
-  const text = response.content?.find((item) => item.type === 'text')?.text;
-  if (!text) {
-    throw new Error(`${name} result missing text content`);
-  }
-
-  let parsed: ToolEnvelope;
-  try {
-    parsed = JSON.parse(text) as ToolEnvelope;
-  } catch {
-    throw new Error(`${name} returned non-JSON text: ${text}`);
-  }
-  if (response.isError && parsed.ok) {
-    parsed.ok = false;
-  }
-  return parsed;
-}
-
-async function callTool(
+async function cleanup(
   client: Client,
-  name: string,
-  args: Record<string, unknown>
-): Promise<ToolEnvelope> {
-  const response = await client.callTool({
-    name,
-    arguments: args,
-  });
-  const envelope = parseToolEnvelope(name, response);
-  if (!envelope.ok) {
-    throw new Error(`${name}/${envelope.action} failed: ${envelope.error?.message ?? 'unknown error'}`);
-  }
-  return envelope;
-}
-
-async function safeCloseSession(client: Client, sessionId: string | null): Promise<void> {
-  if (!sessionId) return;
-  try {
-    await client.callTool({ name: 'session', arguments: { action: 'close', session_id: sessionId } });
-  } catch {
-    // ignore cleanup failures
-  }
-}
-
-async function main(): Promise<void> {
-  const mcpCommand = process.env.MCP_COMMAND ?? 'node';
-  const mcpArgs = (process.env.MCP_ARGS ?? 'dist/launcher.js')
-    .split(' ')
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const suffix = randomUUID().slice(0, 8);
-  const client = new Client({ name: 'horizonlayer-agent-demo', version: '1.0.0' }, { capabilities: {} });
-  const transport = new StdioClientTransport({
-    args: mcpArgs,
-    command: mcpCommand,
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-    } as Record<string, string>,
-  });
-
-  let sessionId: string | null = null;
-
-  try {
-    await client.connect(transport);
-
-    const sessionStart = await callTool(client, 'session', {
-      action: 'start',
-      workspace_name: `Agent Demo ${suffix}`,
-      title: 'Triage session',
-      summary: 'Agent investigates a queue backlog and stores resumable state',
-    });
-    const sessionStartRecord = asRecord(sessionStart.result, 'session/start result was not an object');
-    const workspaceRecord = asRecord(sessionStartRecord.workspace, 'session/start missing workspace');
-    const sessionRecord = asRecord(sessionStartRecord.session, 'session/start missing session');
-    const workspaceId = getString(workspaceRecord, 'id');
-    sessionId = getString(sessionRecord, 'id');
-
-    const firstMemory = await callTool(client, 'memory', {
-      action: 'append',
-      workspace_id: workspaceId,
-      session_id: sessionId,
-      title: 'Incident journal',
-      content: 'Queue lag spiked after a deploy. One worker pool is stuck and retries are not draining the backlog.',
-    });
-    const pageRecord = asRecord(firstMemory.result, 'memory/append result was not an object');
-    const pageId = getString(pageRecord, 'id');
-
-    await callTool(client, 'memory', {
-      action: 'append',
-      page_id: pageId,
-      session_id: sessionId,
-      content: 'Confirmed the backlog is localized to ingestion-worker-b. Restart is low risk if queue drain is verified after recovery.',
-    });
-
-    const taskCreate = await callTool(client, 'coordination', {
-      action: 'task_create',
-      workspace_id: workspaceId,
-      session_id: sessionId,
-      title: 'Restart ingestion-worker-b and verify queue drain',
-      priority: 0,
-      created_by_agent_name: 'planner',
-      owner_agent_name: 'ops-agent',
-    });
-    const taskRecord = asRecord(taskCreate.result, 'coordination/task_create result was not an object');
-    const taskId = getString(taskRecord, 'id');
-
-    const taskClaim = await callTool(client, 'coordination', {
-      action: 'task_claim',
-      workspace_id: workspaceId,
-      session_id: sessionId,
-      task_id: taskId,
-      agent_name: 'ops-agent',
-      lease_seconds: 300,
-    });
-
-    const runStart = await callTool(client, 'coordination', {
-      action: 'run_start',
-      workspace_id: workspaceId,
-      session_id: sessionId,
-      task_id: taskId,
-      agent_name: 'ops-agent',
-    });
-    const runRecord = asRecord(runStart.result, 'coordination/run_start result was not an object');
-    const runId = getString(runRecord, 'id');
-
-    await callTool(client, 'coordination', {
-      action: 'run_checkpoint',
-      run_id: runId,
-      agent_name: 'ops-agent',
-      summary: 'Prepared restart plan and confirmed the target worker is isolated.',
-      state: {
-        next_step: 'restart worker and watch queue depth for recovery',
-        worker: 'ingestion-worker-b',
-      },
-    });
-
-    const searchResult = await callTool(client, 'memory', {
-      action: 'search',
-      query: 'stuck ingestion worker backlog restart plan',
-      workspace_id: workspaceId,
-      session_id: sessionId,
-      limit: 3,
-    });
-    const searchItems = asArray(searchResult.result, 'memory/search result was not an array');
-    const topHit = searchItems[0] ? asRecord(searchItems[0], 'top search hit was invalid') : null;
-
-    await callTool(client, 'coordination', {
-      action: 'task_complete',
-      task_id: taskId,
-      agent_name: 'ops-agent',
-      payload: {
-        outcome: 'restart completed and queue depth began to fall',
-      },
-    });
-
-    await callTool(client, 'coordination', {
-      action: 'run_complete',
-      run_id: runId,
-      agent_name: 'ops-agent',
-      result: {
-        task_id: taskId,
-        status: 'done',
-        summary: 'Recovered the stuck worker and confirmed queue drain.',
-      },
-    });
-
-    const resumeResult = await callTool(client, 'session', {
-      action: 'resume',
-      workspace_id: workspaceId,
-      session_id: sessionId,
-      max_items: 10,
-    });
-    const resumeBundle = asRecord(resumeResult.result, 'session/resume result was not an object');
-
-    const summary = {
-      workspace_id: workspaceId,
-      session_id: sessionId,
-      page_id: pageId,
-      task_id: taskId,
-      run_id: runId,
-      claimed_task_status: getString(asRecord(taskClaim.result, 'coordination/task_claim result invalid'), 'status'),
-      top_search_hit: topHit
-        ? {
-            id: getString(topHit, 'id'),
-            title: getString(topHit, 'title'),
-            type: getString(topHit, 'type'),
-          }
-        : null,
-      resume_bundle_sections: Object.keys(resumeBundle),
-    };
-
-    console.log('# Horizon Layer MCP Agent Demo');
-    console.log('');
-    console.log('This run exercised the compact core MCP surface:');
-    console.log('1. start a session');
-    console.log('2. write memory');
-    console.log('3. create and claim a task');
-    console.log('4. start and checkpoint a run');
-    console.log('5. search prior context');
-    console.log('6. complete task and run');
-    console.log('7. resume the session context');
-    console.log('');
-    console.log('```json');
-    console.log(JSON.stringify(summary, null, 2));
-    console.log('```');
-  } finally {
-    await safeCloseSession(client, sessionId);
-
+  sessionId: string | null,
+  workspaceId: string | null,
+  workspaceRevision: number | null
+): Promise<void> {
+  if (sessionId) {
     try {
-      await client.close();
+      await callTool(client, 'session', { action: 'close', session_id: sessionId });
     } catch {
-      // ignore close failures
+      // Preserve the original demo failure.
+    }
+  }
+  if (workspaceId && workspaceRevision) {
+    try {
+      await callTool(client, 'workspace', {
+        action: 'archive',
+        revision: workspaceRevision,
+        workspace_id: workspaceId,
+      });
+    } catch {
+      // Preserve the original demo failure.
     }
   }
 }
 
-main().catch((err) => {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(`Agent demo failed: ${message}`);
+async function main(): Promise<void> {
+  const suffix = randomUUID().slice(0, 8);
+  const { client, transport } = createStdioClient('horizonlayer-agent-demo');
+  let sessionId: string | null = null;
+  let workspaceId: string | null = null;
+  let workspaceRevision: number | null = null;
+  let cleanedUp = false;
+
+  try {
+    await client.connect(transport);
+
+    const workspace = asRecord((await callTool(client, 'workspace', {
+      action: 'create',
+      description: 'Canonical agent knowledge flow',
+      name: `Agent Demo ${suffix}`,
+    })).result, 'workspace/create result was not an object');
+    workspaceId = getString(workspace, 'id');
+    workspaceRevision = getRevision(workspace, 'workspace/create');
+
+    const session = asRecord((await callTool(client, 'session', {
+      action: 'start',
+      summary: 'Capture a durable decision and execution journal',
+      title: 'Architecture pass',
+      workspace_id: workspaceId,
+    })).result, 'session/start result was not an object');
+    sessionId = getString(session, 'id');
+
+    const page = asRecord((await callTool(client, 'page', {
+      action: 'create',
+      blocks: [{ content: 'HorizonLayer is a Postgres-backed knowledge layer for agents.' }],
+      session_id: sessionId,
+      tags: ['architecture'],
+      title: 'Architecture note',
+      workspace_id: workspaceId,
+    })).result, 'page/create result was not an object');
+    const pageId = getString(page, 'id');
+
+    const database = asRecord((await callTool(client, 'database', {
+      action: 'create',
+      name: 'Decisions',
+      parent_page_id: pageId,
+      properties: [
+        { name: 'Name', property_type: 'title' },
+        {
+          name: 'Status',
+          property_type: 'select',
+          options: { choices: ['accepted'] },
+        },
+      ],
+      workspace_id: workspaceId,
+    })).result, 'database/create result was not an object');
+    const databaseId = getString(database, 'id');
+
+    const row = asRecord((await callTool(client, 'row', {
+      action: 'create',
+      database_id: databaseId,
+      values: {
+        Name: 'Use PostgreSQL as the durable source of truth',
+        Status: 'accepted',
+      },
+    })).result, 'row/create result was not an object');
+    const rowId = getString(row, 'id');
+
+    const link = asRecord((await callTool(client, 'link', {
+      action: 'create',
+      from_id: pageId,
+      from_type: 'page',
+      link_type: 'supports',
+      to_id: rowId,
+      to_type: 'row',
+      workspace_id: workspaceId,
+    })).result, 'link/create result was not an object');
+
+    const search = asRecord((await callTool(client, 'search', {
+      content_types: ['pages', 'rows'],
+      query: 'Postgres durable source truth',
+      workspace_id: workspaceId,
+    })).result, 'search result was not an object');
+
+    let run = asRecord((await callTool(client, 'run', {
+      action: 'start',
+      agent_name: 'codex-demo',
+      session_id: sessionId,
+      title: 'Capture architecture decision',
+      workspace_id: workspaceId,
+    })).result, 'run/start result was not an object');
+    const runId = getString(run, 'id');
+    const checkpointMutation = asRecord((await callTool(client, 'run', {
+      action: 'checkpoint',
+      run_id: runId,
+      state: { database_id: databaseId, page_id: pageId, row_id: rowId },
+      summary: 'Stored the note, decision row, and relationship',
+    })).result, 'run/checkpoint result was not an object');
+    const checkpoint = asRecord(
+      checkpointMutation.checkpoint,
+      'run/checkpoint result missing checkpoint'
+    );
+    run = asRecord(checkpointMutation.run, 'run/checkpoint result missing run');
+
+    const finishMutation = asRecord((await callTool(client, 'run', {
+      action: 'finish',
+      outcome: 'completed',
+      result: { captured: true },
+      run_id: runId,
+    })).result, 'run/finish result was not an object');
+    run = asRecord(finishMutation.run, 'run/finish result missing run');
+
+    const resume = asRecord((await callTool(client, 'session', {
+      action: 'resume',
+      session_id: sessionId,
+      workspace_id: workspaceId,
+    })).result, 'session/resume result was not an object');
+
+    await callTool(client, 'session', { action: 'close', session_id: sessionId });
+    sessionId = null;
+    await callTool(client, 'workspace', {
+      action: 'archive',
+      revision: workspaceRevision,
+      workspace_id: workspaceId,
+    });
+    cleanedUp = true;
+
+    console.log('# HorizonLayer canonical agent flow');
+    console.log('');
+    console.log('```json');
+    console.log(JSON.stringify({
+      database_id: databaseId,
+      link_id: getString(link, 'id'),
+      link_revision: getRevision(link, 'link/create'),
+      page_id: pageId,
+      row_id: rowId,
+      run_id: runId,
+      run_checkpoint_sequence: checkpoint.sequence,
+      run_status: run.status,
+      search_hits: asArray(search.items, 'search result missing items').length,
+      resume_sections: Object.keys(resume),
+      workspace_archived: true,
+    }, null, 2));
+    console.log('```');
+  } finally {
+    if (!cleanedUp) await cleanup(client, sessionId, workspaceId, workspaceRevision);
+    await closeClient(client);
+  }
+}
+
+main().catch((error) => {
+  console.error(`Agent demo failed: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 });

@@ -6,7 +6,7 @@
 ## Validation
 
 - [ ] `npm run verify`
-- [ ] `make smoke-local` (if startup, transport, migrations, or cross-tool behavior changed)
+- [ ] `make smoke-local` (if startup, transport, schema, or cross-tool behavior changed)
 
 ## Notes
 

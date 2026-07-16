@@ -1,22 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const fastMcpInstances: Array<{ options: Record<string, unknown> }> = [];
+const appServerInstances: Array<{ options: Record<string, unknown> }> = [];
 const configState = vi.hoisted(() => ({
   server: {
-    health_path: '/healthz',
     name: 'Horizon Layer',
-    version: '1.0.0',
+    version: '0.0.1',
   },
 }));
 const registerCoreTools = vi.fn();
 
-vi.mock('fastmcp', () => ({
-  FastMCP: class FastMCP {
+vi.mock('./mcp.js', () => ({
+  AppServer: class AppServer {
     public options: Record<string, unknown>;
 
     constructor(options: Record<string, unknown>) {
       this.options = options;
-      fastMcpInstances.push({ options });
+      appServerInstances.push({ options });
     }
 
     addTool() {}
@@ -34,22 +33,20 @@ vi.mock('./tools/core.js', () => ({
 describe('createAppServer local runtime', () => {
   beforeEach(() => {
     vi.resetModules();
-    fastMcpInstances.length = 0;
+    appServerInstances.length = 0;
     registerCoreTools.mockClear();
   });
 
-  it('boots FastMCP with the compact core toolset', async () => {
+  it('boots the official SDK adapter with the compact core toolset', async () => {
     const { createAppServer } = await import('./server.js');
     createAppServer();
 
-    expect(fastMcpInstances[0].options).toMatchObject({
-      health: {
-        enabled: true,
-        path: '/healthz',
-      },
+    expect(appServerInstances[0].options).toMatchObject({
       name: 'Horizon Layer',
-      version: '1.0.0',
+      version: '0.0.1',
     });
+    expect(appServerInstances[0].options.instructions).toContain('workspace list or create');
+    expect(appServerInstances[0].options.instructions).toContain('latest revision');
     expect(registerCoreTools).toHaveBeenCalledTimes(1);
   });
 });

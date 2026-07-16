@@ -5,10 +5,6 @@ export default defineConfig({
     coverage: {
       exclude: [
         'dist/**',
-        'src/db/migrate.ts',
-        'src/dev/**',
-        'src/embeddings/**',
-        'src/index.ts',
         'src/launcher.ts',
         'src/mcp.ts',
         'src/testing/**',
