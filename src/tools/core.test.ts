@@ -42,7 +42,11 @@ const linkMocks = {
 const runMocks = {
   checkpointRun: vi.fn(), finishRun: vi.fn(), getRun: vi.fn(), listRuns: vi.fn(), startRun: vi.fn(),
 };
-const searchMock = vi.fn();
+const searchMocks = {
+  resolveSearchScope: vi.fn(),
+  searchRecords: vi.fn(),
+};
+const searchRagMock = vi.fn();
 
 vi.mock('../db/queries/workspaces.js', () => workspaceMocks);
 vi.mock('../db/queries/sessions.js', () => sessionMocks);
@@ -51,7 +55,8 @@ vi.mock('../db/queries/databases.js', () => databaseMocks);
 vi.mock('../db/queries/rows.js', () => rowMocks);
 vi.mock('../db/queries/links.js', () => linkMocks);
 vi.mock('../db/queries/runs.js', () => runMocks);
-vi.mock('../db/queries/search.js', () => ({ search: searchMock }));
+vi.mock('../db/queries/search.js', () => searchMocks);
+vi.mock('../search/rag.js', () => ({ searchRag: searchRagMock }));
 
 type ToolResponse = { content: Array<{ text: string }>; isError?: boolean };
 type ToolDefinition = {
@@ -94,7 +99,9 @@ function resetMocks() {
   for (const group of [workspaceMocks, sessionMocks, pageMocks, databaseMocks, rowMocks, linkMocks, runMocks]) {
     for (const mock of Object.values(group)) mock.mockReset();
   }
-  searchMock.mockReset();
+  searchMocks.resolveSearchScope.mockReset();
+  searchMocks.searchRecords.mockReset();
+  searchRagMock.mockReset();
 }
 
 describe('agent-first core MCP contract', () => {
@@ -164,7 +171,32 @@ describe('agent-first core MCP contract', () => {
     linkMocks.listLinks.mockResolvedValue([{ id: ids.link }]);
     linkMocks.archiveLink.mockResolvedValue({ id: ids.link, archived_at: 'now' });
     linkMocks.restoreLink.mockResolvedValue({ id: ids.link, archived_at: null });
-    searchMock.mockResolvedValue([{ id: ids.page, type: 'page', title: 'Hit' }]);
+    searchMocks.resolveSearchScope.mockResolvedValue({
+      kind: 'workspace',
+      workspace_id: ids.workspace,
+      types: ['page', 'row'],
+      session_id: null,
+      database_id: null,
+    });
+    searchMocks.searchRecords.mockResolvedValue({
+      records: [{ id: ids.page, type: 'page', title: 'Hit', revision: 1 }],
+      truncated: false,
+    });
+    searchRagMock.mockResolvedValue({
+      chunks: [{
+        rank: 1,
+        score: 0.9,
+        text: 'Evidence',
+        citation: {
+          type: 'page', id: ids.page, workspace_id: ids.workspace,
+          part: 'block',
+          title: 'Hit', revision: 1, updated_at: '2026-01-01T00:00:00.000Z',
+          block_id: ids.block, block_revision: 1, block_type: 'text',
+          block_position: 0, char_start: 0, char_end: 8,
+        },
+      }],
+      truncated: false,
+    });
     runMocks.startRun.mockResolvedValue({ id: ids.run, status: 'running' });
     runMocks.getRun.mockResolvedValue({ id: ids.run, status: 'running' });
     runMocks.listRuns.mockResolvedValue([{ id: ids.run, status: 'running' }]);
@@ -198,16 +230,17 @@ describe('agent-first core MCP contract', () => {
 
   it('encodes dependent search, link, row sort, finish, and checkpoint fields', async () => {
     await expect(call('search', {
-      workspace_id: ids.workspace, query: 'x', session_id: ids.session, database_id: ids.database,
+      query: 'x', scope: { kind: 'workspace', workspace_id: ids.workspace },
     })).rejects.toThrow();
     await expect(call('search', {
-      workspace_id: ids.workspace, query: 'x', session_id: ids.session, content_types: ['rows'],
+      mode: 'records', query: 'x', workspace_id: ids.workspace,
     })).rejects.toThrow();
     await expect(call('search', {
-      workspace_id: ids.workspace, query: 'x', database_id: ids.database, content_types: ['pages'],
+      mode: 'records', query: 'x',
+      scope: { kind: 'session', session_id: ids.session, database_id: ids.database },
     })).rejects.toThrow();
     await expect(call('search', {
-      workspace_id: ids.workspace, query: 'x', session_id: ids.session,
+      mode: 'records', query: 'x', scope: { kind: 'session', session_id: ids.session },
     })).resolves.toMatchObject({ ok: true });
 
     await expect(call('link', {
@@ -264,7 +297,12 @@ describe('agent-first core MCP contract', () => {
       action: 'resume', session_id: ids.session, workspace_id: ids.workspace, max_items: 51,
     })).rejects.toThrow();
     await expect(call('search', {
-      workspace_id: ids.workspace, query: 'bounded', limit: 51,
+      mode: 'records', query: 'bounded', limit: 51,
+      scope: { kind: 'workspace', workspace_id: ids.workspace },
+    })).rejects.toThrow();
+    await expect(call('search', {
+      mode: 'rag', query: 'bounded', limit: 21,
+      scope: { kind: 'workspace', workspace_id: ids.workspace },
     })).rejects.toThrow();
     await expect(call('run', {
       action: 'get', run_id: ids.run, checkpoint_limit: 51,
@@ -314,7 +352,14 @@ describe('agent-first core MCP contract', () => {
       action: 'create', workspace_id: ids.workspace, title: 'Architecture',
       blocks: [{ content: 'Postgres-native search' }],
     })).resolves.toMatchObject({ ok: true });
-    await expect(call('search', { workspace_id: ids.workspace, query: 'native search' })).resolves.toMatchObject({ ok: true });
+    await expect(call('search', {
+      mode: 'records',
+      query: 'native search',
+      scope: { kind: 'workspace', workspace_id: ids.workspace },
+    })).resolves.toMatchObject({
+      ok: true,
+      result: { mode: 'records', records: [{ id: ids.page }], truncated: false },
+    });
     await expect(call('run', { action: 'start', workspace_id: ids.workspace, agent_name: 'codex' })).resolves.toMatchObject({ ok: true });
     await expect(call('run', { action: 'checkpoint', run_id: ids.run, summary: 'core frozen' })).resolves.toMatchObject({ ok: true });
     await expect(call('run', { action: 'finish', run_id: ids.run, outcome: 'completed' })).resolves.toMatchObject({ ok: true });
@@ -324,8 +369,44 @@ describe('agent-first core MCP contract', () => {
     expect(pageMocks.createPage).toHaveBeenCalledWith(expect.objectContaining({
       blocks: [{ block_type: 'text', content: 'Postgres-native search' }],
     }));
-    expect(searchMock).toHaveBeenCalledWith(expect.objectContaining({ workspace_id: ids.workspace }));
+    expect(searchMocks.resolveSearchScope).toHaveBeenCalledWith({
+      kind: 'workspace', workspace_id: ids.workspace,
+    });
+    expect(searchMocks.searchRecords).toHaveBeenCalledWith(expect.objectContaining({
+      query: 'native search',
+      scope: expect.objectContaining({ workspace_id: ids.workspace }),
+    }));
     expect(runMocks.startRun).not.toHaveBeenCalledWith(expect.objectContaining({ task_id: expect.anything() }));
+  });
+
+  it('routes rag mode explicitly and preserves dependency failures', async () => {
+    await expect(call('search', {
+      mode: 'rag',
+      query: 'semantic evidence',
+      scope: { kind: 'database', database_id: ids.database },
+    })).resolves.toMatchObject({
+      ok: true,
+      meta: { limit: 8 },
+      result: { mode: 'rag', chunks: [{ rank: 1 }], truncated: false },
+    });
+    expect(searchRagMock).toHaveBeenCalledWith(expect.objectContaining({
+      query: 'semantic evidence',
+      scope: expect.objectContaining({ workspace_id: ids.workspace }),
+    }));
+    expect(searchMocks.searchRecords).not.toHaveBeenCalled();
+
+    searchRagMock.mockRejectedValueOnce(Object.assign(new Error('RAG is disabled'), {
+      code: 'DEPENDENCY_UNAVAILABLE',
+      retryable: true,
+    }));
+    await expect(call('search', {
+      mode: 'rag',
+      query: 'semantic evidence',
+      scope: { kind: 'workspace', workspace_id: ids.workspace },
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'DEPENDENCY_UNAVAILABLE', retryable: true },
+    });
   });
 
   it('uses revisions for knowledge mutations and archive/restore', async () => {

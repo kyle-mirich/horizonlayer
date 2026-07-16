@@ -30,6 +30,8 @@
     "dist",
     "!dist/**/*.test.*",
     "!dist/testing",
+    "docker-compose.yml",
+    "scripts/local-qdrant.mjs",
     "schema.sql",
     "README.md",
     "LICENSE"
@@ -40,6 +42,8 @@
     "db:up": "docker compose up -d db",
     "db:down": "docker compose stop db",
     "db:reset": "docker compose down -v",
+    "rag:up": "node scripts/local-qdrant.mjs up",
+    "rag:down": "node scripts/local-qdrant.mjs down",
     "demo:agent": "tsx src/testing/agentDemo.ts",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
@@ -54,6 +58,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@qdrant/js-client-rest": "1.18.0",
     "pg": "^8.22.0",
     "xsschema": "^0.4.4",
     "zod": "^3.24.1"
@@ -69,5 +74,8 @@
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.64.0",
     "vitest": "^4.1.10"
+  },
+  "optionalDependencies": {
+    "@huggingface/transformers": "4.2.0"
   }
 }

@@ -414,39 +414,50 @@ export const LinkSchema = z.union([
 
 const SearchFields = {
   query: z.string().trim().min(1).max(1_000),
-  workspace_id: WorkspaceId,
   tags: Tags.optional(),
   min_importance: z.number().min(0).max(1).optional(),
-  limit: z.number().int().min(1).max(50).optional()
-    .describe('Maximum search hits; defaults to 20 and cannot exceed 50'),
 };
-const SearchContentTypes = z.union([
-  z.tuple([z.literal('pages')]),
-  z.tuple([z.literal('rows')]),
-  z.tuple([z.literal('pages'), z.literal('rows')]),
-  z.tuple([z.literal('rows'), z.literal('pages')]),
-]).describe('Unique content kinds to search; omit to search both pages and rows');
-
-export const SearchSchema = z.union([
+const SearchRecordTypes = z.union([
+  z.tuple([z.literal('page')]),
+  z.tuple([z.literal('row')]),
+  z.tuple([z.literal('page'), z.literal('row')]),
+  z.tuple([z.literal('row'), z.literal('page')]),
+]).describe('Unique canonical record kinds; omit to search both pages and rows');
+const SearchScope = z.discriminatedUnion('kind', [
   z.object({
-    ...SearchFields,
-    content_types: SearchContentTypes.optional(),
+    kind: z.literal('workspace'),
+    workspace_id: WorkspaceId,
+    types: SearchRecordTypes.optional(),
   }).strict(),
   z.object({
-    ...SearchFields,
+    kind: z.literal('session'),
     session_id: Id.describe('Restrict search to pages attached to this session'),
-    content_types: z.tuple([z.literal('pages')]).optional()
-      .describe('When session_id is present, omit this or pass exactly ["pages"]'),
   }).strict(),
   z.object({
-    ...SearchFields,
+    kind: z.literal('database'),
     database_id: Id.describe('Restrict search to rows in this database'),
-    content_types: z.tuple([z.literal('rows')]).optional()
-      .describe('When database_id is present, omit this or pass exactly ["rows"]'),
   }).strict(),
 ]).describe(
-  'Search one workspace. session_id and database_id are mutually exclusive. If content_types is omitted, '
-  + 'session_id implies pages, database_id implies rows, and no scope ID searches both.'
+  'Required search boundary. Workspace scope can select page and/or row records; session scope is page-only; database scope is row-only.'
+);
+
+export const SearchSchema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('records'),
+    ...SearchFields,
+    scope: SearchScope,
+    limit: z.number().int().min(1).max(50).optional()
+      .describe('Maximum canonical records; defaults to 20 and cannot exceed 50'),
+  }).strict(),
+  z.object({
+    mode: z.literal('rag'),
+    ...SearchFields,
+    scope: SearchScope,
+    limit: z.number().int().min(1).max(20).optional()
+      .describe('Maximum citation-ready chunks; defaults to 8 and cannot exceed 20'),
+  }).strict(),
+]).describe(
+  'Choose records for actionable canonical page/row IDs and revisions, or rag for semantic evidence chunks with canonical citations.'
 );
 
 const CheckpointFields = {
@@ -794,7 +805,7 @@ const SessionResumeOutput = objectSchema({
   truncated: booleanSchema,
 });
 
-const SearchHitOutput = objectSchema({
+const SearchRecordOutput = objectSchema({
   id: idSchema,
   type: { enum: ['page', 'row'] },
   title: stringSchema(),
@@ -802,13 +813,87 @@ const SearchHitOutput = objectSchema({
   snippet: stringSchema(),
   workspace_id: idSchema,
   session_id: nullable(idSchema),
+  parent_page_id: nullable(idSchema),
   database_id: nullable(idSchema),
   tags: tagsSchema,
+  importance: numberSchema,
+  revision: integerSchema(1),
+  created_at: timestampSchema,
   updated_at: timestampSchema,
 });
 
+const ragPageCitationProperties: ObjectProperties = {
+  type: { const: 'page' },
+  id: idSchema,
+  workspace_id: idSchema,
+  title: stringSchema(),
+  revision: integerSchema(1),
+  updated_at: timestampSchema,
+};
+const RagPageTitleCitationOutput = objectSchema({
+  ...ragPageCitationProperties,
+  part: { const: 'title' },
+});
+const RagPageBlockCitationOutput = objectSchema({
+  ...ragPageCitationProperties,
+  part: { const: 'block' },
+  block_id: idSchema,
+  block_revision: integerSchema(1),
+  block_type: { enum: [...BLOCK_TYPES] },
+  block_position: integerSchema(),
+  char_start: integerSchema(),
+  char_end: integerSchema(),
+});
+const RagRowCitationPropertyOutput = objectSchema({
+  id: idSchema,
+  name: stringSchema(),
+});
+const RagRowCitationOutput = objectSchema({
+  type: { const: 'row' },
+  id: idSchema,
+  workspace_id: idSchema,
+  database_id: idSchema,
+  database_name: stringSchema(),
+  database_description: nullable(stringSchema()),
+  title: stringSchema(),
+  revision: integerSchema(1),
+  updated_at: timestampSchema,
+  properties: arraySchema(RagRowCitationPropertyOutput),
+});
+const RagChunkOutput = objectSchema({
+  rank: integerSchema(1),
+  score: numberSchema,
+  text: stringSchema(),
+  citation: {
+    anyOf: [RagPageTitleCitationOutput, RagPageBlockCitationOutput, RagRowCitationOutput],
+  },
+});
+const SearchResultOutput = {
+  anyOf: [
+    objectSchema({
+      mode: { const: 'records' },
+      records: arraySchema(SearchRecordOutput),
+      truncated: booleanSchema,
+    }),
+    objectSchema({
+      mode: { const: 'rag' },
+      chunks: arraySchema(RagChunkOutput),
+      truncated: booleanSchema,
+    }),
+  ],
+};
+
 const ToolErrorOutput = objectSchema({
-  code: { enum: ['CONFLICT', 'INTERNAL', 'INVALID_ARGUMENT', 'INVALID_REFERENCE', 'NOT_FOUND'] },
+  code: {
+    enum: [
+      'CONFLICT',
+      'DEPENDENCY_UNAVAILABLE',
+      'INTERNAL',
+      'INVALID_ARGUMENT',
+      'INVALID_REFERENCE',
+      'NOT_FOUND',
+    ],
+  },
   message: stringSchema(),
   retryable: booleanSchema,
 });
@@ -915,7 +1000,7 @@ export const CORE_TOOL_OUTPUT_SCHEMAS = {
     restore: LinkOutput,
   }),
   search: envelopeOutputSchema(
-    { search: objectSchema({ items: arraySchema(SearchHitOutput) }) },
+    { search: SearchResultOutput },
     { search: SearchMetaOutput }
   ),
   run: envelopeOutputSchema({

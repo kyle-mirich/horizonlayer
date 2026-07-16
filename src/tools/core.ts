@@ -51,7 +51,11 @@ import {
   listLinks,
   restoreLink,
 } from '../db/queries/links.js';
-import { search } from '../db/queries/search.js';
+import {
+  resolveSearchScope,
+  searchRecords,
+} from '../db/queries/search.js';
+import { searchRag } from '../search/rag.js';
 import {
   checkpointRun,
   finishRun,
@@ -406,18 +410,40 @@ export function registerCoreTools(server: AppServer): void {
 
   server.addTool({
     name: 'search',
-    description: 'Search page and row knowledge inside one workspace using PostgreSQL full-text and typo-tolerant ranking.',
+    description: 'Find canonical page/row records for action, or retrieve semantic evidence chunks with exact citations.',
     annotations: { readOnlyHint: true, idempotentHint: true },
     parameters: SearchSchema,
     outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.search,
     execute: async (params) => {
       const action = 'search';
       try {
-        const records = await search(params);
+        const scope = await resolveSearchScope(params.scope);
+        if (params.mode === 'records') {
+          const result = await searchRecords({
+            query: params.query,
+            scope,
+            tags: params.tags,
+            min_importance: params.min_importance,
+            limit: params.limit,
+          });
+          return successEnvelope({
+            action,
+            result: { mode: params.mode, ...result },
+            meta: { limit: params.limit ?? 20 },
+          });
+        }
+
+        const result = await searchRag({
+          query: params.query,
+          scope,
+          tags: params.tags,
+          min_importance: params.min_importance,
+          limit: params.limit,
+        });
         return successEnvelope({
           action,
-          result: { items: records },
-          meta: { limit: params.limit ?? 20 },
+          result: { mode: params.mode, ...result },
+          meta: { limit: params.limit ?? 8 },
         });
       } catch (error) {
         return errorEnvelopeFromUnknown(action, error);

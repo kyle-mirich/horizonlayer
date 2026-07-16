@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const initializeDatabaseMock = vi.fn();
 const closePoolMock = vi.fn();
+const disposeEmbeddingProviderMock = vi.fn();
 const startMock = vi.fn();
 const stopMock = vi.fn();
 const serverOnceMock = vi.fn();
@@ -18,6 +19,10 @@ vi.mock('./db/client.js', () => ({
   closePool: closePoolMock,
 }));
 
+vi.mock('./search/embedder.js', () => ({
+  disposeEmbeddingProvider: disposeEmbeddingProviderMock,
+}));
+
 vi.mock('./server.js', () => ({
   createAppServer: createAppServerMock,
 }));
@@ -26,6 +31,7 @@ describe('runServer stdio runtime', () => {
   beforeEach(() => {
     initializeDatabaseMock.mockReset().mockResolvedValue(undefined);
     closePoolMock.mockReset().mockResolvedValue(undefined);
+    disposeEmbeddingProviderMock.mockReset().mockResolvedValue(undefined);
     startMock.mockReset().mockResolvedValue(undefined);
     stopMock.mockReset().mockResolvedValue(undefined);
     serverOnceMock.mockReset();
@@ -66,6 +72,7 @@ describe('runServer stdio runtime', () => {
     await Promise.all([sigintHandler?.(), sigtermHandler?.()]);
 
     expect(stopMock).toHaveBeenCalledTimes(1);
+    expect(disposeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
     expect(closePoolMock).toHaveBeenCalledTimes(1);
     expect(processExitSpy).toHaveBeenCalledWith(0);
   });
@@ -85,6 +92,7 @@ describe('runServer stdio runtime', () => {
     await sigintHandler?.();
 
     expect(stopMock).toHaveBeenCalledTimes(1);
+    expect(disposeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
     expect(closePoolMock).toHaveBeenCalledTimes(1);
     expect(processExitSpy).toHaveBeenCalledWith(0);
   });
@@ -103,6 +111,7 @@ describe('runServer stdio runtime', () => {
     });
 
     expect(stopMock).toHaveBeenCalledTimes(1);
+    expect(disposeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
     expect(processExitSpy).not.toHaveBeenCalled();
   });
 
@@ -127,6 +136,7 @@ describe('runServer stdio runtime', () => {
     });
 
     expect(stopMock).toHaveBeenCalledTimes(1);
+    expect(disposeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
     expect(processExitSpy).not.toHaveBeenCalled();
   });
 
@@ -137,6 +147,7 @@ describe('runServer stdio runtime', () => {
     await expect(runServer()).rejects.toThrow('start failed');
 
     expect(stopMock).toHaveBeenCalledTimes(1);
+    expect(disposeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
     expect(closePoolMock).toHaveBeenCalledTimes(1);
     expect(processOnceSpy).not.toHaveBeenCalled();
   });
@@ -149,7 +160,24 @@ describe('runServer stdio runtime', () => {
 
     expect(createAppServerMock).not.toHaveBeenCalled();
     expect(stopMock).not.toHaveBeenCalled();
+    expect(disposeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
     expect(closePoolMock).toHaveBeenCalledTimes(1);
     expect(processOnceSpy).not.toHaveBeenCalled();
+  });
+
+  it('continues closing the database when embedding disposal fails', async () => {
+    disposeEmbeddingProviderMock.mockRejectedValueOnce(new Error('dispose failed'));
+
+    const { runServer } = await import('./runServer.js');
+    await runServer();
+
+    const sigintHandler = processOnceSpy.mock.calls.find(([event]) => event === 'SIGINT')?.[1] as
+      | (() => Promise<void>)
+      | undefined;
+    await sigintHandler?.();
+
+    expect(disposeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
+    expect(closePoolMock).toHaveBeenCalledTimes(1);
+    expect(processExitSpy).toHaveBeenCalledWith(1);
   });
 });

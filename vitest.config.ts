@@ -25,7 +25,10 @@ export default defineConfig({
     },
     environment: 'node',
     exclude: ['dist/**', 'node_modules/**'],
+    // Fresh-schema suites create the same PostgreSQL extensions. PostgreSQL's
+    // CREATE EXTENSION IF NOT EXISTS is not race-safe across sessions.
+    fileParallelism: !process.env.HORIZONLAYER_INTEGRATION_DATABASE_URL,
     globals: true,
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'scripts/**/*.test.mjs'],
   },
 });

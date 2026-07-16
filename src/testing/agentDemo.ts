@@ -110,9 +110,13 @@ async function main(): Promise<void> {
     })).result, 'link/create result was not an object');
 
     const search = asRecord((await callTool(client, 'search', {
-      content_types: ['pages', 'rows'],
+      mode: 'records',
       query: 'Postgres durable source truth',
-      workspace_id: workspaceId,
+      scope: {
+        kind: 'workspace',
+        types: ['page', 'row'],
+        workspace_id: workspaceId,
+      },
     })).result, 'search result was not an object');
 
     let run = asRecord((await callTool(client, 'run', {
@@ -170,7 +174,7 @@ async function main(): Promise<void> {
       run_id: runId,
       run_checkpoint_sequence: checkpoint.sequence,
       run_status: run.status,
-      search_hits: asArray(search.items, 'search result missing items').length,
+      search_hits: asArray(search.records, 'search result missing records').length,
       resume_sections: Object.keys(resume),
       workspace_archived: true,
     }, null, 2));

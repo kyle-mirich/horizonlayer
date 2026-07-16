@@ -1,4 +1,6 @@
 import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { z } from 'zod';
 
 const packageMetadata = z.object({
@@ -24,8 +26,43 @@ const ServerSchema = z.object({
   version: z.literal(packageMetadata.version),
 }).strict();
 
+const HttpUrlSchema = z.string().url().refine((value) => {
+  const protocol = new URL(value).protocol;
+  return protocol === 'http:' || protocol === 'https:';
+}, 'QDRANT_URL must use http or https').refine((value) => {
+  const url = new URL(value);
+  return url.username === '' && url.password === '';
+}, 'QDRANT_URL must not contain credentials; use QDRANT_API_KEY for authentication');
+
+const RagSchema = z.object({
+  enabled: z.boolean().default(false),
+  qdrant_url: HttpUrlSchema.default('http://127.0.0.1:6333'),
+  api_key: z.string().trim().min(1).optional(),
+  collection: z.string().trim().min(1).default('horizonlayer_rag'),
+  timeout_ms: z.number().int().min(100).max(120_000).default(5_000),
+  embedding_model: z.string().trim().min(1)
+    .default('onnx-community/all-MiniLM-L6-v2-ONNX'),
+  embedding_revision: z.string().trim().min(1)
+    .default('aff7a1dc4e8a1ea593e6ea21e95c22ef0a25966f'),
+  embedding_dtype: z.enum(['fp32', 'fp16', 'q4', 'q4f16']).default('fp32'),
+  allow_download: z.boolean().default(true),
+  cache_dir: z.string().trim().min(1),
+}).strict().superRefine((value, context) => {
+  if (!value.api_key) return;
+  const url = new URL(value.qdrant_url);
+  const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname.toLowerCase());
+  if (url.protocol === 'http:' && !loopback) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'QDRANT_URL must use https when QDRANT_API_KEY is set for a non-loopback host',
+      path: ['qdrant_url'],
+    });
+  }
+});
+
 const ConfigSchema = z.object({
   database: DatabaseSchema,
+  rag: RagSchema,
   server: ServerSchema,
 }).strict();
 
@@ -51,6 +88,11 @@ function parseNumber(name: string, value: string | undefined): number | undefine
   return parsed;
 }
 
+function defaultEmbeddingCacheDir(environment: NodeJS.ProcessEnv): string {
+  const cacheRoot = optional(environment.XDG_CACHE_HOME) ?? join(homedir(), '.cache');
+  return join(cacheRoot, 'horizonlayer', 'models');
+}
+
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config {
   return ConfigSchema.parse({
     database: {
@@ -71,6 +113,22 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config
         'DB_CONNECTION_TIMEOUT_MS',
         environment.DB_CONNECTION_TIMEOUT_MS
       ),
+    },
+    rag: {
+      enabled: parseBoolean('RAG_ENABLED', environment.RAG_ENABLED),
+      qdrant_url: optional(environment.QDRANT_URL),
+      api_key: optional(environment.QDRANT_API_KEY),
+      collection: optional(environment.QDRANT_COLLECTION),
+      timeout_ms: parseNumber('QDRANT_TIMEOUT_MS', environment.QDRANT_TIMEOUT_MS),
+      embedding_model: optional(environment.EMBEDDING_MODEL),
+      embedding_revision: optional(environment.EMBEDDING_REVISION),
+      embedding_dtype: optional(environment.EMBEDDING_DTYPE),
+      allow_download: parseBoolean(
+        'EMBEDDING_ALLOW_DOWNLOAD',
+        environment.EMBEDDING_ALLOW_DOWNLOAD
+      ),
+      cache_dir: optional(environment.EMBEDDING_CACHE_DIR)
+        ?? defaultEmbeddingCacheDir(environment),
     },
     server: {
       name: optional(environment.APP_NAME),

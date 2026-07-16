@@ -1,6 +1,7 @@
 import { initializeDatabase } from './db/initialize.js';
 import { closePool } from './db/client.js';
 import { createAppServer } from './server.js';
+import { disposeEmbeddingProvider } from './search/embedder.js';
 
 export async function runServer(): Promise<void> {
   let server: ReturnType<typeof createAppServer> | null = null;
@@ -17,6 +18,12 @@ export async function runServer(): Promise<void> {
           } catch (error) {
             firstError = error;
           }
+        }
+
+        try {
+          await disposeEmbeddingProvider();
+        } catch (error) {
+          firstError ??= error;
         }
 
         try {

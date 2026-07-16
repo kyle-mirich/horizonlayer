@@ -19,6 +19,16 @@ export type ManagedDbConfig = {
   volumeName: string;
 };
 
+export type ManagedQdrantConfig = {
+  containerName: string;
+  host: string;
+  image: string;
+  port: number;
+  volumeName: string;
+};
+
+type BootstrapTarget = 'postgres' | 'qdrant';
+
 class FriendlyBootstrapError extends Error {
   constructor(message: string, readonly details?: string) {
     super(message);
@@ -53,11 +63,45 @@ export function buildManagedDbConfig(): ManagedDbConfig {
   };
 }
 
+export function buildManagedQdrantConfig(): ManagedQdrantConfig {
+  return {
+    containerName: process.env.HORIZONLAYER_QDRANT_DOCKER_CONTAINER_NAME
+      ?? 'horizonlayer-qdrant',
+    host: '127.0.0.1',
+    image: process.env.HORIZONLAYER_QDRANT_DOCKER_IMAGE
+      ?? 'qdrant/qdrant:v1.18.2-unprivileged',
+    port: 6333,
+    volumeName: process.env.HORIZONLAYER_QDRANT_DOCKER_VOLUME_NAME
+      ?? 'horizonlayer-qdrant-data',
+  };
+}
+
+export function shouldManageQdrant(
+  environment: NodeJS.ProcessEnv = process.env
+): boolean {
+  const ragEnabled = environment.RAG_ENABLED?.toLowerCase();
+  const hasExplicitUrl = environment.QDRANT_URL != null
+    && environment.QDRANT_URL !== '';
+  return ['1', 'true', 'yes', 'on'].includes(ragEnabled ?? '') && !hasExplicitUrl;
+}
+
 function buildDatabaseUrl(config: ManagedDbConfig, database: string): string {
   return `postgres://${encodeURIComponent(config.user)}:${encodeURIComponent(config.password)}@${config.host}:${config.port}/${database}`;
 }
 
-function runDocker(args: string[], extraEnv: Record<string, string> = {}): string {
+function dockerRecoveryHint(target: BootstrapTarget): string {
+  if (target === 'qdrant') {
+    return 'Start Docker Desktop and try again, set QDRANT_URL to an existing Qdrant instance, '
+      + 'or set RAG_ENABLED=false.';
+  }
+  return 'Start Docker Desktop and try again, or set DATABASE_URL to an existing PostgreSQL instance.';
+}
+
+function runDocker(
+  args: string[],
+  extraEnv: Record<string, string> = {},
+  target: BootstrapTarget = 'postgres'
+): string {
   const result = spawnSync('docker', args, {
     encoding: 'utf8',
     env: {
@@ -68,16 +112,29 @@ function runDocker(args: string[], extraEnv: Record<string, string> = {}): strin
   });
 
   if (result.error) {
+    const errorCode = (result.error as NodeJS.ErrnoException).code;
+    if (errorCode !== 'ENOENT') {
+      const details = result.error.message;
+      throw new FriendlyBootstrapError(
+        `Docker could not start while preparing local ${target === 'qdrant' ? 'Qdrant' : 'PostgreSQL'}.\n`
+        + `${dockerRecoveryHint(target)}\n`
+        + `Docker said: ${details}`,
+        details
+      );
+    }
     throw new FriendlyBootstrapError(
       'Docker is required for the default local setup, but the `docker` command was not found.\n'
-      + 'Install Docker Desktop or set DATABASE_URL to an existing PostgreSQL instance.'
+      + dockerRecoveryHint(target)
     );
   }
   if (result.status !== 0) {
     const details = (result.stderr || result.stdout || `docker ${args.join(' ')} failed`).trim();
+    const availabilityCheck = args.length === 1 && args[0] === 'version';
     throw new FriendlyBootstrapError(
-      'Docker is installed, but it is not available right now.\n'
-      + 'Start Docker Desktop and try again, or set DATABASE_URL to an existing PostgreSQL instance.\n'
+      (availabilityCheck
+        ? 'Docker is installed, but its daemon is unavailable right now.\n'
+        : `Docker failed while preparing local ${target === 'qdrant' ? 'Qdrant' : 'PostgreSQL'}.\n`)
+      + `${dockerRecoveryHint(target)}\n`
       + `Docker said: ${details}`,
       details
     );
@@ -112,6 +169,30 @@ export function buildManagedPostgresDockerRun(config: ManagedDbConfig): {
       POSTGRES_DB: config.database,
       POSTGRES_PASSWORD: config.password,
       POSTGRES_USER: config.user,
+    },
+  };
+}
+
+export function buildManagedQdrantDockerRun(config: ManagedQdrantConfig): {
+  args: string[];
+  env: Record<string, string>;
+} {
+  return {
+    args: [
+      'run',
+      '-d',
+      '--name',
+      config.containerName,
+      '-e',
+      'QDRANT__TELEMETRY_DISABLED',
+      '-p',
+      `${config.host}:${config.port}:6333`,
+      '-v',
+      `${config.volumeName}:/qdrant/storage`,
+      config.image,
+    ],
+    env: {
+      QDRANT__TELEMETRY_DISABLED: 'true',
     },
   };
 }
@@ -185,7 +266,7 @@ function isContainerNameConflict(error: unknown): error is FriendlyBootstrapErro
     && /container name .* already in use/i.test(error.details ?? '');
 }
 
-function startManagedContainer(config: ManagedDbConfig): void {
+function startManagedPostgresContainer(config: ManagedDbConfig): void {
   const dockerRun = buildManagedPostgresDockerRun(config);
   try {
     runDocker(dockerRun.args, dockerRun.env);
@@ -216,7 +297,7 @@ async function ensureManagedPostgres(config: ManagedDbConfig): Promise<string> {
   const status = getContainerStatus(config.containerName);
   if (status === 'missing') {
     console.error(`Starting local Postgres container '${config.containerName}' on ${config.host}:${config.port}...`);
-    startManagedContainer(config);
+    startManagedPostgresContainer(config);
   } else if (status === 'stopped') {
     console.error(`Starting existing Postgres container '${config.containerName}'...`);
     runDocker(['start', config.containerName]);
@@ -237,9 +318,75 @@ async function ensureManagedPostgres(config: ManagedDbConfig): Promise<string> {
   );
 }
 
+export async function isQdrantReady(url: string, timeoutMs = 1_000): Promise<boolean> {
+  try {
+    const response = await fetch(new URL('/readyz', url), {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function managedQdrantUrl(config: ManagedQdrantConfig): string {
+  return `http://${config.host}:${config.port}`;
+}
+
+function startManagedQdrantContainer(config: ManagedQdrantConfig): void {
+  const dockerRun = buildManagedQdrantDockerRun(config);
+  try {
+    runDocker(dockerRun.args, dockerRun.env, 'qdrant');
+  } catch (error) {
+    if (!isContainerNameConflict(error)) throw error;
+
+    const convergedStatus = getContainerStatus(config.containerName);
+    if (convergedStatus === 'running') return;
+    if (convergedStatus === 'stopped') {
+      runDocker(['start', config.containerName], {}, 'qdrant');
+      return;
+    }
+    throw error;
+  }
+}
+
+async function ensureManagedQdrant(config: ManagedQdrantConfig): Promise<void> {
+  const url = managedQdrantUrl(config);
+  if (await isQdrantReady(url)) return;
+
+  runDocker(['version'], {}, 'qdrant');
+
+  const status = getContainerStatus(config.containerName);
+  if (status === 'missing') {
+    console.error(
+      `Starting local Qdrant container '${config.containerName}' on ${config.host}:${config.port}...`
+    );
+    startManagedQdrantContainer(config);
+  } else if (status === 'stopped') {
+    console.error(`Starting existing Qdrant container '${config.containerName}'...`);
+    runDocker(['start', config.containerName], {}, 'qdrant');
+  }
+
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (await isQdrantReady(url)) return;
+    await sleep(1_000);
+  }
+
+  throw new FriendlyBootstrapError(
+    `Started Docker bootstrap, but Qdrant did not become ready at ${url}/readyz within 30 seconds.\n`
+    + 'Check Docker Desktop and container logs, set QDRANT_URL to an existing Qdrant instance, '
+    + 'or set RAG_ENABLED=false.'
+  );
+}
+
 async function main(): Promise<void> {
   if (!process.env.DATABASE_URL) {
     process.env.DATABASE_URL = await ensureManagedPostgres(buildManagedDbConfig());
+  }
+
+  if (shouldManageQdrant()) {
+    await ensureManagedQdrant(buildManagedQdrantConfig());
   }
 
   const { runServer } = await import('./runServer.js');

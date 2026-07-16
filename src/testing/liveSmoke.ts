@@ -138,38 +138,72 @@ function verifyAdvertisedContract(listToolsResult: unknown): string[] {
     );
 
     if (toolName === 'search') {
-      const searchBranches = asArray(inputSchema.anyOf, 'search schema missing scope branches').map(
+      const modeBranches = asArray(inputSchema.anyOf, 'search schema missing mode branches').map(
+        (value) => asRecord(value, 'search schema contained an invalid mode branch')
+      );
+      assert(modeBranches.length === 2, 'search schema must advertise records and rag modes');
+
+      const modes = new Map<string, JsonObject>();
+      for (const branch of modeBranches) {
+        const required = asArray(branch.required, 'search mode branch missing required fields');
+        assert(required.includes('mode'), 'every search mode branch must require mode');
+        assert(required.includes('query'), 'every search mode branch must require query');
+        assert(required.includes('scope'), 'every search mode branch must require scope');
+        assert(branch.additionalProperties === false, 'search mode branches must reject unknown fields');
+        const properties = asRecord(branch.properties, 'search mode branch missing properties');
+        const mode = getString(asRecord(properties.mode, 'search mode property was invalid'), 'const');
+        modes.set(mode, branch);
+      }
+      assert(
+        JSON.stringify(sorted(modes.keys())) === JSON.stringify(['rag', 'records']),
+        'search schema must require exactly records or rag mode'
+      );
+
+      const recordsProperties = asRecord(
+        modes.get('records')?.properties,
+        'records mode missing properties'
+      );
+      const scopeSchema = asRecord(recordsProperties.scope, 'records mode missing scope schema');
+      const scopeBranches = asArray(scopeSchema.anyOf, 'search schema missing scope branches').map(
         (value) => asRecord(value, 'search schema contained an invalid scope branch')
       );
-      assert(searchBranches.length === 3, 'search schema must advertise unscoped, session, and database branches');
+      assert(scopeBranches.length === 3, 'search schema must advertise workspace, session, and database scopes');
 
-      let unscopedBranches = 0;
+      let workspaceBranches = 0;
       let sessionBranches = 0;
       let databaseBranches = 0;
-      for (const branch of searchBranches) {
+      for (const branch of scopeBranches) {
         const required = asArray(branch.required, 'search scope branch missing required fields');
-        assert(required.includes('query'), 'every search scope branch must require query');
-        assert(required.includes('workspace_id'), 'every search scope branch must require workspace_id');
+        assert(required.includes('kind'), 'every search scope branch must require kind');
         assert(branch.additionalProperties === false, 'search scope branches must reject unknown fields');
 
         const properties = asRecord(branch.properties, 'search scope branch missing properties');
-        const hasSession = Object.hasOwn(properties, 'session_id');
-        const hasDatabase = Object.hasOwn(properties, 'database_id');
-        assert(!(hasSession && hasDatabase), 'search scope branches must not mix session_id and database_id');
-
-        if (hasSession) {
+        const kind = getString(asRecord(properties.kind, 'search scope kind was invalid'), 'const');
+        if (kind === 'workspace') {
+          workspaceBranches += 1;
+          assert(required.includes('workspace_id'), 'workspace search scope must require workspace_id');
+        } else if (kind === 'session') {
           sessionBranches += 1;
-          assert(required.includes('session_id'), 'session search branch must require session_id');
-        } else if (hasDatabase) {
+          assert(required.includes('session_id'), 'session search scope must require session_id');
+        } else if (kind === 'database') {
           databaseBranches += 1;
-          assert(required.includes('database_id'), 'database search branch must require database_id');
+          assert(required.includes('database_id'), 'database search scope must require database_id');
         } else {
-          unscopedBranches += 1;
+          throw new Error(`search schema advertised unsupported scope kind ${kind}`);
         }
       }
-      assert(unscopedBranches === 1, 'search schema must advertise exactly one unscoped branch');
-      assert(sessionBranches === 1, 'search schema must advertise exactly one session branch');
-      assert(databaseBranches === 1, 'search schema must advertise exactly one database branch');
+      assert(workspaceBranches === 1, 'search schema must advertise exactly one workspace scope');
+      assert(sessionBranches === 1, 'search schema must advertise exactly one session scope');
+      assert(databaseBranches === 1, 'search schema must advertise exactly one database scope');
+      const outputContract = JSON.stringify(outputSchema);
+      assert(outputContract.includes('"records"'), 'search output must advertise canonical records');
+      assert(outputContract.includes('"chunks"'), 'search output must advertise RAG chunks');
+      assert(outputContract.includes('"citation"'), 'RAG chunks must advertise citations');
+      assert(outputContract.includes('"revision"'), 'search output must advertise canonical revisions');
+      assert(
+        outputContract.includes('DEPENDENCY_UNAVAILABLE'),
+        'search output must advertise optional dependency failures'
+      );
       assert(actionBranches(inputSchema).size === 0, 'search must not advertise action branches');
       continue;
     }
@@ -659,12 +693,17 @@ async function main(): Promise<void> {
     linkRevision = getRevision(link, 'link/restore');
 
     const searchResult = resultRecord((await callTool(client, 'search', {
-      content_types: ['pages', 'rows'],
       limit: 20,
+      mode: 'records',
       query: `Postgres agent knowledge ${suffix}`,
-      workspace_id: workspaceId,
+      scope: {
+        kind: 'workspace',
+        types: ['page', 'row'],
+        workspace_id: workspaceId,
+      },
     })).result, 'search');
-    const searchItems = asArray(searchResult.items, 'search result missing items');
+    assert(searchResult.mode === 'records', 'record search returned the wrong mode');
+    const searchItems = asArray(searchResult.records, 'search result missing records');
     assert(searchItems.length > 0, 'Postgres-native search returned no page or row matches');
 
     let run = resultRecord((await callTool(client, 'run', {

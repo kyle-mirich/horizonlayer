@@ -1,3 +1,5 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
 
@@ -16,6 +18,17 @@ describe('environment configuration', () => {
         ssl_reject_unauthorized: true,
         user: 'postgres',
       },
+      rag: {
+        allow_download: true,
+        cache_dir: join(homedir(), '.cache', 'horizonlayer', 'models'),
+        collection: 'horizonlayer_rag',
+        embedding_dtype: 'fp32',
+        embedding_model: 'onnx-community/all-MiniLM-L6-v2-ONNX',
+        embedding_revision: 'aff7a1dc4e8a1ea593e6ea21e95c22ef0a25966f',
+        enabled: false,
+        qdrant_url: 'http://127.0.0.1:6333',
+        timeout_ms: 5_000,
+      },
       server: {
         name: 'Horizon Layer',
         version: '0.0.1',
@@ -33,6 +46,16 @@ describe('environment configuration', () => {
       DB_PORT: '6543',
       DB_SSL_MODE: 'require',
       DB_SSL_REJECT_UNAUTHORIZED: 'off',
+      EMBEDDING_ALLOW_DOWNLOAD: 'off',
+      EMBEDDING_CACHE_DIR: '/var/cache/horizonlayer-models',
+      EMBEDDING_DTYPE: 'q4',
+      EMBEDDING_MODEL: 'local/embedding-model',
+      EMBEDDING_REVISION: 'pinned-revision',
+      QDRANT_API_KEY: 'local-secret',
+      QDRANT_COLLECTION: 'agent_memory',
+      QDRANT_TIMEOUT_MS: '7500',
+      QDRANT_URL: 'https://qdrant.internal:7443',
+      RAG_ENABLED: 'yes',
     })).toMatchObject({
       database: {
         connection_timeout_ms: 5000,
@@ -43,6 +66,18 @@ describe('environment configuration', () => {
         ssl_reject_unauthorized: false,
         url: 'postgres://local/test',
       },
+      rag: {
+        allow_download: false,
+        api_key: 'local-secret',
+        cache_dir: '/var/cache/horizonlayer-models',
+        collection: 'agent_memory',
+        embedding_dtype: 'q4',
+        embedding_model: 'local/embedding-model',
+        embedding_revision: 'pinned-revision',
+        enabled: true,
+        qdrant_url: 'https://qdrant.internal:7443',
+        timeout_ms: 7500,
+      },
       server: { name: 'Agent Knowledge', version: '0.0.1' },
     });
   });
@@ -50,11 +85,16 @@ describe('environment configuration', () => {
   it('accepts explicit true boolean values', () => {
     expect(loadConfig({ DB_SSL_REJECT_UNAUTHORIZED: 'yes' }).database.ssl_reject_unauthorized)
       .toBe(true);
+    expect(loadConfig({ RAG_ENABLED: 'on' }).rag.enabled).toBe(true);
+    expect(loadConfig({ EMBEDDING_ALLOW_DOWNLOAD: '1' }).rag.allow_download).toBe(true);
   });
 
   it('rejects ambiguous boolean values', () => {
     expect(() => loadConfig({ DB_SSL_REJECT_UNAUTHORIZED: 'sometimes' })).toThrow(
       'DB_SSL_REJECT_UNAUTHORIZED must be one of: true, false, 1, 0, yes, no, on, off'
+    );
+    expect(() => loadConfig({ RAG_ENABLED: 'sometimes' })).toThrow(
+      'RAG_ENABLED must be one of: true, false, 1, 0, yes, no, on, off'
     );
   });
 
@@ -64,5 +104,39 @@ describe('environment configuration', () => {
     );
     expect(() => loadConfig({ DB_PORT: '70000' })).toThrow();
     expect(() => loadConfig({ DB_POOL_MAX: '0' })).toThrow();
+    expect(() => loadConfig({ QDRANT_TIMEOUT_MS: '99' })).toThrow();
+    expect(() => loadConfig({ QDRANT_TIMEOUT_MS: '120001' })).toThrow();
+  });
+
+  it('rejects credentials embedded in QDRANT_URL', () => {
+    expect(() => loadConfig({ QDRANT_URL: 'https://agent:secret@qdrant.internal' })).toThrow(
+      'QDRANT_URL must not contain credentials'
+    );
+  });
+
+  it('never sends a Qdrant API key over cleartext off loopback', () => {
+    expect(() => loadConfig({
+      QDRANT_API_KEY: 'secret',
+      QDRANT_URL: 'http://qdrant.internal:6333',
+    })).toThrow('QDRANT_URL must use https when QDRANT_API_KEY is set');
+    expect(loadConfig({
+      QDRANT_API_KEY: 'local-secret',
+      QDRANT_URL: 'http://127.0.0.1:6333',
+    }).rag.api_key).toBe('local-secret');
+  });
+
+  it('uses XDG_CACHE_HOME for the default embedding cache when provided', () => {
+    expect(loadConfig({ XDG_CACHE_HOME: '/tmp/agent-cache' }).rag.cache_dir)
+      .toBe('/tmp/agent-cache/horizonlayer/models');
+  });
+
+  it('validates RAG URLs, enums, and nonblank values', () => {
+    expect(() => loadConfig({ QDRANT_URL: 'not-a-url' })).toThrow();
+    expect(() => loadConfig({ QDRANT_URL: 'ftp://127.0.0.1:6333' })).toThrow(
+      'QDRANT_URL must use http or https'
+    );
+    expect(() => loadConfig({ QDRANT_COLLECTION: '   ' })).toThrow();
+    expect(() => loadConfig({ EMBEDDING_CACHE_DIR: '   ' })).toThrow();
+    expect(() => loadConfig({ EMBEDDING_DTYPE: 'q8' })).toThrow();
   });
 });

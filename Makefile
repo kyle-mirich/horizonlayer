@@ -1,12 +1,14 @@
 DATABASE_URL ?= postgres://postgres:postgres@localhost:5432/horizon_layer
 
-.PHONY: help install db-up db-down db-reset dev build typecheck lint test verify smoke-live smoke-local
+.PHONY: help install db-up db-down db-reset rag-up rag-down dev build typecheck lint test verify smoke-live smoke-local
 
 help:
 	@printf "%-14s %s\n" "install" "Install dependencies with npm ci"
 	@printf "%-14s %s\n" "db-up" "Start local PostgreSQL with Docker Compose"
 	@printf "%-14s %s\n" "db-down" "Stop local PostgreSQL"
 	@printf "%-14s %s\n" "db-reset" "Remove local PostgreSQL volume"
+	@printf "%-14s %s\n" "rag-up" "Start optional local Qdrant"
+	@printf "%-14s %s\n" "rag-down" "Stop optional local Qdrant"
 	@printf "%-14s %s\n" "dev" "Run the stdio server against the local database"
 	@printf "%-14s %s\n" "build" "Compile TypeScript"
 	@printf "%-14s %s\n" "test" "Run the unit test suite"
@@ -25,6 +27,12 @@ db-down:
 
 db-reset:
 	docker compose down -v
+
+rag-up:
+	npm run rag:up
+
+rag-down:
+	npm run rag:down
 
 dev:
 	DATABASE_URL=$(DATABASE_URL) APP_NAME="Horizon Layer" npm run dev

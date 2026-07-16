@@ -1,6 +1,29 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+CREATE OR REPLACE FUNCTION database_row_value_search_text(
+  candidate_text TEXT,
+  candidate_json JSONB,
+  candidate_number DOUBLE PRECISION,
+  candidate_date TIMESTAMPTZ,
+  candidate_bool BOOLEAN
+) RETURNS TEXT AS $$
+  SELECT COALESCE(
+    candidate_text,
+    candidate_json::text,
+    candidate_number::text,
+    CASE
+      WHEN candidate_date IS NULL THEN NULL
+      ELSE to_char(
+        candidate_date AT TIME ZONE 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+      )
+    END,
+    candidate_bool::text,
+    ''
+  );
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
 CREATE OR REPLACE FUNCTION valid_database_property_options(
   candidate_type TEXT,
   candidate_options JSONB
@@ -54,6 +77,12 @@ CREATE TABLE IF NOT EXISTS workspaces (
   archived_at TIMESTAMPTZ,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS workspace_search_changes (
+  change_id    BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  changed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -254,6 +283,76 @@ BEGIN
     NEW.updated_at := OLD.updated_at;
   END IF;
 
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION canonical_knowledge_workspace_id(
+  workspace_path TEXT,
+  candidate JSONB
+) RETURNS UUID AS $$
+DECLARE
+  resolved_workspace UUID;
+BEGIN
+  CASE workspace_path
+    WHEN 'direct' THEN
+      resolved_workspace := (candidate ->> 'workspace_id')::uuid;
+    WHEN 'page' THEN
+      SELECT workspace_id INTO resolved_workspace
+      FROM pages
+      WHERE id = (candidate ->> 'page_id')::uuid;
+    WHEN 'database' THEN
+      SELECT workspace_id INTO resolved_workspace
+      FROM databases
+      WHERE id = (candidate ->> 'database_id')::uuid;
+    WHEN 'row' THEN
+      SELECT database_record.workspace_id INTO resolved_workspace
+      FROM database_rows AS row_record
+      JOIN databases AS database_record
+        ON database_record.id = row_record.database_id
+      WHERE row_record.id = (candidate ->> 'row_id')::uuid;
+    ELSE
+      RAISE EXCEPTION 'Unsupported canonical knowledge path %', workspace_path;
+  END CASE;
+
+  RETURN resolved_workspace;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+CREATE OR REPLACE FUNCTION record_workspace_search_change() RETURNS trigger AS $$
+DECLARE
+  old_workspace UUID;
+  new_workspace UUID;
+BEGIN
+  -- Revision triggers run first by name, so a semantic no-op has identical rows
+  -- here and does not invalidate the search index.
+  IF TG_OP = 'UPDATE' AND to_jsonb(NEW) IS NOT DISTINCT FROM to_jsonb(OLD) THEN
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP <> 'INSERT' THEN
+    old_workspace := canonical_knowledge_workspace_id(TG_ARGV[0], to_jsonb(OLD));
+  END IF;
+
+  IF TG_OP <> 'DELETE' THEN
+    new_workspace := canonical_knowledge_workspace_id(TG_ARGV[0], to_jsonb(NEW));
+  END IF;
+
+  -- Journal rows become visible atomically with the canonical write. Exact
+  -- per-workspace counts advance on commit without serializing writers.
+  INSERT INTO workspace_search_changes (workspace_id)
+  SELECT DISTINCT candidate.workspace_id
+  FROM unnest(ARRAY[old_workspace, new_workspace]) AS candidate(workspace_id)
+  JOIN workspaces w ON w.id = candidate.workspace_id
+  WHERE candidate.workspace_id IS NOT NULL
+  ORDER BY candidate.workspace_id;
+
+  -- An indirect parent can already be invisible during an ON DELETE CASCADE.
+  -- Its canonical ancestor has its own trigger, so a missing resolution is a
+  -- safe no-op and the cascade must remain able to complete.
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -530,6 +629,39 @@ CREATE TRIGGER bump_links_revision_trigger
 BEFORE UPDATE ON links
 FOR EACH ROW EXECUTE FUNCTION bump_knowledge_revision();
 
+DROP TRIGGER IF EXISTS record_workspace_search_change_pages_trigger ON pages;
+CREATE TRIGGER record_workspace_search_change_pages_trigger
+BEFORE INSERT OR UPDATE OR DELETE ON pages
+FOR EACH ROW EXECUTE FUNCTION record_workspace_search_change('direct');
+
+DROP TRIGGER IF EXISTS record_workspace_search_change_blocks_trigger ON blocks;
+CREATE TRIGGER record_workspace_search_change_blocks_trigger
+BEFORE INSERT OR UPDATE OR DELETE ON blocks
+FOR EACH ROW EXECUTE FUNCTION record_workspace_search_change('page');
+
+DROP TRIGGER IF EXISTS record_workspace_search_change_databases_trigger ON databases;
+CREATE TRIGGER record_workspace_search_change_databases_trigger
+BEFORE INSERT OR UPDATE OR DELETE ON databases
+FOR EACH ROW EXECUTE FUNCTION record_workspace_search_change('direct');
+
+DROP TRIGGER IF EXISTS record_workspace_search_change_database_properties_trigger
+ON database_properties;
+CREATE TRIGGER record_workspace_search_change_database_properties_trigger
+BEFORE INSERT OR UPDATE OR DELETE ON database_properties
+FOR EACH ROW EXECUTE FUNCTION record_workspace_search_change('database');
+
+DROP TRIGGER IF EXISTS record_workspace_search_change_database_rows_trigger
+ON database_rows;
+CREATE TRIGGER record_workspace_search_change_database_rows_trigger
+BEFORE INSERT OR UPDATE OR DELETE ON database_rows
+FOR EACH ROW EXECUTE FUNCTION record_workspace_search_change('database');
+
+DROP TRIGGER IF EXISTS record_workspace_search_change_database_row_values_trigger
+ON database_row_values;
+CREATE TRIGGER record_workspace_search_change_database_row_values_trigger
+BEFORE INSERT OR UPDATE OR DELETE ON database_row_values
+FOR EACH ROW EXECUTE FUNCTION record_workspace_search_change('row');
+
 DROP TRIGGER IF EXISTS lock_active_workspace_sessions_trigger ON sessions;
 CREATE TRIGGER lock_active_workspace_sessions_trigger
 BEFORE INSERT OR UPDATE ON sessions
@@ -640,6 +772,8 @@ CREATE INDEX IF NOT EXISTS workspaces_created_idx
 CREATE UNIQUE INDEX IF NOT EXISTS workspaces_name_active_idx
   ON workspaces(LOWER(BTRIM(name)))
   WHERE archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS workspace_search_changes_workspace_idx
+  ON workspace_search_changes(workspace_id);
 
 CREATE INDEX IF NOT EXISTS sessions_workspace_last_activity_idx
   ON sessions(workspace_id, last_activity_at DESC);
@@ -688,6 +822,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS database_properties_position_active_idx
 CREATE UNIQUE INDEX IF NOT EXISTS database_properties_title_active_idx
   ON database_properties(database_id)
   WHERE archived_at IS NULL AND property_type = 'title';
+CREATE INDEX IF NOT EXISTS database_properties_name_fts_idx
+  ON database_properties USING GIN(to_tsvector('simple', name));
+CREATE INDEX IF NOT EXISTS database_properties_name_trgm_idx
+  ON database_properties USING GIN(name gin_trgm_ops);
 
 CREATE INDEX IF NOT EXISTS database_rows_database_created_idx
   ON database_rows(database_id, created_at DESC);
@@ -703,12 +841,12 @@ CREATE INDEX IF NOT EXISTS database_row_values_fts_idx
   ON database_row_values USING GIN(
     to_tsvector(
       'simple',
-      COALESCE(
+      database_row_value_search_text(
         value_text,
-        value_json::text,
-        value_number::text,
-        value_bool::text,
-        ''
+        value_json,
+        value_number,
+        value_date,
+        value_bool
       )
     )
   );

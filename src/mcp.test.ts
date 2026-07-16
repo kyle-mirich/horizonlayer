@@ -60,17 +60,41 @@ describe('AppServer official SDK adapter', () => {
         anyOf?: Array<{
           required?: string[];
           additionalProperties?: boolean;
-          properties?: Record<string, unknown>;
+          properties?: {
+            mode?: { const?: string };
+            scope?: {
+              anyOf?: Array<{
+                required?: string[];
+                additionalProperties?: boolean;
+                properties?: { kind?: { const?: string } };
+              }>;
+            };
+          };
         }>;
       };
-      expect(searchInput.anyOf).toHaveLength(3);
+      expect(searchInput.anyOf).toHaveLength(2);
       expect(searchInput.anyOf?.every((branch) => (
         branch.required?.includes('query')
-        && branch.required.includes('workspace_id')
+        && branch.required.includes('mode')
+        && branch.required.includes('scope')
         && branch.additionalProperties === false
       ))).toBe(true);
-      expect(searchInput.anyOf?.filter((branch) => branch.properties?.session_id)).toHaveLength(1);
-      expect(searchInput.anyOf?.filter((branch) => branch.properties?.database_id)).toHaveLength(1);
+      expect(searchInput.anyOf?.map((branch) => branch.properties?.mode?.const)).toEqual([
+        'records',
+        'rag',
+      ]);
+      const scopes = searchInput.anyOf?.[0].properties?.scope?.anyOf;
+      expect(scopes?.map((branch) => branch.properties?.kind?.const)).toEqual([
+        'workspace',
+        'session',
+        'database',
+      ]);
+      expect(scopes?.every((branch) => branch.additionalProperties === false)).toBe(true);
+      expect(scopes?.map((branch) => branch.required)).toEqual([
+        ['kind', 'workspace_id'],
+        ['kind', 'session_id'],
+        ['kind', 'database_id'],
+      ]);
 
       for (const [toolName, action, mutableFields] of [
         ['workspace', 'update', ['name', 'description', 'icon']],
@@ -119,6 +143,25 @@ describe('AppServer official SDK adapter', () => {
       expect(resumeProperties).toHaveProperty('search_hits');
       expect(resumeProperties).toHaveProperty('collection_status');
       expect(resumeProperties).toHaveProperty('truncated');
+
+      const searchOutput = listed.tools.find((tool) => tool.name === 'search')!.outputSchema as unknown as {
+        oneOf: Array<{
+          title?: string;
+          properties?: {
+            error?: { properties?: { code?: { enum?: string[] } } };
+            result?: { anyOf?: Array<{ properties?: Record<string, unknown> }> };
+          };
+        }>;
+        properties?: { error?: { anyOf?: Array<{ properties?: { code?: { enum?: string[] } } }> } };
+      };
+      const searchResultBranches = searchOutput.oneOf.find((branch) => branch.title === 'search success')
+        ?.properties?.result?.anyOf;
+      expect(searchResultBranches?.map((branch) => Object.keys(branch.properties ?? {}))).toEqual([
+        ['mode', 'records', 'truncated'],
+        ['mode', 'chunks', 'truncated'],
+      ]);
+      const errorEnums = JSON.stringify(searchOutput.properties?.error);
+      expect(errorEnums).toContain('DEPENDENCY_UNAVAILABLE');
     } finally {
       await client.close();
       await server.stop();

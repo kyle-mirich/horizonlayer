@@ -1,5 +1,6 @@
 export type ToolErrorCode =
   | 'CONFLICT'
+  | 'DEPENDENCY_UNAVAILABLE'
   | 'INTERNAL'
   | 'INVALID_ARGUMENT'
   | 'INVALID_REFERENCE'
@@ -8,6 +9,7 @@ export type ToolErrorCode =
 interface DatabaseLikeError {
   code?: string;
   message?: string;
+  retryable?: boolean;
 }
 
 const INVALID_DATABASE_CODES = new Set([
@@ -75,6 +77,13 @@ function classifyError(error: unknown): {
   const message = errorMessage(error, dbError);
   const normalized = message.toLowerCase();
 
+  if (databaseCode === 'DEPENDENCY_UNAVAILABLE') {
+    return {
+      code: 'DEPENDENCY_UNAVAILABLE',
+      message,
+      retryable: dbError.retryable ?? true,
+    };
+  }
   if (databaseCode === '23505') {
     return { code: 'CONFLICT', message: 'A record with these values already exists', retryable: false };
   }

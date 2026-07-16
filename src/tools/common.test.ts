@@ -34,6 +34,20 @@ describe('tool common helpers', () => {
     expect(JSON.parse(conflict.content[0].text).error).toMatchObject({ code: 'CONFLICT', retryable: true });
   });
 
+  it('preserves dependency-unavailable failures for optional local RAG', () => {
+    const unavailable = Object.assign(new Error('Qdrant is unavailable'), {
+      code: 'DEPENDENCY_UNAVAILABLE',
+      retryable: true,
+    });
+    const result = errorEnvelopeFromUnknown('search', unavailable);
+
+    expect(result.structuredContent.error).toEqual({
+      code: 'DEPENDENCY_UNAVAILABLE',
+      message: 'Qdrant is unavailable',
+      retryable: true,
+    });
+  });
+
   it.each([
     [{ code: '23502', message: 'null value violates not-null constraint' }, 'INVALID_ARGUMENT', false],
     [{ code: '22007', message: 'invalid datetime format' }, 'INVALID_ARGUMENT', false],
