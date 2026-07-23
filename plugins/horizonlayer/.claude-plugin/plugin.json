@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "horizonlayer",
+  "version": "0.0.1",
+  "description": "Durable PostgreSQL knowledge, typed records, and resumable work for coding agents.",
+  "author": {
+    "name": "Kyle Mirich",
+    "url": "https://github.com/kyle-mirich"
+  },
+  "homepage": "https://github.com/kyle-mirich/horizonlayer",
+  "repository": "https://github.com/kyle-mirich/horizonlayer",
+  "license": "MIT",
+  "keywords": ["agent-memory", "knowledge", "mcp", "postgres"]
+}

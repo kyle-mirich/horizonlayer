@@ -1,0 +1,11 @@
+interface:
+  display_name: "HorizonLayer Databases"
+  short_description: "Manage typed shared records and schemas"
+  default_prompt: "Use $databases to inspect and update the structured records for this task."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "horizonlayer"
+      description: "Typed shared records and schemas in HorizonLayer"
+policy:
+  allow_implicit_invocation: true

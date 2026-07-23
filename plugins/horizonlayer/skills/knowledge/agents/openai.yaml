@@ -1,0 +1,11 @@
+interface:
+  display_name: "HorizonLayer Knowledge"
+  short_description: "Store and retrieve durable agent knowledge"
+  default_prompt: "Use $knowledge to find and update the durable context for this task."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "horizonlayer"
+      description: "Durable workspace-scoped knowledge in HorizonLayer"
+policy:
+  allow_implicit_invocation: true
