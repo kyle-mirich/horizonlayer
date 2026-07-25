@@ -14,7 +14,7 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "HorizonLayer",
-    "shortDescription": "Durable shared knowledge for coding agents",
+    "shortDescription": "Durable local knowledge for coding agents",
     "longDescription": "Give Codex a local-first PostgreSQL knowledge workspace with pages, typed records, search, relationships, and resumable execution checkpoints through MCP.",
     "developerName": "Kyle Mirich",
     "category": "Productivity",

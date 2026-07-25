@@ -40,7 +40,7 @@ For Codex, install the bundled plugin and restart Codex:
 npx -y horizonlayer@2.0.0 install codex
 ```
 
-The installer copies the Codex plugin into `~/plugins/horizonlayer`, registers its local marketplace entry under `~/.agents/plugins/marketplace.json`, and asks the Codex CLI to add it. To install only the Claude Code integration instead, run `npx -y horizonlayer@2.0.0 install claude`. It stages a durable local marketplace at `~/.claude/horizonlayer-marketplace`, registers it with Claude Code, and installs `horizonlayer@horizonlayer` at user scope. Restart Claude Code after either installation.
+The installer copies the Codex plugin into `~/plugins/horizonlayer`, registers its local marketplace entry under `~/.agents/plugins/marketplace.json`, and asks the Codex CLI to add it. To install only the Claude Code integration instead, run `npx -y horizonlayer@2.0.0 install claude`. It stages a durable local marketplace at `~/.claude/horizonlayer-marketplace`, registers it with Claude Code, and installs `horizonlayer@horizonlayer` at user scope. Restart the relevant agent client after installation.
 
 ### 4. Create and query your first typed record
 
