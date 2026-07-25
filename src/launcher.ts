@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
@@ -9,40 +8,25 @@ import {
   applyLocalRuntimeEnvironment,
   createLocalRuntimeConfig,
   ensureDockerDesktopReady,
+  isDockerDaemonReady,
   localRuntimeConfigPath,
   openDashboardUrl,
   readLocalRuntimeConfig,
+  removeLocalRuntimeConfig,
   runCompose,
   runtimeEnvironment,
   writeLocalRuntimeConfig,
+  withLocalRuntimeLifecycleLock,
   type LocalRuntimeConfig,
 } from './localRuntime.js';
+import { isDependencyUnavailableCode } from './tools/common.js';
 
 const { Client } = pg;
 
-export type ManagedDbConfig = {
-  containerName: string;
-  database: string;
-  host: string;
-  image: string;
-  password: string;
-  port: number;
-  user: string;
-  volumeName: string;
-};
-
-export type ManagedQdrantConfig = {
-  containerName: string;
-  host: string;
-  image: string;
-  port: number;
-  volumeName: string;
-};
-
-type BootstrapTarget = 'postgres' | 'qdrant';
-export type LauncherMode = 'dashboard' | 'doctor' | 'help' | 'install' | 'mcp' | 'setup' | 'stop';
+export type LauncherMode = 'dashboard' | 'doctor' | 'help' | 'install' | 'mcp' | 'reset' | 'setup' | 'stop';
 
 export interface LauncherCommand {
+  confirmReset: boolean;
   mode: LauncherMode;
   openDashboard: boolean;
 }
@@ -54,34 +38,27 @@ class FriendlyBootstrapError extends Error {
   }
 }
 
-interface PostgresErrorLike {
-  code?: string;
-}
-
-function parseNumber(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-const USAGE = 'Usage: horizonlayer [mcp|setup|dashboard [--open]|doctor|stop|install [all|codex|claude]]';
+const USAGE = 'Usage: horizonlayer [mcp|setup|dashboard [--open]|doctor|stop|reset --yes|install [all|codex|claude]]';
 
 export function parseLauncherCommand(args: string[]): LauncherCommand {
   if (args.length === 0 || (args.length === 1 && args[0] === 'mcp')) {
-    return { mode: 'mcp', openDashboard: false };
+    return { confirmReset: false, mode: 'mcp', openDashboard: false };
   }
   if (args[0] === 'dashboard'
     && (args.length === 1 || (args.length === 2 && args[1] === '--open'))) {
-    return { mode: 'dashboard', openDashboard: args[1] === '--open' };
+    return { confirmReset: false, mode: 'dashboard', openDashboard: args[1] === '--open' };
   }
   if (args.length === 1 && ['doctor', 'setup', 'stop'].includes(args[0]!)) {
-    return { mode: args[0] as 'doctor' | 'setup' | 'stop', openDashboard: false };
+    return { confirmReset: false, mode: args[0] as 'doctor' | 'setup' | 'stop', openDashboard: false };
+  }
+  if (args[0] === 'reset' && (args.length === 1 || (args.length === 2 && args[1] === '--yes'))) {
+    return { confirmReset: args[1] === '--yes', mode: 'reset', openDashboard: false };
   }
   if (args[0] === 'install' && args.length <= 2) {
-    return { mode: 'install', openDashboard: false };
+    return { confirmReset: false, mode: 'install', openDashboard: false };
   }
   if (args.length === 1 && (args[0] === '--help' || args[0] === '-h' || args[0] === 'help')) {
-    return { mode: 'help', openDashboard: false };
+    return { confirmReset: false, mode: 'help', openDashboard: false };
   }
   throw new FriendlyBootstrapError(
     `Unknown command: ${args.join(' ') || '<empty>'}\n`
@@ -93,155 +70,110 @@ export function parseLauncherMode(args: string[]): LauncherMode {
   return parseLauncherCommand(args).mode;
 }
 
-function quoteIdentifier(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
+export function shouldStartSavedRuntime(
+  mode: LauncherMode,
+  hasExplicitDatabaseUrl = false
+): boolean {
+  return !hasExplicitDatabaseUrl && (mode === 'dashboard' || mode === 'mcp');
 }
 
-export function buildManagedDbConfig(): ManagedDbConfig {
-  return {
-    containerName: process.env.HORIZONLAYER_DOCKER_CONTAINER_NAME ?? 'horizonlayer-postgres',
-    database: process.env.DB_NAME ?? 'horizon_layer',
-    host: process.env.DB_HOST ?? '127.0.0.1',
-    image: process.env.HORIZONLAYER_DOCKER_IMAGE ?? 'postgres:17',
-    password: process.env.DB_PASSWORD ?? 'postgres',
-    port: parseNumber(process.env.DB_PORT, 5432),
-    user: process.env.DB_USER ?? 'postgres',
-    volumeName: process.env.HORIZONLAYER_DOCKER_VOLUME_NAME ?? 'horizonlayer-postgres-data',
-  };
+export function shouldProvisionManagedRuntime(
+  hasSavedRuntime: boolean,
+  hasExplicitRuntimeOverride = false
+): boolean {
+  return !hasSavedRuntime && !hasExplicitRuntimeOverride;
 }
 
-export function buildManagedQdrantConfig(): ManagedQdrantConfig {
-  return {
-    containerName: process.env.HORIZONLAYER_QDRANT_DOCKER_CONTAINER_NAME
-      ?? 'horizonlayer-qdrant',
-    host: '127.0.0.1',
-    image: process.env.HORIZONLAYER_QDRANT_DOCKER_IMAGE
-      ?? 'qdrant/qdrant:v1.18.2-unprivileged',
-    port: 6333,
-    volumeName: process.env.HORIZONLAYER_QDRANT_DOCKER_VOLUME_NAME
-      ?? 'horizonlayer-qdrant-data',
-  };
-}
-
-export function shouldManageQdrant(
+export function hasExplicitRuntimeOverride(
   environment: NodeJS.ProcessEnv = process.env
 ): boolean {
-  const ragEnabled = environment.RAG_ENABLED?.toLowerCase();
-  const hasExplicitUrl = environment.QDRANT_URL != null
-    && environment.QDRANT_URL !== '';
-  return ['1', 'true', 'yes', 'on'].includes(ragEnabled ?? '') && !hasExplicitUrl;
-}
-
-function buildDatabaseUrl(config: ManagedDbConfig, database: string): string {
-  return `postgres://${encodeURIComponent(config.user)}:${encodeURIComponent(config.password)}@${config.host}:${config.port}/${database}`;
-}
-
-function dockerRecoveryHint(target: BootstrapTarget): string {
-  if (target === 'qdrant') {
-    return 'Start Docker Desktop and try again, set QDRANT_URL to an existing Qdrant instance, '
-      + 'or set RAG_ENABLED=false.';
-  }
-  return 'Start Docker Desktop and try again, or set DATABASE_URL to an existing PostgreSQL instance.';
-}
-
-function runDocker(
-  args: string[],
-  extraEnv: Record<string, string> = {},
-  target: BootstrapTarget = 'postgres'
-): string {
-  const result = spawnSync('docker', args, {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      ...extraEnv,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
+  return ['DATABASE_URL', 'QDRANT_URL', 'RAG_ENABLED'].some((name) => {
+    const value = environment[name];
+    return value != null && value !== '';
   });
-
-  if (result.error) {
-    const errorCode = (result.error as NodeJS.ErrnoException).code;
-    if (errorCode !== 'ENOENT') {
-      const details = result.error.message;
-      throw new FriendlyBootstrapError(
-        `Docker could not start while preparing local ${target === 'qdrant' ? 'Qdrant' : 'PostgreSQL'}.\n`
-        + `${dockerRecoveryHint(target)}\n`
-        + `Docker said: ${details}`,
-        details
-      );
-    }
-    throw new FriendlyBootstrapError(
-      'Docker is required for the default local setup, but the `docker` command was not found.\n'
-      + dockerRecoveryHint(target)
-    );
-  }
-  if (result.status !== 0) {
-    const details = (result.stderr || result.stdout || `docker ${args.join(' ')} failed`).trim();
-    const availabilityCheck = args.length === 1 && args[0] === 'version';
-    throw new FriendlyBootstrapError(
-      (availabilityCheck
-        ? 'Docker is installed, but its daemon is unavailable right now.\n'
-        : `Docker failed while preparing local ${target === 'qdrant' ? 'Qdrant' : 'PostgreSQL'}.\n`)
-      + `${dockerRecoveryHint(target)}\n`
-      + `Docker said: ${details}`,
-      details
-    );
-  }
-
-  return (result.stdout ?? '').trim();
 }
 
-export function buildManagedPostgresDockerRun(config: ManagedDbConfig): {
-  args: string[];
-  env: Record<string, string>;
-} {
-  return {
-    args: [
-      'run',
-      '-d',
-      '--name',
-      config.containerName,
-      '-e',
-      'POSTGRES_DB',
-      '-e',
-      'POSTGRES_USER',
-      '-e',
-      'POSTGRES_PASSWORD',
-      '-p',
-      `${config.host}:${config.port}:5432`,
-      '-v',
-      `${config.volumeName}:/var/lib/postgresql/data`,
-      config.image,
-    ],
-    env: {
-      POSTGRES_DB: config.database,
-      POSTGRES_PASSWORD: config.password,
-      POSTGRES_USER: config.user,
-    },
-  };
+export interface ManagedRuntimeResolution {
+  localRuntime: LocalRuntimeConfig | null;
+  provisionedManagedRuntime: boolean;
 }
 
-export function buildManagedQdrantDockerRun(config: ManagedQdrantConfig): {
-  args: string[];
-  env: Record<string, string>;
-} {
-  return {
-    args: [
-      'run',
-      '-d',
-      '--name',
-      config.containerName,
-      '-e',
-      'QDRANT__TELEMETRY_DISABLED',
-      '-p',
-      `${config.host}:${config.port}:6333`,
-      '-v',
-      `${config.volumeName}:/qdrant/storage`,
-      config.image,
-    ],
-    env: {
-      QDRANT__TELEMETRY_DISABLED: 'true',
-    },
-  };
+export async function resolveManagedRuntimeForLaunch(
+  localRuntime: LocalRuntimeConfig | null,
+  hasExplicitOverride: boolean,
+  provision: () => Promise<void>,
+  reread: () => Promise<LocalRuntimeConfig | null>
+): Promise<ManagedRuntimeResolution> {
+  if (!shouldProvisionManagedRuntime(localRuntime != null, hasExplicitOverride)) {
+    return { localRuntime, provisionedManagedRuntime: false };
+  }
+
+  await provision();
+  const savedRuntime = await reread();
+  if (!savedRuntime) {
+    throw new FriendlyBootstrapError(
+      'HorizonLayer setup completed without saving its local runtime configuration. Run `horizonlayer setup` again.'
+    );
+  }
+  return { localRuntime: savedRuntime, provisionedManagedRuntime: true };
+}
+
+export interface LocalRuntimeHealth {
+  databaseReady: boolean;
+  dockerReady: boolean;
+  qdrantReady: boolean;
+}
+
+interface ConnectionErrorLike {
+  code?: unknown;
+  message?: unknown;
+}
+
+function redactDatabaseUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    // Preserve the endpoint useful for recovery without ever logging user info or query secrets.
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    // Do not echo an invalid connection string: it may still contain credentials.
+    return '<invalid DATABASE_URL>';
+  }
+}
+
+export function isDatabaseUnavailable(error: unknown): boolean {
+  const candidate = error != null && typeof error === 'object'
+    ? error as ConnectionErrorLike
+    : {};
+  const code = typeof candidate.code === 'string' ? candidate.code.toUpperCase() : '';
+  const message = typeof candidate.message === 'string' ? candidate.message.toLowerCase() : '';
+  return isDependencyUnavailableCode(code)
+    || /connect|connection|timeout|refused|unreachable/u.test(message);
+}
+
+export function databaseUnavailableGuidance(url: string): string {
+  return `PostgreSQL is unavailable at ${redactDatabaseUrl(url)}. `
+    + 'Check DATABASE_URL and that PostgreSQL is running, or run `horizonlayer setup` '
+    + 'to restore the managed local runtime.';
+}
+
+export function localRuntimeRecoveryGuidance(health: LocalRuntimeHealth): string[] {
+  const guidance: string[] = [];
+  if (!health.dockerReady) {
+    guidance.push('Recovery: start Docker Desktop (or Docker Engine), then run `horizonlayer setup`.');
+  }
+  if (!health.databaseReady) {
+    guidance.push(
+      'PostgreSQL recovery: run `horizonlayer setup` to start the saved managed service; '
+      + 'if it remains unavailable, inspect Docker Desktop and the container logs.'
+    );
+  }
+  if (!health.qdrantReady) {
+    guidance.push(
+      'Qdrant recovery: run `horizonlayer setup` to start the saved managed service; '
+      + 'if it remains unavailable, inspect Docker Desktop and the container logs.'
+    );
+  }
+  return guidance;
 }
 
 async function canConnect(url: string): Promise<boolean> {
@@ -313,29 +245,82 @@ async function warmLocalRag(): Promise<void> {
 }
 
 async function runSetup(): Promise<void> {
-  await ensureDockerDesktopReady();
   const configPath = localRuntimeConfigPath();
-  const config = await readLocalRuntimeConfig(configPath) ?? await createLocalRuntimeConfig();
-  await writeLocalRuntimeConfig(config, configPath);
-  applyLocalRuntimeEnvironment(config);
+  await withLocalRuntimeLifecycleLock(async () => {
+    await ensureDockerDesktopReady();
+    const config = await readLocalRuntimeConfig(configPath) ?? await createLocalRuntimeConfig();
+    await writeLocalRuntimeConfig(config, configPath);
+    // Setup always manages the saved local runtime. Respecting a caller's DATABASE_URL here
+    // could initialize an unrelated external database while the launcher starts local containers.
+    applyLocalRuntimeEnvironment(config, process.env, true);
 
-  console.error('Starting HorizonLayer PostgreSQL and Qdrant services...');
-  runCompose('start', config);
-  await waitForLocalServices(config);
+    console.error('Starting HorizonLayer PostgreSQL and Qdrant services...');
+    runCompose('start', config);
+    await waitForLocalServices(config);
 
-  console.error('Initializing the HorizonLayer database...');
-  const [{ initializeDatabase }, { closePool }] = await Promise.all([
-    import('./db/initialize.js'),
-    import('./db/client.js'),
-  ]);
-  try {
-    await initializeDatabase();
-  } finally {
-    await closePool();
+    console.error('Initializing the HorizonLayer database...');
+    const [{ initializeDatabase }, { closePool }] = await Promise.all([
+      import('./db/initialize.js'),
+      import('./db/client.js'),
+    ]);
+    try {
+      await initializeDatabase();
+    } finally {
+      await closePool();
+    }
+    await warmLocalRag();
+    console.error(`HorizonLayer setup is complete. Configuration: ${configPath}`);
+    console.error('Run `horizonlayer dashboard --open` or start the MCP server with `horizonlayer mcp`.');
+  }, configPath);
+}
+
+async function runReset(confirmed: boolean): Promise<void> {
+  if (!confirmed) {
+    throw new FriendlyBootstrapError(
+      'Reset permanently removes the saved Docker PostgreSQL and Qdrant data. '
+      + 'Review the runtime you intend to delete, then run `horizonlayer reset --yes`.'
+    );
   }
-  await warmLocalRag();
-  console.error(`HorizonLayer setup is complete. Configuration: ${configPath}`);
-  console.error('Run `horizonlayer dashboard --open` or start the MCP server with `horizonlayer mcp`.');
+
+  const configPath = localRuntimeConfigPath();
+  await withLocalRuntimeLifecycleLock(async () => {
+    const config = await readLocalRuntimeConfig(configPath);
+    if (!config) {
+      throw new FriendlyBootstrapError('HorizonLayer is not set up. Run `horizonlayer setup` first.');
+    }
+    await ensureDockerDesktopReady();
+    runCompose('reset', config);
+    await removeLocalRuntimeConfig(configPath);
+    console.error('HorizonLayer local runtime, PostgreSQL data, and Qdrant index were removed.');
+  }, configPath);
+}
+
+async function runStop(): Promise<void> {
+  const configPath = localRuntimeConfigPath();
+  await withLocalRuntimeLifecycleLock(async () => {
+    const config = await readLocalRuntimeConfig(configPath);
+    if (!config) throw new FriendlyBootstrapError('HorizonLayer is not set up. Run `horizonlayer setup` first.');
+    await ensureDockerDesktopReady();
+    runCompose('stop', config);
+  }, configPath);
+  console.error('HorizonLayer PostgreSQL and Qdrant services are stopped.');
+}
+
+async function startSavedRuntimeForLaunch(): Promise<LocalRuntimeConfig> {
+  const configPath = localRuntimeConfigPath();
+  return withLocalRuntimeLifecycleLock(async () => {
+    const config = await readLocalRuntimeConfig(configPath);
+    if (!config) {
+      throw new FriendlyBootstrapError(
+        'The saved HorizonLayer runtime was removed while it was starting. Run `horizonlayer setup` again.'
+      );
+    }
+    applyLocalRuntimeEnvironment(config);
+    await ensureDockerDesktopReady();
+    runCompose('start', config);
+    await waitForLocalServices(config);
+    return config;
+  }, configPath);
 }
 
 async function runDoctor(): Promise<void> {
@@ -350,121 +335,22 @@ async function runDoctor(): Promise<void> {
   applyLocalRuntimeEnvironment(config);
   const environment = runtimeEnvironment(config);
 
-  let dockerReady = true;
-  try {
-    runDocker(['info', '--format', '{{.ServerVersion}}']);
-  } catch {
-    dockerReady = false;
-  }
+  const dockerReady = isDockerDaemonReady();
   const databaseReady = await canConnect(environment.DATABASE_URL!);
   const qdrantReady = await isQdrantReady(environment.QDRANT_URL!);
 
   console.error(`Configuration: ready (${configPath})`);
   console.error(`Docker Desktop: ${dockerReady ? 'ready' : 'unavailable'}`);
-  console.error(`PostgreSQL: ${databaseReady ? 'ready' : 'unavailable'} (${environment.DATABASE_URL!.replace(/:[^:@/]+@/u, ':***@')})`);
+  console.error(`PostgreSQL: ${databaseReady ? 'ready' : 'unavailable'} (${redactDatabaseUrl(environment.DATABASE_URL!)})`);
   console.error(`Qdrant: ${qdrantReady ? 'ready' : 'unavailable'} (${environment.QDRANT_URL})`);
+  for (const message of localRuntimeRecoveryGuidance({
+    databaseReady,
+    dockerReady,
+    qdrantReady,
+  })) {
+    console.error(message);
+  }
   if (!dockerReady || !databaseReady || !qdrantReady) process.exitCode = 1;
-}
-
-async function ensureDatabaseExists(config: ManagedDbConfig): Promise<void> {
-  const adminUrl = buildDatabaseUrl(config, 'postgres');
-  const client = new Client({
-    connectionString: adminUrl,
-    connectionTimeoutMillis: 5000,
-  });
-
-  await client.connect();
-  try {
-    const existing = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [config.database]);
-    if (existing.rowCount && existing.rowCount > 0) {
-      return;
-    }
-
-    try {
-      await client.query(`CREATE DATABASE ${quoteIdentifier(config.database)}`);
-    } catch (error) {
-      if ((error as PostgresErrorLike).code !== '42P04') {
-        throw error;
-      }
-      // Another launcher created the same database after our existence check.
-    }
-  } finally {
-    await client.end();
-  }
-}
-
-function getContainerStatus(containerName: string): 'missing' | 'running' | 'stopped' {
-  const result = spawnSync(
-    'docker',
-    ['container', 'inspect', containerName, '--format', '{{.State.Status}}'],
-    {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }
-  );
-
-  if (result.status !== 0) {
-    return 'missing';
-  }
-
-  return (result.stdout ?? '').trim() === 'running' ? 'running' : 'stopped';
-}
-
-function isContainerNameConflict(error: unknown): error is FriendlyBootstrapError {
-  return error instanceof FriendlyBootstrapError
-    && /container name .* already in use/i.test(error.details ?? '');
-}
-
-function startManagedPostgresContainer(config: ManagedDbConfig): void {
-  const dockerRun = buildManagedPostgresDockerRun(config);
-  try {
-    runDocker(dockerRun.args, dockerRun.env);
-  } catch (error) {
-    if (!isContainerNameConflict(error)) throw error;
-
-    const convergedStatus = getContainerStatus(config.containerName);
-    if (convergedStatus === 'running') return;
-    if (convergedStatus === 'stopped') {
-      runDocker(['start', config.containerName]);
-      return;
-    }
-    throw error;
-  }
-}
-
-async function ensureManagedPostgres(config: ManagedDbConfig): Promise<string> {
-  const adminUrl = buildDatabaseUrl(config, 'postgres');
-  const databaseUrl = buildDatabaseUrl(config, config.database);
-
-  if (await canConnect(adminUrl)) {
-    await ensureDatabaseExists(config);
-    return databaseUrl;
-  }
-
-  runDocker(['version']);
-
-  const status = getContainerStatus(config.containerName);
-  if (status === 'missing') {
-    console.error(`Starting local Postgres container '${config.containerName}' on ${config.host}:${config.port}...`);
-    startManagedPostgresContainer(config);
-  } else if (status === 'stopped') {
-    console.error(`Starting existing Postgres container '${config.containerName}'...`);
-    runDocker(['start', config.containerName]);
-  }
-
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    if (await canConnect(adminUrl)) {
-      await ensureDatabaseExists(config);
-      return databaseUrl;
-    }
-    await sleep(1000);
-  }
-
-  throw new FriendlyBootstrapError(
-    `Started Docker bootstrap, but PostgreSQL did not become reachable at ${config.host}:${config.port} within 30 seconds.\n`
-    + 'Check Docker Desktop, container logs, or set DATABASE_URL to an existing PostgreSQL instance.'
-  );
 }
 
 export async function isQdrantReady(url: string, timeoutMs = 1_000): Promise<boolean> {
@@ -478,57 +364,6 @@ export async function isQdrantReady(url: string, timeoutMs = 1_000): Promise<boo
   }
 }
 
-function managedQdrantUrl(config: ManagedQdrantConfig): string {
-  return `http://${config.host}:${config.port}`;
-}
-
-function startManagedQdrantContainer(config: ManagedQdrantConfig): void {
-  const dockerRun = buildManagedQdrantDockerRun(config);
-  try {
-    runDocker(dockerRun.args, dockerRun.env, 'qdrant');
-  } catch (error) {
-    if (!isContainerNameConflict(error)) throw error;
-
-    const convergedStatus = getContainerStatus(config.containerName);
-    if (convergedStatus === 'running') return;
-    if (convergedStatus === 'stopped') {
-      runDocker(['start', config.containerName], {}, 'qdrant');
-      return;
-    }
-    throw error;
-  }
-}
-
-async function ensureManagedQdrant(config: ManagedQdrantConfig): Promise<void> {
-  const url = managedQdrantUrl(config);
-  if (await isQdrantReady(url)) return;
-
-  runDocker(['version'], {}, 'qdrant');
-
-  const status = getContainerStatus(config.containerName);
-  if (status === 'missing') {
-    console.error(
-      `Starting local Qdrant container '${config.containerName}' on ${config.host}:${config.port}...`
-    );
-    startManagedQdrantContainer(config);
-  } else if (status === 'stopped') {
-    console.error(`Starting existing Qdrant container '${config.containerName}'...`);
-    runDocker(['start', config.containerName], {}, 'qdrant');
-  }
-
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    if (await isQdrantReady(url)) return;
-    await sleep(1_000);
-  }
-
-  throw new FriendlyBootstrapError(
-    `Started Docker bootstrap, but Qdrant did not become ready at ${url}/readyz within 30 seconds.\n`
-    + 'Check Docker Desktop and container logs, set QDRANT_URL to an existing Qdrant instance, '
-    + 'or set RAG_ENABLED=false.'
-  );
-}
-
 export async function main(args: string[] = process.argv.slice(2)): Promise<void> {
   const command = parseLauncherCommand(args);
   const { mode } = command;
@@ -537,10 +372,11 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
       USAGE,
       '',
       '  mcp        Start the stdio MCP server (default)',
-      '  setup      Start Docker Desktop, provision services, migrate, and warm the model',
+      '  setup      Start Docker Desktop, provision services, initialize the schema, and warm the model',
       '  dashboard  Start the local dashboard; pass --open to open it in a browser',
       '  doctor     Check configuration, Docker, PostgreSQL, and Qdrant',
       '  stop       Stop the managed PostgreSQL and Qdrant services',
+      '  reset      Permanently remove the managed services and local data; pass --yes to confirm',
       '  install    Install the HorizonLayer plugin for Codex and Claude Code',
     ].join('\n'));
     return;
@@ -568,30 +404,35 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
   }
 
   if (mode === 'stop') {
-    const config = await readLocalRuntimeConfig();
-    if (!config) throw new FriendlyBootstrapError('HorizonLayer is not set up. Run `horizonlayer setup` first.');
-    await ensureDockerDesktopReady();
-    runCompose('stop', config);
-    console.error('HorizonLayer PostgreSQL and Qdrant services are stopped.');
+    await runStop();
     return;
   }
 
-  const localRuntime = await readLocalRuntimeConfig();
+  if (mode === 'reset') {
+    await runReset(command.confirmReset);
+    return;
+  }
+
+  const hasExplicitDatabaseUrl = process.env.DATABASE_URL != null && process.env.DATABASE_URL !== '';
+  const resolvedRuntime = await resolveManagedRuntimeForLaunch(
+    await readLocalRuntimeConfig(),
+    hasExplicitRuntimeOverride(),
+    runSetup,
+    () => readLocalRuntimeConfig()
+  );
+  let { localRuntime } = resolvedRuntime;
+  const { provisionedManagedRuntime } = resolvedRuntime;
   if (localRuntime) {
     applyLocalRuntimeEnvironment(localRuntime);
-    if (mode === 'dashboard') {
-      await ensureDockerDesktopReady();
-      runCompose('start', localRuntime);
-      await waitForLocalServices(localRuntime);
+    if (!provisionedManagedRuntime && shouldStartSavedRuntime(mode, hasExplicitDatabaseUrl)) {
+      localRuntime = await startSavedRuntimeForLaunch();
     }
   }
 
   if (!process.env.DATABASE_URL) {
-    process.env.DATABASE_URL = await ensureManagedPostgres(buildManagedDbConfig());
-  }
-
-  if (shouldManageQdrant()) {
-    await ensureManagedQdrant(buildManagedQdrantConfig());
+    throw new FriendlyBootstrapError(
+      'No PostgreSQL connection is configured. Run `horizonlayer setup` or set DATABASE_URL to an existing PostgreSQL instance.'
+    );
   }
 
   if (mode === 'dashboard') {
@@ -604,7 +445,15 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
   }
 
   const { runServer } = await import('./runServer.js');
-  await runServer();
+  try {
+    await runServer();
+  } catch (error) {
+    if (process.env.DATABASE_URL && isDatabaseUnavailable(error)) {
+      throw new FriendlyBootstrapError(databaseUnavailableGuidance(process.env.DATABASE_URL),
+        error instanceof Error ? error.message : String(error));
+    }
+    throw error;
+  }
 }
 
 function isMainModule(): boolean {

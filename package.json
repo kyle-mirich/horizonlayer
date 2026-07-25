@@ -1,6 +1,6 @@
 {
   "name": "horizonlayer",
-  "version": "0.0.1",
+  "version": "2.0.0",
   "description": "Local-first MCP server for durable agent knowledge backed by PostgreSQL",
   "license": "MIT",
   "repository": {
@@ -33,21 +33,19 @@
     "docker-compose.yml",
     ".claude-plugin/marketplace.json",
     "plugins/horizonlayer",
-    "scripts/local-qdrant.mjs",
     "schema.sql",
     "README.md",
-    "LICENSE"
+    "docs",
+    "LICENSE",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md"
   ],
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && npm run build:server && npm run build:dashboard",
     "build:server": "tsc",
     "build:dashboard": "vite build --config dashboard/vite.config.ts",
-    "db:up": "docker compose up -d db",
-    "db:down": "docker compose stop db",
-    "db:reset": "docker compose down -v",
-    "rag:up": "node scripts/local-qdrant.mjs up",
-    "rag:down": "node scripts/local-qdrant.mjs down",
     "demo:agent": "tsx src/testing/agentDemo.ts",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",

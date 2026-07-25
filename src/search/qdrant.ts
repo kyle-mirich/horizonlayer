@@ -367,7 +367,8 @@ export class QdrantVectorStore implements VectorStore {
       if (cause instanceof DependencyUnavailableError) throw cause;
       throw new DependencyUnavailableError(
         'qdrant',
-        `Could not ${operation} at ${qdrantOrigin()}`,
+        `Could not ${operation} at ${qdrantOrigin()}. Start the managed local runtime with \`horizonlayer setup\`, `
+        + 'configure a reachable QDRANT_URL, or set RAG_ENABLED=false.',
         { cause }
       );
     }

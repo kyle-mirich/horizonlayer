@@ -5,17 +5,23 @@ import { join, win32 } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyLocalRuntimeEnvironment,
+  acquireLocalRuntimeSetupLock,
   bundledComposePath,
+  chooseLocalPort,
+  composeProjectForEnvironment,
   createLocalRuntimeConfig,
   dockerDesktopLaunchCommand,
   ensureDockerDesktopReady,
+  isDockerDaemonReady,
   localRuntimeConfigPath,
   localRuntimeDirectory,
   openDashboardUrl,
   parseLocalRuntimeConfig,
   readLocalRuntimeConfig,
+  removeLocalRuntimeConfig,
   runCompose,
   runtimeEnvironment,
+  withLocalRuntimeLifecycleLock,
   writeLocalRuntimeConfig,
   type LocalRuntimeConfig,
 } from './localRuntime.js';
@@ -117,6 +123,12 @@ describe('local runtime configuration', () => {
     expect(() => parseLocalRuntimeConfig({ ...config, database_port: 0 })).toThrow('invalid');
     expect(() => parseLocalRuntimeConfig({ ...config, qdrant_port: 65_536 })).toThrow('invalid');
     expect(() => parseLocalRuntimeConfig({ ...config, version: 2 })).toThrow('invalid');
+    expect(() => parseLocalRuntimeConfig({ ...config, compose_project: '' })).toThrow('invalid');
+    expect(() => parseLocalRuntimeConfig({ ...config, compose_project: 'not a project' })).toThrow('invalid');
+    expect(() => parseLocalRuntimeConfig({ ...config, database_name: '' })).toThrow('invalid');
+    expect(() => parseLocalRuntimeConfig({ ...config, database_password: '' })).toThrow('invalid');
+    expect(() => parseLocalRuntimeConfig({ ...config, database_user: '' })).toThrow('invalid');
+    expect(() => parseLocalRuntimeConfig({ ...config, qdrant_port: config.database_port })).toThrow('invalid');
     expect(runtimeEnvironment(config)).toMatchObject({
       COMPOSE_PROJECT_NAME: 'horizonlayer',
       DATABASE_URL: 'postgres://postgres:local-password@127.0.0.1:55432/horizon_layer',
@@ -135,11 +147,14 @@ describe('local runtime configuration', () => {
     );
   });
 
-  it('preserves explicit process overrides when applying saved configuration', () => {
+  it('preserves explicit process overrides unless setup explicitly owns the runtime environment', () => {
     const environment: NodeJS.ProcessEnv = { DATABASE_URL: 'postgres://external/database' };
     applyLocalRuntimeEnvironment(config, environment);
     expect(environment.DATABASE_URL).toBe('postgres://external/database');
     expect(environment.QDRANT_URL).toBe('http://127.0.0.1:6333');
+
+    applyLocalRuntimeEnvironment(config, environment, true);
+    expect(environment.DATABASE_URL).toBe(runtimeEnvironment(config).DATABASE_URL);
   });
 
   it('writes and reads a private, validated runtime configuration', async () => {
@@ -151,6 +166,8 @@ describe('local runtime configuration', () => {
     if (process.platform !== 'win32') {
       expect((await stat(path)).mode & 0o777).toBe(0o600);
     }
+    await removeLocalRuntimeConfig(path);
+    expect(await readLocalRuntimeConfig(path)).toBeNull();
   });
 
   it('distinguishes a missing configuration from malformed or unsupported content', async () => {
@@ -161,18 +178,55 @@ describe('local runtime configuration', () => {
     await writeFile(malformed, '{not json}', 'utf8');
     await expect(readLocalRuntimeConfig(malformed)).rejects.toMatchObject({
       name: 'LocalRuntimeError',
-      message: expect.stringContaining('Cannot read HorizonLayer runtime configuration'),
+      message: expect.stringContaining('Restore a valid runtime.json backup'),
     });
 
     const unsupported = await temporaryPath('unsupported.json');
     await writeFile(unsupported, JSON.stringify({ ...config, version: 999 }), 'utf8');
-    await expect(readLocalRuntimeConfig(unsupported)).rejects.toThrow('invalid or unsupported');
+    await expect(readLocalRuntimeConfig(unsupported)).rejects.toThrow('Restore a valid runtime.json backup');
     await expect(writeLocalRuntimeConfig({ ...config, database_port: -1 }, unsupported))
       .rejects.toThrow('invalid or unsupported');
   });
 
-  it('chooses free default service ports when creating a local configuration', async () => {
-    const generated = await createLocalRuntimeConfig();
+  it('serializes lifecycle commands so concurrent mutations cannot overwrite generated credentials', async () => {
+    const path = await temporaryPath('runtime.json');
+    const first = await acquireLocalRuntimeSetupLock(path);
+
+    await expect(acquireLocalRuntimeSetupLock(path)).rejects.toThrow(
+      'Another HorizonLayer lifecycle command is already running'
+    );
+    await first.release();
+
+    const second = await acquireLocalRuntimeSetupLock(path);
+    await second.release();
+  });
+
+  it('holds one lifecycle lock across the complete operation', async () => {
+    const path = await temporaryPath('runtime.json');
+    let finishFirst: (() => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const first = withLocalRuntimeLifecycleLock(async () => {
+      markStarted?.();
+      await new Promise<void>((resolve) => {
+        finishFirst = resolve;
+      });
+    }, path);
+
+    await started;
+    await expect(withLocalRuntimeLifecycleLock(async () => undefined, path)).rejects.toThrow(
+      'Another HorizonLayer lifecycle command is already running'
+    );
+    finishFirst?.();
+    await first;
+
+    await expect(withLocalRuntimeLifecycleLock(async () => 'safe', path)).resolves.toBe('safe');
+  });
+
+  it('chooses free default service ports and isolates explicit runtime homes', async () => {
+    const generated = await createLocalRuntimeConfig({});
     expect(generated).toMatchObject({
       compose_project: 'horizonlayer',
       database_name: 'horizon_layer',
@@ -182,10 +236,37 @@ describe('local runtime configuration', () => {
     expect([55_432, 55_433, 55_434, 55_435]).toContain(generated.database_port);
     expect([6_333, 56_333, 56_334, 56_335]).toContain(generated.qdrant_port);
     expect(generated.database_password).toMatch(/^[0-9a-f]{32}$/);
+
+    const firstHome = '/tmp/horizonlayer-first';
+    const secondHome = '/tmp/horizonlayer-second';
+    expect(composeProjectForEnvironment({})).toBe('horizonlayer');
+    expect(composeProjectForEnvironment({ HORIZONLAYER_HOME: firstHome }))
+      .toMatch(/^horizonlayer-[a-f0-9]{12}$/u);
+    expect(composeProjectForEnvironment({ HORIZONLAYER_HOME: firstHome }))
+      .toBe(composeProjectForEnvironment({ HORIZONLAYER_HOME: firstHome }));
+    expect(composeProjectForEnvironment({ HORIZONLAYER_HOME: firstHome }))
+      .not.toBe(composeProjectForEnvironment({ HORIZONLAYER_HOME: secondHome }));
+
+    const isolated = await createLocalRuntimeConfig({ HORIZONLAYER_HOME: firstHome });
+    expect(isolated.compose_project).toBe(composeProjectForEnvironment({ HORIZONLAYER_HOME: firstHome }));
+  });
+
+  it('explains how to recover when every managed port candidate is occupied', async () => {
+    await expect(chooseLocalPort([55_432, 55_433], async () => false)).rejects.toThrow(
+      'Stop the process using one of those loopback ports'
+    );
   });
 });
 
 describe('local runtime service commands', () => {
+  it('checks Docker daemon availability without attempting to launch Docker Desktop', () => {
+    spawnSyncMock.mockReturnValueOnce(commandResult());
+    expect(isDockerDaemonReady()).toBe(true);
+
+    spawnSyncMock.mockReturnValueOnce(commandResult({ status: 1, stderr: 'daemon unavailable' }));
+    expect(isDockerDaemonReady()).toBe(false);
+  });
+
   it('treats a ready Docker daemon as immediately usable and explains a missing installation', async () => {
     spawnSyncMock.mockReturnValueOnce(commandResult());
     await expect(ensureDockerDesktopReady()).resolves.toBeUndefined();
@@ -196,6 +277,14 @@ describe('local runtime service commands', () => {
     }));
     await expect(ensureDockerDesktopReady()).rejects.toMatchObject({
       message: expect.stringContaining('Docker Desktop is not installed'),
+    });
+
+    spawnSyncMock.mockReset().mockReturnValueOnce(commandResult({
+      error: Object.assign(new Error('missing docker'), { code: 'ENOENT' }),
+      status: null,
+    }));
+    await expect(ensureDockerDesktopReady(120_000, 'linux')).rejects.toMatchObject({
+      message: expect.stringContaining('Docker Engine (or Docker Desktop) is not installed'),
     });
   });
 
@@ -242,12 +331,13 @@ describe('local runtime service commands', () => {
     expect(consoleErrorSpy).toHaveBeenCalledWith('Starting Docker Desktop...');
   });
 
-  it('runs compose start and stop with the generated runtime environment', async () => {
+  it('runs compose start, stop, and destructive reset with the generated runtime environment', async () => {
     const composePath = await temporaryPath('compose.yml');
     await writeFile(composePath, 'services: {}\n', 'utf8');
     spawnSyncMock.mockReturnValue(commandResult());
     runCompose('start', config, composePath);
     runCompose('stop', config, composePath);
+    runCompose('reset', config, composePath);
 
     expect(spawnSyncMock).toHaveBeenNthCalledWith(1, 'docker', [
       'compose', '-f', composePath, '-p', 'horizonlayer', 'up', '-d',
@@ -258,20 +348,33 @@ describe('local runtime service commands', () => {
     expect(spawnSyncMock).toHaveBeenNthCalledWith(2, 'docker', [
       'compose', '-f', composePath, '-p', 'horizonlayer', 'stop',
     ], expect.anything());
+    expect(spawnSyncMock).toHaveBeenNthCalledWith(3, 'docker', [
+      'compose', '-f', composePath, '-p', 'horizonlayer', 'down', '--volumes', '--remove-orphans',
+    ], expect.anything());
   });
 
-  it('reports missing compose files and command failures without opening external programs', () => {
+  it('reports missing compose files and command failures with recovery guidance', () => {
     expect(() => runCompose('start', config, '/definitely/missing/compose.yml'))
-      .toThrow('Bundled Docker Compose file is missing');
+      .toThrow('Reinstall HorizonLayer');
 
     spawnSyncMock.mockReturnValueOnce(commandResult({ status: 1, stderr: 'compose error' }));
-    expect(() => runCompose('start', config, import.meta.filename)).toThrow('could not start');
+    spawnSyncMock.mockReturnValueOnce(commandResult());
+    expect(() => runCompose('start', config, import.meta.filename)).toThrow('free the configured local ports');
 
     spawnSyncMock.mockReturnValueOnce(commandResult({
       error: Object.assign(new Error('docker missing'), { code: 'ENOENT' }),
       status: null,
     }));
-    expect(() => runCompose('stop', config, import.meta.filename)).toThrow('could not stop');
+    expect(() => runCompose('stop', config, import.meta.filename)).toThrow('Your data remains in Docker volumes');
+
+    spawnSyncMock.mockReturnValueOnce(commandResult({ status: 1, stderr: 'compose error' }));
+    spawnSyncMock.mockReturnValueOnce(commandResult());
+    expect(() => runCompose('reset', config, import.meta.filename)).toThrow('configuration was kept');
+
+    spawnSyncMock
+      .mockReturnValueOnce(commandResult({ status: 1 }))
+      .mockReturnValueOnce(commandResult({ status: 1, stderr: 'compose plugin missing' }));
+    expect(() => runCompose('start', config, import.meta.filename)).toThrow('Docker Compose v2 is unavailable');
   });
 
   it('opens dashboard URLs only on supported platforms and propagates launch status', () => {

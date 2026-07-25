@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,7 @@ type CommandRunner = (command: string, args: string[]) => void;
 
 export interface InstallOptions {
   homeDirectory?: string;
+  marketplaceSource?: string;
   pluginSource?: string;
   runCommand?: CommandRunner;
 }
@@ -38,6 +39,9 @@ interface Marketplace {
 
 const PLUGIN_NAME = 'horizonlayer';
 const PERSONAL_MARKETPLACE_PATH = './plugins/horizonlayer';
+const CLAUDE_MARKETPLACE_NAME = 'horizonlayer';
+const CLAUDE_MARKETPLACE_MARKER = '.horizonlayer-managed-marketplace.json';
+const CODEX_PLUGIN_MARKER = '.horizonlayer-managed-plugin.json';
 
 export function parseInstallTarget(value: string | undefined): InstallTarget {
   if (value == null) return 'all';
@@ -49,6 +53,10 @@ function bundledPluginSource(): string {
   return fileURLToPath(new URL('../plugins/horizonlayer/', import.meta.url));
 }
 
+function bundledClaudeMarketplaceSource(): string {
+  return fileURLToPath(new URL('../', import.meta.url));
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await readFile(join(path, '.mcp.json'));
@@ -58,34 +66,195 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-async function replaceDirectory(source: string, target: string): Promise<void> {
+async function claudeMarketplaceExists(path: string): Promise<boolean> {
+  try {
+    await readFile(join(path, '.claude-plugin', 'marketplace.json'), 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+interface StagedClaudeMarketplace {
+  commit: () => Promise<void>;
+  hadExistingTarget: boolean;
+  rollback: () => Promise<void>;
+}
+
+async function existingDirectory(path: string): Promise<boolean> {
+  try {
+    const metadata = await lstat(path);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+      throw new Error(`Claude marketplace target ${path} must be a regular directory.`);
+    }
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+async function managedClaudeMarketplace(path: string, transaction?: string): Promise<boolean> {
+  try {
+    const marker: unknown = JSON.parse(await readFile(join(path, CLAUDE_MARKETPLACE_MARKER), 'utf8'));
+    if (marker == null || typeof marker !== 'object' || Array.isArray(marker)) return false;
+    const value = marker as { installer?: unknown; kind?: unknown; transaction?: unknown };
+    return value.installer === PLUGIN_NAME
+      && value.kind === 'claude-marketplace'
+      && (transaction == null || value.transaction === transaction);
+  } catch {
+    return false;
+  }
+}
+
+async function stageClaudeMarketplace(source: string, target: string): Promise<StagedClaudeMarketplace> {
+  if (!await claudeMarketplaceExists(source)) {
+    throw new Error(`Bundled HorizonLayer Claude marketplace is missing from ${source}`);
+  }
+
+  await mkdir(dirname(target), { recursive: true });
+  const hasExistingTarget = await existingDirectory(target);
+  if (hasExistingTarget && !await managedClaudeMarketplace(target)) {
+    throw new Error(
+      `Claude marketplace target ${target} already exists and is not managed by HorizonLayer. `
+      + 'Move it to a safe location or remove it after inspection, then run this command again.'
+    );
+  }
+
+  const transaction = randomUUID();
+  const staging = `${target}.install-${randomUUID()}`;
+  const backup = `${target}.backup-${randomUUID()}`;
+  let movedExisting = false;
+
+  try {
+    await mkdir(staging, { recursive: true });
+    await Promise.all([
+      cp(join(source, '.claude-plugin'), join(staging, '.claude-plugin'), { recursive: true }),
+      cp(join(source, 'plugins'), join(staging, 'plugins'), { recursive: true }),
+    ]);
+    await writeFile(join(staging, CLAUDE_MARKETPLACE_MARKER), JSON.stringify({
+      installer: PLUGIN_NAME,
+      kind: 'claude-marketplace',
+      transaction,
+    }), 'utf8');
+    if (hasExistingTarget) {
+      await rename(target, backup);
+      movedExisting = true;
+    }
+    await rename(staging, target);
+  } catch (error) {
+    await rm(staging, { force: true, recursive: true });
+    if (movedExisting) {
+      if (await managedClaudeMarketplace(target, transaction)) {
+        await rm(target, { force: true, recursive: true });
+      }
+      if (!await existingDirectory(target)) await rename(backup, target);
+    }
+    throw error;
+  }
+
+  return {
+    hadExistingTarget: movedExisting,
+    commit: async () => {
+      if (movedExisting) await rm(backup, { force: true, recursive: true });
+    },
+    rollback: async () => {
+      if (!movedExisting) return;
+      if (await managedClaudeMarketplace(target, transaction)) {
+        await rm(target, { force: true, recursive: true });
+      }
+      if (!await existingDirectory(target)) await rename(backup, target);
+    },
+  };
+}
+
+interface StagedCodexPlugin {
+  commit: () => Promise<void>;
+  hadExistingTarget: boolean;
+  rollback: () => Promise<void>;
+}
+
+async function existingCodexPlugin(path: string): Promise<boolean> {
+  try {
+    const metadata = await lstat(path);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+      throw new Error(`Codex plugin target ${path} must be a regular directory.`);
+    }
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+async function managedCodexPlugin(path: string, transaction?: string): Promise<boolean> {
+  try {
+    const marker: unknown = JSON.parse(await readFile(join(path, CODEX_PLUGIN_MARKER), 'utf8'));
+    if (marker == null || typeof marker !== 'object' || Array.isArray(marker)) return false;
+    const value = marker as { installer?: unknown; kind?: unknown; transaction?: unknown };
+    return value.installer === PLUGIN_NAME
+      && value.kind === 'codex-plugin'
+      && (transaction == null || value.transaction === transaction);
+  } catch {
+    return false;
+  }
+}
+
+async function stageCodexPlugin(source: string, target: string): Promise<StagedCodexPlugin> {
   if (!await pathExists(source)) {
     throw new Error(`Bundled HorizonLayer plugin is missing from ${source}`);
   }
 
   await mkdir(dirname(target), { recursive: true });
+  const hasExistingTarget = await existingCodexPlugin(target);
+  if (hasExistingTarget && !await managedCodexPlugin(target)) {
+    throw new Error(
+      `Codex plugin target ${target} already exists and is not managed by HorizonLayer. `
+      + 'Move it to a safe location or remove it after inspection, then run this command again.'
+    );
+  }
+
+  const transaction = randomUUID();
   const staging = `${target}.install-${randomUUID()}`;
   const backup = `${target}.backup-${randomUUID()}`;
   let movedExisting = false;
 
   try {
     await cp(source, staging, { recursive: true });
-    try {
+    await writeFile(join(staging, CODEX_PLUGIN_MARKER), JSON.stringify({
+      installer: PLUGIN_NAME,
+      kind: 'codex-plugin',
+      transaction,
+    }), 'utf8');
+    if (hasExistingTarget) {
       await rename(target, backup);
       movedExisting = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     await rename(staging, target);
-    if (movedExisting) await rm(backup, { force: true, recursive: true });
   } catch (error) {
     await rm(staging, { force: true, recursive: true });
     if (movedExisting) {
-      await rm(target, { force: true, recursive: true });
-      await rename(backup, target);
+      if (await managedCodexPlugin(target, transaction)) {
+        await rm(target, { force: true, recursive: true });
+      }
+      if (!await existingCodexPlugin(target)) await rename(backup, target);
     }
     throw error;
   }
+
+  return {
+    hadExistingTarget: movedExisting,
+    commit: async () => {
+      if (movedExisting) await rm(backup, { force: true, recursive: true });
+    },
+    rollback: async () => {
+      if (!movedExisting) return;
+      if (await managedCodexPlugin(target, transaction)) {
+        await rm(target, { force: true, recursive: true });
+      }
+      if (!await existingCodexPlugin(target)) await rename(backup, target);
+    },
+  };
 }
 
 function horizonLayerMarketplaceEntry(): MarketplacePlugin {
@@ -165,20 +334,54 @@ async function updateCodexMarketplace(path: string): Promise<string> {
 
 function defaultCommandRunner(command: string, args: string[]): void {
   const result = spawnSync(command, args, { stdio: 'inherit' });
+  const clientName = command === 'claude' ? 'Claude Code CLI' : 'Codex CLI';
   if (result.error) {
     if ((result.error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error('Codex CLI was not found. Install Codex, then run this command again.');
+      throw new Error(`${clientName} was not found. Install it, then run this command again.`);
     }
     throw result.error;
   }
   if (result.status !== 0) {
-    throw new Error(`Codex plugin installation exited with status ${result.status ?? 'unknown'}`);
+    throw new Error(
+      `${clientName} plugin installation exited with status ${result.status ?? 'unknown'}. `
+      + `Run \`${command} plugin --help\` to verify the client installation, then run this command again.`
+    );
   }
 }
 
-async function installClaude(source: string, home: string): Promise<InstallResult> {
-  const target = join(home, '.claude', 'skills', PLUGIN_NAME);
-  await replaceDirectory(source, target);
+async function installClaude(
+  source: string,
+  marketplaceSource: string,
+  home: string,
+  runCommand: CommandRunner
+): Promise<InstallResult> {
+  if (!await pathExists(source)) {
+    throw new Error(`Bundled HorizonLayer plugin is missing from ${source}`);
+  }
+  if (!await claudeMarketplaceExists(marketplaceSource)) {
+    throw new Error(`Bundled HorizonLayer Claude marketplace is missing from ${marketplaceSource}`);
+  }
+
+  const target = join(home, '.claude', 'horizonlayer-marketplace');
+  const staged = await stageClaudeMarketplace(marketplaceSource, target);
+  try {
+    runCommand('claude', ['plugin', 'marketplace', 'add', target]);
+    runCommand('claude', [
+      'plugin',
+      'install',
+      `${PLUGIN_NAME}@${CLAUDE_MARKETPLACE_NAME}`,
+      '--scope',
+      'user',
+    ]);
+  } catch (error) {
+    if (staged.hadExistingTarget) {
+      await staged.rollback();
+    }
+    // A first install may have registered this source before plugin installation failed.
+    // Keep its managed directory in place so retrying the command is safe and deterministic.
+    throw error;
+  }
+  await staged.commit();
   return { host: 'Claude Code', path: target };
 }
 
@@ -190,9 +393,17 @@ async function installCodex(
   const target = join(home, 'plugins', PLUGIN_NAME);
   const marketplacePath = join(home, '.agents', 'plugins', 'marketplace.json');
   validateCodexMarketplace(await readMarketplace(marketplacePath), marketplacePath);
-  await replaceDirectory(source, target);
-  const marketplaceName = await updateCodexMarketplace(marketplacePath);
-  runCommand('codex', ['plugin', 'add', `${PLUGIN_NAME}@${marketplaceName}`]);
+  const staged = await stageCodexPlugin(source, target);
+  try {
+    const marketplaceName = await updateCodexMarketplace(marketplacePath);
+    runCommand('codex', ['plugin', 'add', `${PLUGIN_NAME}@${marketplaceName}`]);
+  } catch (error) {
+    if (staged.hadExistingTarget) await staged.rollback();
+    // A first install may have registered the personal marketplace before the client failed.
+    // Keep its managed directory in place so retrying the command is safe and deterministic.
+    throw error;
+  }
+  await staged.commit();
   return { host: 'Codex', path: target };
 }
 
@@ -202,11 +413,12 @@ export async function installAgentPlugins(
 ): Promise<InstallResult[]> {
   const home = options.homeDirectory ?? homedir();
   const source = options.pluginSource ?? bundledPluginSource();
+  const marketplaceSource = options.marketplaceSource ?? bundledClaudeMarketplaceSource();
   const runCommand = options.runCommand ?? defaultCommandRunner;
   const results: InstallResult[] = [];
 
   if (target === 'all' || target === 'claude') {
-    results.push(await installClaude(source, home));
+    results.push(await installClaude(source, marketplaceSource, home, runCommand));
   }
   if (target === 'all' || target === 'codex') {
     results.push(await installCodex(source, home, runCommand));

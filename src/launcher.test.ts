@@ -1,33 +1,27 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  buildManagedDbConfig,
-  buildManagedPostgresDockerRun,
-  buildManagedQdrantConfig,
-  buildManagedQdrantDockerRun,
+  databaseUnavailableGuidance,
+  hasExplicitRuntimeOverride,
   isQdrantReady,
+  isDatabaseUnavailable,
+  localRuntimeRecoveryGuidance,
   parseLauncherCommand,
   parseLauncherMode,
-  shouldManageQdrant,
-  type ManagedDbConfig,
-  type ManagedQdrantConfig,
+  resolveManagedRuntimeForLaunch,
+  shouldProvisionManagedRuntime,
+  shouldStartSavedRuntime,
 } from './launcher.js';
+import type { LocalRuntimeConfig } from './localRuntime.js';
 
-const originalEnv = { ...process.env };
-const launcherEnvKeys = [
-  'DB_HOST',
-  'DB_NAME',
-  'DB_PASSWORD',
-  'DB_PORT',
-  'DB_USER',
-  'HORIZONLAYER_DOCKER_CONTAINER_NAME',
-  'HORIZONLAYER_DOCKER_IMAGE',
-  'HORIZONLAYER_DOCKER_VOLUME_NAME',
-  'HORIZONLAYER_QDRANT_DOCKER_CONTAINER_NAME',
-  'HORIZONLAYER_QDRANT_DOCKER_IMAGE',
-  'HORIZONLAYER_QDRANT_DOCKER_VOLUME_NAME',
-  'QDRANT_URL',
-  'RAG_ENABLED',
-];
+const localRuntime: LocalRuntimeConfig = {
+  compose_project: 'horizonlayer',
+  database_name: 'horizon_layer',
+  database_password: 'test-password',
+  database_port: 55_432,
+  database_user: 'postgres',
+  qdrant_port: 6_333,
+  version: 1,
+};
 
 describe('launcher commands', () => {
   it('keeps stdio MCP as the zero-argument default and accepts an explicit mode', () => {
@@ -36,6 +30,8 @@ describe('launcher commands', () => {
     expect(parseLauncherMode(['dashboard'])).toBe('dashboard');
     expect(parseLauncherMode(['setup'])).toBe('setup');
     expect(parseLauncherMode(['doctor'])).toBe('doctor');
+    expect(parseLauncherMode(['reset'])).toBe('reset');
+    expect(parseLauncherMode(['reset', '--yes'])).toBe('reset');
     expect(parseLauncherMode(['stop'])).toBe('stop');
     expect(parseLauncherMode(['install'])).toBe('install');
     expect(parseLauncherMode(['install', 'codex'])).toBe('install');
@@ -47,135 +43,119 @@ describe('launcher commands', () => {
     expect(parseLauncherMode(['-h'])).toBe('help');
     expect(parseLauncherMode(['help'])).toBe('help');
     expect(parseLauncherCommand(['dashboard', '--open'])).toEqual({
+      confirmReset: false,
       mode: 'dashboard',
       openDashboard: true,
+    });
+    expect(parseLauncherCommand(['reset'])).toEqual({
+      confirmReset: false,
+      mode: 'reset',
+      openDashboard: false,
+    });
+    expect(parseLauncherCommand(['reset', '--yes'])).toEqual({
+      confirmReset: true,
+      mode: 'reset',
+      openDashboard: false,
     });
     expect(() => parseLauncherMode(['dashboard', '--other'])).toThrow('dashboard [--open]');
     expect(() => parseLauncherMode(['install', 'codex', 'extra'])).toThrow('Unknown command');
     expect(() => parseLauncherMode(['unknown'])).toThrow('Unknown command: unknown');
   });
+
+  it('restores saved managed services for MCP and dashboard starts after stop', () => {
+    expect(shouldStartSavedRuntime('mcp')).toBe(true);
+    expect(shouldStartSavedRuntime('dashboard')).toBe(true);
+    expect(shouldStartSavedRuntime('mcp', true)).toBe(false);
+    expect(shouldStartSavedRuntime('dashboard', true)).toBe(false);
+    expect(shouldStartSavedRuntime('doctor')).toBe(false);
+    expect(shouldStartSavedRuntime('reset')).toBe(false);
+    expect(shouldStartSavedRuntime('setup')).toBe(false);
+  });
+
+  it('provisions the saved Compose runtime for a first local MCP or dashboard launch', () => {
+    expect(shouldProvisionManagedRuntime(false)).toBe(true);
+    expect(shouldProvisionManagedRuntime(false, true)).toBe(false);
+    expect(shouldProvisionManagedRuntime(true)).toBe(false);
+    expect(hasExplicitRuntimeOverride({ QDRANT_URL: 'http://127.0.0.1:6333' })).toBe(true);
+    expect(hasExplicitRuntimeOverride({ RAG_ENABLED: 'false' })).toBe(true);
+    expect(hasExplicitRuntimeOverride({})).toBe(false);
+  });
+
+  it('persists and reuses the managed runtime after first-launch provisioning', async () => {
+    const provision = vi.fn(async () => undefined);
+    const reread = vi.fn(async () => localRuntime);
+
+    await expect(resolveManagedRuntimeForLaunch(null, false, provision, reread)).resolves.toEqual({
+      localRuntime,
+      provisionedManagedRuntime: true,
+    });
+    expect(provision).toHaveBeenCalledOnce();
+    expect(reread).toHaveBeenCalledOnce();
+
+    const noProvision = vi.fn(async () => undefined);
+    const noReread = vi.fn(async () => localRuntime);
+    await expect(resolveManagedRuntimeForLaunch(localRuntime, false, noProvision, noReread)).resolves.toEqual({
+      localRuntime,
+      provisionedManagedRuntime: false,
+    });
+    await expect(resolveManagedRuntimeForLaunch(null, true, noProvision, noReread)).resolves.toEqual({
+      localRuntime: null,
+      provisionedManagedRuntime: false,
+    });
+    expect(noProvision).not.toHaveBeenCalled();
+    expect(noReread).not.toHaveBeenCalled();
+
+    await expect(resolveManagedRuntimeForLaunch(
+      null,
+      false,
+      async () => undefined,
+      async () => null
+    )).rejects.toThrow('without saving its local runtime configuration');
+  });
+
+  it('provides a distinct recovery action for every unavailable managed dependency', () => {
+    expect(localRuntimeRecoveryGuidance({
+      databaseReady: false,
+      dockerReady: false,
+      qdrantReady: false,
+    })).toEqual([
+      'Recovery: start Docker Desktop (or Docker Engine), then run `horizonlayer setup`.',
+      expect.stringContaining('PostgreSQL recovery'),
+      expect.stringContaining('Qdrant recovery'),
+    ]);
+    expect(localRuntimeRecoveryGuidance({
+      databaseReady: true,
+      dockerReady: true,
+      qdrantReady: true,
+    })).toEqual([]);
+  });
+
+  it('turns external PostgreSQL connection failures into a redacted recovery message', () => {
+    for (const code of ['ECONNREFUSED', '08006', '57P03', '53300']) {
+      expect(isDatabaseUnavailable({ code })).toBe(true);
+    }
+    expect(isDatabaseUnavailable(new Error('connection timeout'))).toBe(true);
+    expect(isDatabaseUnavailable(new Error('schema relation is invalid'))).toBe(false);
+    expect(databaseUnavailableGuidance('postgres://agent:secret@db.example:5432/knowledge')).toBe(
+      'PostgreSQL is unavailable at postgres://db.example:5432/knowledge. '
+      + 'Check DATABASE_URL and that PostgreSQL is running, or run `horizonlayer setup` '
+      + 'to restore the managed local runtime.'
+    );
+    const punctuationPassword = databaseUnavailableGuidance(
+      'postgres://agent:pass:word@db.example:5432/knowledge?password=querysecret&sslkey=/tmp/key'
+    );
+    expect(punctuationPassword).toContain('postgres://db.example:5432/knowledge');
+    expect(punctuationPassword).not.toContain('pass:word');
+    expect(punctuationPassword).not.toContain('querysecret');
+    expect(punctuationPassword).not.toContain('sslkey');
+    expect(databaseUnavailableGuidance('postgres://agent:pass/word@db.example/knowledge'))
+      .toContain('<invalid DATABASE_URL>');
+  });
 });
 
-describe('managed Postgres launcher', () => {
-  beforeEach(() => {
-    process.env = { ...originalEnv };
-    for (const key of launcherEnvKeys) {
-      delete process.env[key];
-    }
-  });
-
+describe('Qdrant readiness probe', () => {
   afterEach(() => {
-    process.env = { ...originalEnv };
     vi.unstubAllGlobals();
-  });
-
-  it('uses the shared DB_* environment names and PostgreSQL 17 by default', () => {
-    process.env.DB_HOST = 'db.internal';
-    process.env.DB_NAME = 'memory';
-    process.env.DB_PASSWORD = 'current-password';
-    process.env.DB_PORT = '6543';
-    process.env.DB_USER = 'agent';
-    expect(buildManagedDbConfig()).toMatchObject({
-      database: 'memory',
-      host: 'db.internal',
-      image: 'postgres:17',
-      password: 'current-password',
-      port: 6543,
-      user: 'agent',
-    });
-  });
-
-  it('passes the managed database password through the child environment, not Docker argv', () => {
-    const config: ManagedDbConfig = {
-      containerName: 'horizonlayer-postgres',
-      database: 'horizon_layer',
-      host: '127.0.0.1',
-      image: 'postgres:17',
-      password: 'secret-that-must-not-appear-in-argv',
-      port: 5432,
-      user: 'postgres',
-      volumeName: 'horizonlayer-postgres-data',
-    };
-
-    const dockerRun = buildManagedPostgresDockerRun(config);
-
-    expect(dockerRun.args.join(' ')).not.toContain(config.password);
-    expect(dockerRun.args).toContain('POSTGRES_PASSWORD');
-    expect(dockerRun.env.POSTGRES_PASSWORD).toBe(config.password);
-  });
-});
-
-describe('managed Qdrant launcher', () => {
-  beforeEach(() => {
-    process.env = { ...originalEnv };
-    for (const key of launcherEnvKeys) {
-      delete process.env[key];
-    }
-  });
-
-  afterEach(() => {
-    process.env = { ...originalEnv };
-    vi.unstubAllGlobals();
-  });
-
-  it('uses a pinned unprivileged local image and isolated persistent volume', () => {
-    expect(buildManagedQdrantConfig()).toEqual({
-      containerName: 'horizonlayer-qdrant',
-      host: '127.0.0.1',
-      image: 'qdrant/qdrant:v1.18.2-unprivileged',
-      port: 6333,
-      volumeName: 'horizonlayer-qdrant-data',
-    });
-
-    process.env.HORIZONLAYER_QDRANT_DOCKER_CONTAINER_NAME = 'agent-qdrant';
-    process.env.HORIZONLAYER_QDRANT_DOCKER_IMAGE = 'qdrant/qdrant:test';
-    process.env.HORIZONLAYER_QDRANT_DOCKER_VOLUME_NAME = 'agent-qdrant-data';
-    expect(buildManagedQdrantConfig()).toMatchObject({
-      containerName: 'agent-qdrant',
-      image: 'qdrant/qdrant:test',
-      volumeName: 'agent-qdrant-data',
-    });
-  });
-
-  it('builds the exact loopback-only Docker invocation without credentials', () => {
-    const config: ManagedQdrantConfig = {
-      containerName: 'horizonlayer-qdrant',
-      host: '127.0.0.1',
-      image: 'qdrant/qdrant:v1.18.2-unprivileged',
-      port: 6333,
-      volumeName: 'horizonlayer-qdrant-data',
-    };
-
-    expect(buildManagedQdrantDockerRun(config)).toEqual({
-      args: [
-        'run',
-        '-d',
-        '--name',
-        'horizonlayer-qdrant',
-        '-e',
-        'QDRANT__TELEMETRY_DISABLED',
-        '-p',
-        '127.0.0.1:6333:6333',
-        '-v',
-        'horizonlayer-qdrant-data:/qdrant/storage',
-        'qdrant/qdrant:v1.18.2-unprivileged',
-      ],
-      env: {
-        QDRANT__TELEMETRY_DISABLED: 'true',
-      },
-    });
-  });
-
-  it('owns Qdrant only for explicit RAG opt-in without an explicit URL', () => {
-    expect(shouldManageQdrant({})).toBe(false);
-    expect(shouldManageQdrant({ RAG_ENABLED: 'false' })).toBe(false);
-    expect(shouldManageQdrant({ RAG_ENABLED: 'true' })).toBe(true);
-    expect(shouldManageQdrant({ RAG_ENABLED: 'yes', QDRANT_URL: '' })).toBe(true);
-    expect(shouldManageQdrant({
-      RAG_ENABLED: 'true',
-      QDRANT_URL: 'http://127.0.0.1:6333',
-    })).toBe(false);
-    expect(shouldManageQdrant({ RAG_ENABLED: 'invalid' })).toBe(false);
   });
 
   it('probes the unauthenticated readiness endpoint and handles failures', async () => {

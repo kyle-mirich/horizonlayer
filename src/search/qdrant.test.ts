@@ -135,7 +135,7 @@ describe('QdrantVectorStore', () => {
     });
   });
 
-  it('wraps transport failures with the dependency contract', async () => {
+  it('wraps transport failures with the dependency contract and recovery guidance', async () => {
     const client = fakeClient();
     client.versionInfo.mockRejectedValue(new Error('connection refused'));
     const store = new QdrantVectorStore(client as never, 'rag_test');
@@ -143,6 +143,7 @@ describe('QdrantVectorStore', () => {
     await expect(store.ensureReady()).rejects.toMatchObject({
       code: 'DEPENDENCY_UNAVAILABLE',
       dependency: 'qdrant',
+      message: expect.stringContaining('horizonlayer setup'),
       retryable: true,
     });
   });

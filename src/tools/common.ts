@@ -53,11 +53,12 @@ const DEPENDENCY_UNAVAILABLE_RUNTIME_CODES = new Set([
   'ETIMEDOUT',
 ]);
 
-function dependencyUnavailableCode(code: string | undefined): boolean {
-  if (!code) return false;
-  return DEPENDENCY_UNAVAILABLE_CODES.has(code)
-    || DEPENDENCY_UNAVAILABLE_RUNTIME_CODES.has(code)
-    || DEPENDENCY_UNAVAILABLE_CODE_PREFIXES.some((prefix) => code.startsWith(prefix));
+export function isDependencyUnavailableCode(code: string | undefined): boolean {
+  const normalized = code?.toUpperCase();
+  if (!normalized) return false;
+  return DEPENDENCY_UNAVAILABLE_CODES.has(normalized)
+    || DEPENDENCY_UNAVAILABLE_RUNTIME_CODES.has(normalized)
+    || DEPENDENCY_UNAVAILABLE_CODE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
 function errorMessage(error: unknown, databaseError: DatabaseLikeError): string {
@@ -103,7 +104,7 @@ function classifyError(error: unknown): {
   if (databaseCode && RETRYABLE_CONFLICT_CODES.has(databaseCode)) {
     return { code: 'CONFLICT', message, retryable: true };
   }
-  if (dependencyUnavailableCode(databaseCode)) {
+  if (isDependencyUnavailableCode(databaseCode)) {
     return { code: 'DEPENDENCY_UNAVAILABLE', message, retryable: true };
   }
   if (normalized.startsWith('conflict:') || normalized.includes('is no longer')) {

@@ -1067,7 +1067,7 @@ export async function searchRag(params: {
   if (!config.rag.enabled) {
     throw new DependencyUnavailableError(
       'rag',
-      'RAG search is disabled; set RAG_ENABLED=true and start local Qdrant with npm run rag:up',
+      'RAG search is disabled; set RAG_ENABLED=true and configure QDRANT_URL, or run `horizonlayer setup` for the managed local runtime',
       { retryable: false }
     );
   }

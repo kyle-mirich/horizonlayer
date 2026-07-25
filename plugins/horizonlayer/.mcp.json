@@ -2,7 +2,7 @@
   "mcpServers": {
     "horizonlayer": {
       "command": "npx",
-      "args": ["-y", "horizonlayer@0.0.1", "mcp"]
+      "args": ["-y", "horizonlayer@2.0.0", "mcp"]
     }
   }
 }

@@ -311,6 +311,7 @@ describe('RAG search orchestration', () => {
     await expect(searchRag({ query: 'anything', scope })).rejects.toMatchObject({
       code: 'DEPENDENCY_UNAVAILABLE',
       dependency: 'rag',
+      message: expect.stringContaining('horizonlayer setup'),
       retryable: false,
     });
   });

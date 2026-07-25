@@ -35,7 +35,7 @@ describe('environment configuration', () => {
       },
       server: {
         name: 'Horizon Layer',
-        version: '0.0.1',
+        version: '2.0.0',
       },
     });
   });
@@ -88,7 +88,7 @@ describe('environment configuration', () => {
         qdrant_url: 'https://qdrant.internal:7443',
         timeout_ms: 7500,
       },
-      server: { name: 'Agent Knowledge', version: '0.0.1' },
+      server: { name: 'Agent Knowledge', version: '2.0.0' },
     });
   });
 

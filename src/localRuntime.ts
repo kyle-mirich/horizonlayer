@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +40,13 @@ export class LocalRuntimeError extends Error {
     this.name = 'LocalRuntimeError';
   }
 }
+
+export interface LocalRuntimeSetupLock {
+  path: string;
+  release: () => Promise<void>;
+}
+
+export type ComposeAction = 'reset' | 'start' | 'stop';
 
 function runCommand(
   command: string,
@@ -90,18 +97,27 @@ function validPort(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65_535;
 }
 
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function validComposeProject(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z0-9][a-z0-9_-]*$/u.test(value);
+}
+
 export function parseLocalRuntimeConfig(value: unknown): LocalRuntimeConfig {
   if (value == null || typeof value !== 'object' || Array.isArray(value)) {
     throw new LocalRuntimeError('HorizonLayer runtime configuration must contain a JSON object.');
   }
   const config = value as Partial<LocalRuntimeConfig>;
   if (config.version !== CONFIG_VERSION
-    || typeof config.compose_project !== 'string'
-    || typeof config.database_name !== 'string'
-    || typeof config.database_password !== 'string'
-    || typeof config.database_user !== 'string'
+    || !validComposeProject(config.compose_project)
+    || !nonEmptyString(config.database_name)
+    || !nonEmptyString(config.database_password)
+    || !nonEmptyString(config.database_user)
     || !validPort(config.database_port)
-    || !validPort(config.qdrant_port)) {
+    || !validPort(config.qdrant_port)
+    || config.database_port === config.qdrant_port) {
     throw new LocalRuntimeError('HorizonLayer runtime configuration is invalid or unsupported.');
   }
   return config as LocalRuntimeConfig;
@@ -114,9 +130,11 @@ export async function readLocalRuntimeConfig(
     return parseLocalRuntimeConfig(JSON.parse(await readFile(path, 'utf8')));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    if (error instanceof LocalRuntimeError) throw error;
     throw new LocalRuntimeError(
-      `Cannot read HorizonLayer runtime configuration at ${path}.`,
+      `Cannot use HorizonLayer runtime configuration at ${path}. `
+      + 'Restore a valid runtime.json backup to keep existing local data. For a disposable local '
+      + 'development runtime, remove the invalid configuration and HorizonLayer Docker volumes, '
+      + 'then run `horizonlayer setup` again.',
       error instanceof Error ? error.message : String(error)
     );
   }
@@ -131,6 +149,66 @@ export async function writeLocalRuntimeConfig(
   const staging = `${path}.write-${randomUUID()}`;
   await writeFile(staging, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await rename(staging, path);
+}
+
+export async function removeLocalRuntimeConfig(
+  path = localRuntimeConfigPath()
+): Promise<void> {
+  await rm(path, { force: true });
+}
+
+export async function acquireLocalRuntimeSetupLock(
+  configPath = localRuntimeConfigPath()
+): Promise<LocalRuntimeSetupLock> {
+  const path = `${configPath}.setup.lock`;
+  const token = randomUUID();
+  await mkdir(dirname(path), { recursive: true });
+
+  try {
+    await writeFile(path, JSON.stringify({ pid: process.pid, token }), {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new LocalRuntimeError(
+        `Another HorizonLayer lifecycle command is already running (${path}). Wait for it to finish, then run `
+        + 'the command again. If no lifecycle command is running, remove this stale lock file and retry.'
+      );
+    }
+    throw new LocalRuntimeError(
+      `Cannot lock HorizonLayer setup at ${path}. Check that the configuration directory is writable.`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  return {
+    path,
+    release: async () => {
+      try {
+        const current = JSON.parse(await readFile(path, 'utf8')) as { token?: unknown };
+        // Never delete a lock acquired by a newer setup process.
+        if (current.token === token) await rm(path, { force: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          // A failed cleanup is safer than deleting a lock we cannot prove we own.
+        }
+      }
+    },
+  };
+}
+
+export async function withLocalRuntimeLifecycleLock<T>(
+  operation: () => Promise<T>,
+  configPath = localRuntimeConfigPath()
+): Promise<T> {
+  const lock = await acquireLocalRuntimeSetupLock(configPath);
+  try {
+    return await operation();
+  } finally {
+    await lock.release();
+  }
 }
 
 export function runtimeEnvironment(config: LocalRuntimeConfig): NodeJS.ProcessEnv {
@@ -153,15 +231,25 @@ export function runtimeEnvironment(config: LocalRuntimeConfig): NodeJS.ProcessEn
 
 export function applyLocalRuntimeEnvironment(
   config: LocalRuntimeConfig,
-  environment: NodeJS.ProcessEnv = process.env
+  environment: NodeJS.ProcessEnv = process.env,
+  overwrite = false
 ): void {
   for (const [name, value] of Object.entries(runtimeEnvironment(config))) {
-    if (environment[name] == null && value != null) environment[name] = value;
+    if ((overwrite || environment[name] == null) && value != null) environment[name] = value;
   }
 }
 
 function dockerInfo(): CommandResult {
   return runCommand('docker', ['info', '--format', '{{.ServerVersion}}']);
+}
+
+function dockerComposeInfo(): CommandResult {
+  return runCommand('docker', ['compose', 'version', '--short']);
+}
+
+export function isDockerDaemonReady(): boolean {
+  const result = dockerInfo();
+  return !result.error && result.status === 0;
 }
 
 export function dockerDesktopLaunchCommand(
@@ -184,17 +272,23 @@ export function dockerDesktopLaunchCommand(
   return null;
 }
 
-export async function ensureDockerDesktopReady(timeoutMs = 120_000): Promise<void> {
+export async function ensureDockerDesktopReady(
+  timeoutMs = 120_000,
+  platform: NodeJS.Platform = process.platform
+): Promise<void> {
   const initial = dockerInfo();
   if (!initial.error && initial.status === 0) return;
   if (initial.error?.code === 'ENOENT') {
+    const installGuidance = platform === 'linux'
+      ? 'Docker Engine (or Docker Desktop) is not installed. Install Docker Engine or Docker Desktop, '
+      : 'Docker Desktop is not installed. Install Docker Desktop for macOS or Windows, ';
     throw new LocalRuntimeError(
-      'Docker Desktop is not installed. Install Docker Desktop for macOS or Windows, then run `horizonlayer setup` again.',
+      `${installGuidance}then run \`horizonlayer setup\` again.`,
       'https://www.docker.com/products/docker-desktop/'
     );
   }
 
-  const launch = dockerDesktopLaunchCommand();
+  const launch = dockerDesktopLaunchCommand(platform);
   if (!launch) {
     throw new LocalRuntimeError(
       'Docker is installed, but its daemon is unavailable. Start Docker and run `horizonlayer setup` again.',
@@ -230,43 +324,82 @@ function portAvailable(port: number): Promise<boolean> {
   });
 }
 
-async function choosePort(candidates: number[]): Promise<number> {
+export async function chooseLocalPort(
+  candidates: readonly number[],
+  isAvailable: (port: number) => Promise<boolean> = portAvailable
+): Promise<number> {
   for (const port of candidates) {
-    if (await portAvailable(port)) return port;
+    if (await isAvailable(port)) return port;
   }
-  throw new LocalRuntimeError(`No available local port found among: ${candidates.join(', ')}`);
+  throw new LocalRuntimeError(
+    `No available local port found among: ${candidates.join(', ')}. `
+    + 'Stop the process using one of those loopback ports and run `horizonlayer setup` again. '
+    + 'To use an existing PostgreSQL instance instead, start the MCP server with DATABASE_URL set.'
+  );
 }
 
-export async function createLocalRuntimeConfig(): Promise<LocalRuntimeConfig> {
+export function composeProjectForEnvironment(
+  environment: NodeJS.ProcessEnv = process.env
+): string {
+  const override = environment.HORIZONLAYER_HOME;
+  if (!override) return 'horizonlayer';
+  // A dedicated configuration home must also own dedicated Docker resources.
+  // Keep the ordinary per-user runtime's established project name unchanged.
+  const suffix = createHash('sha256').update(override).digest('hex').slice(0, 12);
+  return `horizonlayer-${suffix}`;
+}
+
+export async function createLocalRuntimeConfig(
+  environment: NodeJS.ProcessEnv = process.env
+): Promise<LocalRuntimeConfig> {
   return {
-    compose_project: 'horizonlayer',
+    compose_project: composeProjectForEnvironment(environment),
     database_name: 'horizon_layer',
     database_password: randomUUID().replaceAll('-', ''),
-    database_port: await choosePort(DEFAULT_DATABASE_PORTS),
+    database_port: await chooseLocalPort(DEFAULT_DATABASE_PORTS),
     database_user: 'postgres',
-    qdrant_port: await choosePort(DEFAULT_QDRANT_PORTS),
+    qdrant_port: await chooseLocalPort(DEFAULT_QDRANT_PORTS),
     version: CONFIG_VERSION,
   };
 }
 
 export function runCompose(
-  action: 'start' | 'stop',
+  action: ComposeAction,
   config: LocalRuntimeConfig,
   composePath = bundledComposePath()
 ): void {
   if (!existsSync(composePath)) {
-    throw new LocalRuntimeError(`Bundled Docker Compose file is missing from ${composePath}.`);
+    throw new LocalRuntimeError(
+      `Bundled Docker Compose file is missing from ${composePath}. `
+      + 'Reinstall HorizonLayer so its runtime files are restored.'
+    );
   }
   const args = ['compose', '-f', composePath, '-p', config.compose_project];
   if (action === 'start') args.push('up', '-d');
-  else args.push('stop');
+  else if (action === 'stop') args.push('stop');
+  else args.push('down', '--volumes', '--remove-orphans');
   const result = runCommand('docker', args, {
     env: { ...process.env, ...runtimeEnvironment(config) },
     inherit: true,
   });
   if (result.error || result.status !== 0) {
+    // `docker info` can succeed while the Compose v2 plugin is not installed or is not
+    // discoverable in this user's Docker configuration. Probe it separately for recovery.
+    const compose = result.error ? null : dockerComposeInfo();
+    if (compose && (compose.error || compose.status !== 0)) {
+      throw new LocalRuntimeError(
+        'Docker Compose v2 is unavailable. Install or enable Docker Compose (it is included with Docker Desktop), '
+        + 'then run `horizonlayer setup` again.',
+        compose.error?.message || compose.stderr || compose.stdout
+      );
+    }
+    const recovery = action === 'start'
+      ? 'Check Docker Desktop and free the configured local ports, then run `horizonlayer setup` again.'
+      : action === 'stop'
+        ? 'Start Docker Desktop and run `horizonlayer stop` again. Your data remains in Docker volumes.'
+        : 'Start Docker Desktop and run `horizonlayer reset --yes` again. Your configuration was kept.';
     throw new LocalRuntimeError(
-      `Docker Compose could not ${action === 'start' ? 'start' : 'stop'} HorizonLayer services.`,
+      `Docker Compose could not ${action === 'start' ? 'start' : action === 'stop' ? 'stop' : 'remove'} HorizonLayer services. ${recovery}`,
       result.error?.message || result.stderr || result.stdout
     );
   }

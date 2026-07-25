@@ -1,86 +1,151 @@
 # HorizonLayer
 
-HorizonLayer is a local-first MCP knowledge layer for coding agents. PostgreSQL is the canonical store for workspaces, pages, structured databases, sessions, links, and resumable run checkpoints.
+HorizonLayer is a local-first PostgreSQL MCP server for durable coding-agent knowledge. It keeps workspace-scoped pages, typed databases and rows, relationships, searches, and resumable run checkpoints on your machine.
 
-This repository starts at version `0.0.1` with a fresh schema and no compatibility surface.
+PostgreSQL is the canonical store. Qdrant is a local, derived index used for optional semantic retrieval; it is not a second source of truth. HorizonLayer does not configure hosted, multi-user, or remote deployment services.
 
-The current server is intentionally small and stdio-only. It exposes eight tools:
+> **Release line:** `2.0.0` is the fresh-schema major release. The commands below pin `@2.0.0` for reproducibility and to distinguish it from the incompatible legacy 1.x package lineage.
 
-| Tool | Purpose |
+## Local quickstart
+
+This is the shortest supported path: Docker-managed PostgreSQL and Qdrant, then the bundled Codex plugin. It does not require a global npm installation.
+
+### Prerequisites
+
+- Node.js 22 or later.
+- Docker Desktop on macOS or Windows, or a running Docker Engine on Linux. The first setup downloads the PostgreSQL, Qdrant, and local embedding-model assets.
+- The Codex CLI for the Codex integration below. Claude Code is also supported.
+
+### 1. Install HorizonLayer and provision local services
+
+```bash
+npx -y horizonlayer@2.0.0 setup
+```
+
+`setup` starts Docker when supported, chooses unused loopback ports, persists a local runtime configuration, starts PostgreSQL and Qdrant with Docker volumes, initializes [`schema.sql`](schema.sql), and verifies the local embedding model and vector collection.
+
+### 2. Verify health
+
+```bash
+npx -y horizonlayer@2.0.0 doctor
+```
+
+The command reports the configuration path and whether Docker Desktop, PostgreSQL, and Qdrant are ready. It exits nonzero if any required local service is unavailable.
+
+### 3. Connect a coding agent
+
+For Codex, install the bundled plugin and restart Codex:
+
+```bash
+npx -y horizonlayer@2.0.0 install codex
+```
+
+The installer copies the Codex plugin into `~/plugins/horizonlayer`, registers its local marketplace entry under `~/.agents/plugins/marketplace.json`, and asks the Codex CLI to add it. To install only the Claude Code integration instead, run `npx -y horizonlayer@2.0.0 install claude`. It stages a durable local marketplace at `~/.claude/horizonlayer-marketplace`, registers it with Claude Code, and installs `horizonlayer@horizonlayer` at user scope. Restart Claude Code after either installation.
+
+### 4. Create and query your first typed record
+
+After restarting the agent, paste this into its chat. It uses the installed HorizonLayer MCP tools and returns the identifiers and query result in the chat:
+
+```text
+Use HorizonLayer's MCP tools. Create a workspace named "HorizonLayer Quickstart" unless one already exists with that name. In it, create a typed database named "Decisions" with a title property named "Name" and a select property named "Status" whose allowed value is "accepted". Create a row with Name "HorizonLayer local setup is verified" and Status "accepted". Then query the Decisions rows where Status equals accepted. Show the workspace, database, and row IDs plus the query result.
+```
+
+The `database` tool defines the typed properties; the `row` tool creates and queries records. Property names and select choices are exact and case-sensitive.
+
+### 5. Inspect it in the local dashboard
+
+```bash
+npx -y horizonlayer@2.0.0 dashboard --open
+```
+
+The dashboard listens only on `http://127.0.0.1:4317` by default. This command stays in the foreground; press `Ctrl-C` to stop the dashboard process without deleting data. You can also inspect the row query returned by the agent in the previous step.
+
+## Docker-managed local runtime
+
+Use this path for the normal local installation. `setup` is idempotent: it reuses the saved configuration and Docker volumes on later runs. A first `mcp` or `dashboard` launch with neither a saved configuration nor an explicit runtime override provisions this same managed runtime; it never creates a separate fallback database. `setup` always targets its managed local runtime. Once it exists, explicit `DATABASE_URL`, `QDRANT_URL`, and `RAG_ENABLED` values take precedence for `mcp` and `dashboard`. For a first launch with an override, run `setup` first or use the external PostgreSQL path below.
+
+| What | Location |
 | --- | --- |
-| `workspace` | Discover and manage isolated knowledge scopes |
-| `session` | Start, resume, list, and close agent work sessions |
-| `page` | Store nested, block-based unstructured knowledge |
-| `database` | Define structured collections and typed properties |
-| `row` | Create and query structured records |
-| `link` | Relate stored entities inside one workspace |
-| `search` | Run PostgreSQL-native retrieval in one workspace |
-| `run` | Journal one execution attempt and its checkpoints |
+| Runtime configuration (macOS) | `~/Library/Application Support/HorizonLayer/runtime.json` |
+| Runtime configuration (Windows) | `%LOCALAPPDATA%\HorizonLayer\runtime.json` |
+| Runtime configuration (Linux) | `$XDG_CONFIG_HOME/horizonlayer/runtime.json`, or `~/.config/horizonlayer/runtime.json` |
+| Configuration override | Set `HORIZONLAYER_HOME` to a dedicated HorizonLayer directory before its first setup. It receives a stable, dedicated Docker Compose project; the project name is recorded in `runtime.json`. |
+| PostgreSQL and Qdrant data | Docker named volumes. The default runtime uses `horizonlayer_postgres-data` and `horizonlayer_qdrant-data`; an overridden home uses the project prefix recorded in its `runtime.json`. |
+| Downloaded embedding model | `$XDG_CACHE_HOME/horizonlayer/models`, or `~/.cache/horizonlayer/models` |
 
-Existing knowledge mutations use optimistic revisions, and archive/restore replaces public hard deletion. The database is initialized directly from one canonical [`schema.sql`](schema.sql).
-
-Search responses are compact by default to keep agent context small. They return lossless typed references such as `p_wrEjJOuSTVWohCth0LT9MA`, rounded relevance scores, and UTC timestamps precise to the second. RAG results deduplicate repeated entity metadata in `sources`; each chunk citation points to its zero-based source index. Compact references work anywhere the corresponding UUID works. Pass `format: "full"` to `search` when exact UUIDs, millisecond timestamps, tags, importance, or relationship metadata are needed.
-
-## Install for coding agents
-
-One command installs the HorizonLayer plugin, its focused agent skills, and its MCP server configuration for both Codex and Claude Code:
+Stop the managed services while keeping configuration and data:
 
 ```bash
-npx -y horizonlayer@0.0.1 install
+npx -y horizonlayer@2.0.0 stop
 ```
 
-Install for only one client with `install codex` or `install claude`. Restart the client after installation. The MCP server starts through the plugin and will reuse an existing `DATABASE_URL` or launch its own local PostgreSQL container through Docker.
+### Reset local development data safely
 
-## Agent-friendly local commands
-
-HorizonLayer can provision the complete local runtime through Docker Desktop on macOS and Windows. Setup starts Docker Desktop when it is installed, launches PostgreSQL and Qdrant with persistent volumes, initializes the schema, downloads the pinned local embedding model, and verifies the vector collection:
+Resetting is destructive: it permanently removes the managed local PostgreSQL knowledge, Qdrant index, containers, volumes, and saved `runtime.json`. First run `doctor` and confirm the configuration path is the local runtime you intend to erase. Then use the confirmation-gated reset command:
 
 ```bash
-horizonlayer setup
-horizonlayer doctor
-horizonlayer dashboard --open
+npx -y horizonlayer@2.0.0 doctor
+npx -y horizonlayer@2.0.0 reset --yes
 ```
 
-`dashboard` reuses the saved runtime configuration and keeps running in the foreground so an agent or process supervisor can own its lifecycle. `--open` launches the system browser. Stop the managed PostgreSQL and Qdrant services with:
+The command uses the saved Compose project, so it removes only that managed runtime. It never targets an external `DATABASE_URL`. Run `setup` again to create a fully fresh local runtime. Back up `runtime.json` and Docker volumes before resetting if you need to retain local knowledge.
+
+## Advanced: use an existing PostgreSQL instance
+
+This path is for a PostgreSQL instance you operate yourself. It does not start Docker-managed services. The database role must be allowed to apply the canonical schema on first connection.
 
 ```bash
-horizonlayer stop
+DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/DATABASE' \
+  RAG_ENABLED=false \
+  npx -y horizonlayer@2.0.0 mcp
 ```
 
-Runtime configuration is stored in `~/Library/Application Support/HorizonLayer` on macOS and `%LOCALAPPDATA%\\HorizonLayer` on Windows. Explicit environment variables such as `DATABASE_URL` still override saved local configuration.
+The MCP server uses stdio. To use the dashboard against that same database instead, run:
 
-## Local development
+```bash
+DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/DATABASE' \
+  RAG_ENABLED=false \
+  npx -y horizonlayer@2.0.0 dashboard --open
+```
 
-Requirements: Node.js 22+ and PostgreSQL 17+ (or Docker for the launcher's local fallback).
+Set `RAG_ENABLED=true` and `QDRANT_URL` only when you also operate a compatible Qdrant instance. Do not run `setup`, `stop`, or `reset` to manage an external PostgreSQL instance.
+
+## Troubleshooting
+
+| Symptom | Recovery |
+| --- | --- |
+| `doctor` says configuration is missing | Run `setup` first. |
+| Docker is missing or its daemon is unavailable | Install or start Docker Desktop (macOS/Windows), or start Docker Engine (Linux), then rerun `setup`. |
+| PostgreSQL or Qdrant is unavailable | Run `doctor`, inspect Docker Desktop or the local containers, then rerun `setup`. The launcher reports the failed dependency and recovery direction. |
+| No candidate local port is available | Free one of the reported loopback ports, then rerun `setup`. Setup chooses an available supported port automatically. |
+| Another HorizonLayer lifecycle command is already running | Let it finish, then rerun the command. If it was interrupted and no lifecycle command remains, remove the reported `.setup.lock` file and retry. |
+| `runtime.json` is invalid or unreadable | Restore a backup to retain existing data. For a disposable development runtime, inspect the saved project/volume names from that backup before manually removing only those resources and the invalid config; then run `setup`. |
+| An external database cannot connect | Check `DATABASE_URL`, network access, and the role's schema permissions; then launch `mcp` or `dashboard` with the corrected environment. |
+
+Run `npx -y horizonlayer@2.0.0 help` for the complete command list.
+
+## Data model and behavior
+
+- Every record belongs to an isolated workspace.
+- Pages store block-based narrative knowledge; typed databases define properties and rows store validated records.
+- Existing knowledge mutations use optimistic revisions. Archive and restore are the public lifecycle operations; there is no public hard-delete workflow.
+- PostgreSQL-native record search is available in a workspace scope. The optional local RAG index is derived and rebuildable.
+
+The MCP server exposes `workspace`, `session`, `page`, `database`, `row`, `link`, `search`, and `run`. Search responses use compact, lossless typed references by default; request `format: "full"` when an exact UUID or complete metadata is needed.
+
+Read [the database guide](docs/database.md) for the typed model and [the flow guide](docs/flows.md) for the startup and MCP journeys.
+
+## Development and verification
+
+From a repository checkout:
 
 ```bash
 npm ci
-npm run build
-npm run verify
-```
-
-Run against an existing database:
-
-```bash
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/horizon_layer npm run dev
-```
-
-Or let the packaged launcher reuse/start local PostgreSQL:
-
-```bash
-node dist/launcher.js
-```
-
-The next product phases will add optional, fully local vector/RAG retrieval and then a new human web interface. PostgreSQL remains the source of truth; vector indexes will be derived and rebuildable.
-
-## Verification
-
-```bash
 npm run verify
 npm run build
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/horizon_layer npm run test:smoke:live
+npm run test:smoke:local
 ```
 
-The live smoke test connects through the official MCP client over stdio and exercises the complete eight-tool workflow against the configured database.
+`npm run test:smoke:local` provisions an isolated Docker PostgreSQL instance and exercises the launcher-backed MCP and dashboard smoke paths. See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution expectations, [CHANGELOG.md](CHANGELOG.md) for release history, and [SECURITY.md](SECURITY.md) for responsible disclosure.
 
-License: MIT.
+License: [MIT](LICENSE).
