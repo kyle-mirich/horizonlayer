@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -35,6 +35,14 @@ const row: DatabaseRow = {
 };
 function success(action: string, result: unknown) {
   return { action, error: null, meta: {}, ok: true as const, result };
+}
+
+function deferred<Result>() {
+  let resolve!: (value: Result) => void;
+  const promise = new Promise<Result>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
 }
 
 function renderView(options: {
@@ -139,26 +147,34 @@ describe('DatabaseView behavior', () => {
     await user.clear(within(detailDialog).getByLabelText('Name'));
     await user.type(within(detailDialog).getByLabelText('Name'), 'Updated research');
     await user.click(within(detailDialog).getByRole('button', { name: 'Save details' }));
-    await waitFor(() => expect(databaseMethod).toHaveBeenCalledWith(expect.objectContaining({ action: 'update', name: 'Updated research' })));
+    await waitFor(() => expect(databaseMethod).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'update', name: 'Updated research' }), expect.anything(),
+    ));
     expect(showToast).toHaveBeenCalledWith('Database details saved');
 
     await user.click(screen.getByRole('button', { name: 'Schema' }));
     const schema = await screen.findByRole('dialog', { name: 'Database schema' });
     await user.click(within(schema).getByRole('button', { name: 'Archive Score property' }));
-    await waitFor(() => expect(databaseMethod).toHaveBeenCalledWith({ action: 'property_archive', property_id: scoreProperty.id, revision: scoreProperty.revision }));
+    await waitFor(() => expect(databaseMethod).toHaveBeenCalledWith(
+      { action: 'property_archive', property_id: scoreProperty.id, revision: scoreProperty.revision }, expect.anything(),
+    ));
     expect(refreshWorkspaceData).toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Add property' }));
     const add = await screen.findByRole('dialog', { name: 'Add a property' });
     await user.type(within(add).getByLabelText('Property name'), 'Notes');
     await user.click(within(add).getByRole('button', { name: 'Add property' }));
-    await waitFor(() => expect(databaseMethod).toHaveBeenCalledWith(expect.objectContaining({ action: 'property_add' })));
+    await waitFor(() => expect(databaseMethod).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'property_add' }), expect.anything(),
+    ));
     expect(showToast).toHaveBeenCalledWith('Property added');
 
     await user.click(screen.getByRole('button', { name: 'New record' }));
     const create = await screen.findByRole('dialog', { name: 'New record' });
     await user.type(within(create).getByLabelText('Name'), 'New record');
     await user.click(within(create).getByRole('button', { name: 'Create record' }));
-    await waitFor(() => expect(rowMethod).toHaveBeenCalledWith(expect.objectContaining({ action: 'create', database_id: database.id })));
+    await waitFor(() => expect(rowMethod).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'create', database_id: database.id }), expect.anything(),
+    ));
     expect(navigate).toHaveBeenCalledWith({ name: 'database', databaseId: database.id, rowId: 'row-created' });
 
     await user.click(screen.getByRole('button', { name: 'Archive database' }));
@@ -168,10 +184,14 @@ describe('DatabaseView behavior', () => {
     await user.click(screen.getByRole('button', { name: 'Archive database' }));
     const secondPrompt = await screen.findByRole('dialog', { name: 'Archive this database?' });
     await user.click(within(secondPrompt).getByRole('button', { name: 'Archive database' }));
-    await waitFor(() => expect(databaseMethod).toHaveBeenCalledWith({ action: 'archive', database_id: database.id, revision: expect.any(Number) }));
+    await waitFor(() => expect(databaseMethod).toHaveBeenCalledWith(
+      { action: 'archive', database_id: database.id, revision: expect.any(Number) }, expect.anything(),
+    ));
     expect(await screen.findByText('This database is archived and read-only.')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Restore database' }));
-    await waitFor(() => expect(databaseMethod).toHaveBeenCalledWith({ action: 'restore', database_id: database.id, revision: expect.any(Number) }));
+    await waitFor(() => expect(databaseMethod).toHaveBeenCalledWith(
+      { action: 'restore', database_id: database.id, revision: expect.any(Number) }, expect.anything(),
+    ));
   });
 
   it('shows database and row failure recovery states', async () => {
@@ -276,7 +296,9 @@ describe('DatabaseView behavior', () => {
     expect(screen.queryByRole('button', { name: 'New record' })).toBeNull();
     expect(screen.getByRole('checkbox', { name: 'Include archived' })).toHaveProperty('disabled', true);
     await user.click(screen.getByRole('button', { name: 'Restore database' }));
-    await waitFor(() => expect(databaseMethod).toHaveBeenCalledWith(expect.objectContaining({ action: 'restore' })));
+    await waitFor(() => expect(databaseMethod).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'restore' }), expect.anything(),
+    ));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await waitFor(() => expect(offsetCalls).toContain(50));
     await waitFor(() => expect(offsetCalls.filter((offset) => offset === 0).length).toBeGreaterThan(1));
@@ -308,7 +330,7 @@ describe('DatabaseView behavior', () => {
     await user.click(within(scoreEditor).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(schemaCase.databaseMethod).toHaveBeenCalledWith(expect.objectContaining({
       action: 'property_update', name: 'Score updated', property_id: scoreProperty.id,
-    })));
+    }), expect.anything()));
     const stageChoices = within(schema).getByLabelText('Choices for Stage property');
     await user.clear(stageChoices);
     await user.type(stageChoices, 'Planned, Active, Done');
@@ -317,21 +339,25 @@ describe('DatabaseView behavior', () => {
     await user.click(within(stageEditor).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(schemaCase.databaseMethod).toHaveBeenCalledWith(expect.objectContaining({
       action: 'property_update', options: { choices: ['Planned', 'Active', 'Done'] }, property_id: stageProperty.id,
-    })));
+    }), expect.anything()));
     await user.click(within(schema).getByRole('button', { name: 'Restore' }));
     await waitFor(() => expect(schemaCase.databaseMethod).toHaveBeenCalledWith({
       action: 'property_restore', property_id: archivedProperty.id, revision: archivedProperty.revision,
-    }));
+    }, expect.anything()));
 
     cleanup();
     const rowCase = renderView({ rowId: row.id });
     const dialog = await screen.findByRole('dialog', { name: 'Alpha' });
     await user.click(within(dialog).getByRole('button', { name: 'Archive record' }));
-    await waitFor(() => expect(rowCase.rowMethod).toHaveBeenCalledWith(expect.objectContaining({ action: 'archive', row_id: row.id })));
+    await waitFor(() => expect(rowCase.rowMethod).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'archive', row_id: row.id }), expect.anything(),
+    ));
     expect(rowCase.navigate).toHaveBeenCalledWith({ name: 'database', databaseId: database.id });
     expect(await screen.findByRole('button', { name: 'Restore' })).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Restore' }));
-    await waitFor(() => expect(rowCase.rowMethod).toHaveBeenCalledWith(expect.objectContaining({ action: 'restore', row_id: row.id })));
+    await waitFor(() => expect(rowCase.rowMethod).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'restore', row_id: row.id }), expect.anything(),
+    ));
   });
 
   it('filters checkbox values and renders the empty filtered state', async () => {
@@ -397,5 +423,39 @@ describe('DatabaseView behavior', () => {
     for (const listener of mediaListeners) listener({ matches: false } as MediaQueryListEvent);
     const table = await screen.findByRole('table', { name: 'Rows in Research' });
     expect(table.querySelector('tbody tr')?.classList.contains('is-archived')).toBe(true);
+  });
+
+  it('ignores an out-of-order row query after the sort changes', async () => {
+    const user = userEvent.setup();
+    const firstQuery = deferred<unknown>();
+    const latestRow = { ...row, revision: 4, values: { ...row.values, Score: 22 } };
+    let queryCount = 0;
+    renderView({
+      rowImpl: async (input) => {
+        if (input.action !== 'query') throw new Error('unexpected row action');
+        queryCount += 1;
+        if (queryCount === 1) return firstQuery.promise;
+        return success('query', {
+          items: [latestRow],
+          page: { has_more: false, limit: 50, next_offset: null, offset: 0 },
+          total: 1,
+        });
+      },
+    });
+    expect(await screen.findByRole('heading', { name: 'Research' })).toBeTruthy();
+
+    await user.selectOptions(screen.getByLabelText('Sort records by'), 'Score');
+    const latestScore = await screen.findByLabelText<HTMLInputElement>('Score for Alpha');
+    await waitFor(() => expect(latestScore.value).toBe('22'));
+
+    await act(async () => {
+      firstQuery.resolve(success('query', {
+        items: [row],
+        page: { has_more: false, limit: 50, next_offset: null, offset: 0 },
+        total: 1,
+      }));
+      await firstQuery.promise;
+    });
+    expect(screen.getByLabelText<HTMLInputElement>('Score for Alpha').value).toBe('22');
   });
 });

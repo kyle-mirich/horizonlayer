@@ -82,14 +82,20 @@ function renderPage(pageApi: ReturnType<typeof vi.fn<PageApi>>) {
     workspace,
   };
 
-  return {
-    ...render(
+  const renderTree = (pageId = PAGE_ID) => (
       <DashboardViewContext.Provider value={value}>
-        <PageView pageId={PAGE_ID} />
+        <PageView pageId={pageId} />
       </DashboardViewContext.Provider>
-    ),
+  );
+  const rendered = render(renderTree());
+
+  return {
+    ...rendered,
     navigate,
     refreshWorkspaceData,
+    rerenderPage(pageId: string) {
+      rendered.rerender(renderTree(pageId));
+    },
     showToast,
   };
 }
@@ -541,5 +547,42 @@ describe('PageView', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Show 1 archived block' }));
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Restore' }).disabled).toBe(true);
+  });
+
+  it('flushes the latest scheduled title when navigation replaces the page editor', async () => {
+    const secondPageId = 'page-2';
+    const first = makePage();
+    const second = makePage({
+      blocks: [],
+      id: secondPageId,
+      title: 'Second page',
+    });
+    const pageApi = vi.fn<PageApi>(async (input) => {
+      if (input.action === 'get') {
+        return success('get', input.page_id === secondPageId ? second : first);
+      }
+      if (input.action === 'update') {
+        return success('update', pageRecord(first, {
+          revision: 4,
+          title: input.title ?? first.title,
+        }));
+      }
+      throw new Error(`Unexpected action ${input.action}`);
+    });
+    const view = renderPage(pageApi);
+    const title = await screen.findByLabelText<HTMLTextAreaElement>('Page title');
+
+    fireEvent.change(title, { target: { value: 'Saved while leaving' } });
+    view.rerenderPage(secondPageId);
+
+    expect(await screen.findByDisplayValue('Second page')).toBeTruthy();
+    await waitFor(() => expect(pageApi).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'update',
+      page_id: PAGE_ID,
+      title: 'Saved while leaving',
+    }), expect.anything()));
+    const titleWrites = pageApi.mock.calls.filter(([input]) => input.action === 'update');
+    expect(titleWrites).toHaveLength(1);
+    await waitFor(() => expect(view.refreshWorkspaceData).toHaveBeenCalledTimes(1));
   });
 });

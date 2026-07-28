@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -93,7 +93,10 @@ function mockApi(options: { rowUpdateError?: Error } = {}) {
     }
     throw new Error(`Unexpected database action ${input.action}`);
   });
-  const rowMethod = vi.fn(async (input: { action: string; values?: Record<string, unknown> }) => {
+  const rowMethod = vi.fn(async (
+    input: { action: string; values?: Record<string, unknown> },
+    _options?: { signal?: AbortSignal },
+  ) => {
     if (input.action === 'query') {
       return success('query', {
         items: [row],
@@ -144,6 +147,7 @@ function renderView({
     rerenderView(nextRowId?: string) {
       rendered.rerender(renderTree(nextRowId));
     },
+    unmount: rendered.unmount,
   };
 }
 
@@ -167,7 +171,7 @@ describe('DatabaseView', () => {
       revision: 3,
       row_id: row.id,
       values: { Score: 8 },
-    }));
+    }, expect.anything()));
     await waitFor(() => expect(screen.getByRole('status', { name: 'Saved' })).toBeTruthy());
   });
 
@@ -187,7 +191,7 @@ describe('DatabaseView', () => {
       database_id: database.id,
       property: { name: 'Notes', property_type: 'text' },
       revision: 2,
-    }));
+    }, expect.anything()));
     expect(await screen.findByText('rev 7')).toBeTruthy();
   });
 
@@ -437,7 +441,7 @@ describe('DatabaseView', () => {
       row_id: row.id,
       tags: ['source', 'verified'],
       values: { Name: 'Beta', Score: 4 },
-    }));
+    }, expect.anything()));
     expect(await screen.findByRole('dialog', { name: 'Beta' })).toBeTruthy();
   });
 
@@ -476,5 +480,51 @@ describe('DatabaseView', () => {
     expect(await screen.findByRole('dialog', { name: 'Opening record…' })).toBeTruthy();
     resolveNext(nextEnvelope);
     expect(await screen.findByRole('dialog', { name: 'Beta' })).toBeTruthy();
+  });
+
+  it('aborts pending row work on unmount and ignores a late response', async () => {
+    const user = userEvent.setup();
+    const updateEnvelope = success('update', {
+      ...row,
+      revision: 4,
+      values: { ...row.values, Score: 9 },
+    });
+    let resolveUpdate!: (value: typeof updateEnvelope) => void;
+    const pendingUpdate = new Promise<typeof updateEnvelope>((resolve) => {
+      resolveUpdate = resolve;
+    });
+    let updateSignal: AbortSignal | undefined;
+    const { api, rowMethod } = mockApi();
+    rowMethod.mockImplementation(async (input, options) => {
+      if (input.action === 'query') {
+        return success('query', {
+          items: [row],
+          page: { has_more: false, limit: 50, next_offset: null, offset: 0 },
+          total: 1,
+        });
+      }
+      if (input.action === 'get') return success('get', row);
+      if (input.action === 'update') {
+        updateSignal = options?.signal;
+        return pendingUpdate;
+      }
+      throw new Error(`Unexpected row action ${input.action}`);
+    });
+    const view = renderView({ api });
+    const table = await screen.findByRole('table', { name: 'Rows in Research' });
+    const score = await within(table).findByLabelText('Score for Alpha');
+
+    await user.clear(score);
+    await user.type(score, '9');
+    await user.tab();
+    await waitFor(() => expect(updateSignal).toBeDefined());
+
+    view.unmount();
+    expect(updateSignal?.aborted).toBe(true);
+    await act(async () => {
+      resolveUpdate(updateEnvelope);
+      await pendingUpdate;
+    });
+    expect(view.showToast).not.toHaveBeenCalled();
   });
 });
