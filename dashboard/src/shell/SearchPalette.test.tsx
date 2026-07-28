@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -90,8 +90,16 @@ function renderPalette(options: {
 }
 
 async function searchFor(query: string) {
-  fireEvent.change(screen.getByRole('combobox', { name: 'Search query' }), { target: { value: query } });
-  await new Promise((resolve) => window.setTimeout(resolve, 240));
+  await runSearchDebounce(() => {
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search query' }), { target: { value: query } });
+  });
+}
+
+async function runSearchDebounce(update: () => void) {
+  update();
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 240));
+  });
 }
 
 afterEach(() => {
@@ -130,12 +138,12 @@ describe('SearchPalette', () => {
         ? { chunks: [chunk], mode: 'rag', truncated: false }
         : { mode: 'records', records: [], truncated: false }),
     });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Search query' }), { target: { value: 'retrieve' } });
-    await new Promise((resolve) => window.setTimeout(resolve, 240));
+    await searchFor('retrieve');
     await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /Passages/ }));
-    await new Promise((resolve) => window.setTimeout(resolve, 240));
+    await runSearchDebounce(() => {
+      fireEvent.click(screen.getByRole('button', { name: /Passages/ }));
+    });
     await waitFor(() => expect(search).toHaveBeenLastCalledWith(expect.objectContaining({
       limit: 10, mode: 'rag', query: 'retrieve',
     }), expect.anything()));
@@ -160,9 +168,11 @@ describe('SearchPalette', () => {
 
     cleanup();
     renderPalette();
-    fireEvent.change(screen.getByRole('combobox', { name: 'Search query' }), { target: { value: 'nothing' } });
-    expect(screen.getByLabelText('Searching')).toBeTruthy();
-    expect(await screen.findByText('No matches')).toBeTruthy();
+    await runSearchDebounce(() => {
+      fireEvent.change(screen.getByRole('combobox', { name: 'Search query' }), { target: { value: 'nothing' } });
+      expect(screen.getByLabelText('Searching')).toBeTruthy();
+    });
+    expect(screen.getByText('No matches')).toBeTruthy();
   });
 
   it('does not close when an orphaned row result has no database route', async () => {

@@ -252,7 +252,9 @@ describe('DatabaseView behavior', () => {
     expect(document.querySelector('.database-cards')).toBeTruthy();
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('This row belongs to a different database', { tone: 'error' }));
     expect(navigate).toHaveBeenCalledWith({ name: 'database', databaseId: database.id });
-    for (const listener of mediaListeners) listener({ matches: false } as MediaQueryListEvent);
+    act(() => {
+      for (const listener of mediaListeners) listener({ matches: false } as MediaQueryListEvent);
+    });
     await waitFor(() => expect(screen.getByRole('table', { name: 'Rows in Research' })).toBeTruthy());
   });
 
@@ -420,7 +422,9 @@ describe('DatabaseView behavior', () => {
     const card = document.querySelector('.database-card');
     expect(card?.classList.contains('is-archived')).toBe(true);
     expect(within(card as HTMLElement).getByText('Archived')).toBeTruthy();
-    for (const listener of mediaListeners) listener({ matches: false } as MediaQueryListEvent);
+    act(() => {
+      for (const listener of mediaListeners) listener({ matches: false } as MediaQueryListEvent);
+    });
     const table = await screen.findByRole('table', { name: 'Rows in Research' });
     expect(table.querySelector('tbody tr')?.classList.contains('is-archived')).toBe(true);
   });
