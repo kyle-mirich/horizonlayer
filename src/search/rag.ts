@@ -5,6 +5,7 @@ import type { PoolClient } from 'pg';
 import { config } from '../config.js';
 import { getPool } from '../db/client.js';
 import type { ResolvedSearchScope } from '../db/queries/search.js';
+import { withClientTransaction, withTransaction } from '../db/transaction.js';
 import { DependencyUnavailableError } from './errors.js';
 import { getEmbeddingProvider, type EmbeddingProvider } from './embedder.js';
 import {
@@ -596,27 +597,21 @@ async function loadRagPointSnapshot(
   sources?: RagSourceSelection
 ): Promise<RagPointSnapshot> {
   const contextualClient = ragClientContext.getStore();
-  const client = contextualClient ?? await getPool().connect();
-  let transactionOpen = false;
-  try {
-    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-    transactionOpen = true;
+  const loadSnapshot = async (client: PoolClient) => {
     const generation = await generationFromClient(client, workspaceId);
     const sourceRows = await queryCorpusRows(client, workspaceId, sources);
-    await client.query('COMMIT');
-    transactionOpen = false;
-    const points = [...buildPagePoints(sourceRows.pages), ...buildRowPoints(sourceRows.rows)]
-      .sort((left, right) => left.id.localeCompare(right.id));
-    return {
-      generation,
-      points,
-    };
-  } catch (error) {
-    if (transactionOpen) await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    if (!contextualClient) client.release();
-  }
+    return { generation, sourceRows };
+  };
+  const transactionOptions = {
+    isolationLevel: 'repeatable read' as const,
+    readOnly: true,
+  };
+  const { generation, sourceRows } = contextualClient
+    ? await withClientTransaction(contextualClient, loadSnapshot, transactionOptions)
+    : await withTransaction(loadSnapshot, transactionOptions);
+  const points = [...buildPagePoints(sourceRows.pages), ...buildRowPoints(sourceRows.rows)]
+    .sort((left, right) => left.id.localeCompare(right.id));
+  return { generation, points };
 }
 
 export async function loadRagCorpus(workspaceId: string): Promise<RagCorpus> {

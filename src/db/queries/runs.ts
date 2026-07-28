@@ -1,4 +1,5 @@
 import { getPool, type PoolClient } from '../client.js';
+import { withTransaction } from '../transaction.js';
 import type { RunOutcome, RunStatus } from '../../domain.js';
 import {
   lockActiveSessionForChildWrite,
@@ -204,10 +205,7 @@ export async function startRun(params: {
     await ensureSessionMatchesWorkspace(params.session_id, params.workspace_id, 'write');
   }
 
-  const pool = getPool();
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
+  return withTransaction(async (client) => {
     if (params.session_id) {
       const lockedSession = await lockActiveSessionForChildWrite(params.session_id, client);
       if (lockedSession.workspace_id !== params.workspace_id) {
@@ -227,7 +225,6 @@ export async function startRun(params: {
       ]
     );
     await touchSession(params.session_id, client);
-    await client.query('COMMIT');
     return {
       ...rows[0],
       checkpoints: [],
@@ -238,12 +235,7 @@ export async function startRun(params: {
         offset: 0,
       },
     };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export async function getRun(
@@ -310,13 +302,10 @@ export async function checkpointRun(params: {
   state?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }): Promise<RunCheckpointMutation | null> {
-  const pool = getPool();
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
+  return withTransaction(async (client, transaction) => {
     const run = await getRunById(client, params.run_id, true);
     if (!run) {
-      await client.query('ROLLBACK');
+      await transaction.rollback();
       return null;
     }
     assertRunIsRunning(run, 'checkpoint');
@@ -354,14 +343,8 @@ export async function checkpointRun(params: {
     );
     if (!runRows[0]) throw new Error(`Run ${params.run_id} is no longer running`);
     await touchSession(run.session_id, client);
-    await client.query('COMMIT');
     return { checkpoint: checkpointRows[0], run: runRows[0] };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export async function finishRun(params: {
@@ -373,13 +356,10 @@ export async function finishRun(params: {
   if (params.outcome !== 'failed' && params.error_message !== undefined) {
     throw new Error('error_message is only valid when outcome is failed');
   }
-  const pool = getPool();
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
+  return withTransaction(async (client, transaction) => {
     const run = await getRunById(client, params.run_id, true);
     if (!run) {
-      await client.query('ROLLBACK');
+      await transaction.rollback();
       return null;
     }
     assertRunIsRunning(run, 'finish');
@@ -406,12 +386,6 @@ export async function finishRun(params: {
       ? await getLatestRunCheckpoint(client, params.run_id)
       : null;
     await touchSession(run.session_id, client);
-    await client.query('COMMIT');
     return { latest_checkpoint: latestCheckpoint, run: rows[0] };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }

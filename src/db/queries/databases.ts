@@ -1,5 +1,6 @@
 import { getPool, type PoolClient } from '../client.js';
 import { isPropertyType, type PropertyType } from '../../domain.js';
+import { withTransaction } from '../transaction.js';
 import {
   lockActivePageForChildWrite,
   requireActivePage,
@@ -248,9 +249,7 @@ export async function createDatabase(params: {
     }
   }
 
-  const client = await getPool().connect();
-  try {
-    await client.query('BEGIN');
+  return withTransaction(async (client) => {
     if (params.parent_page_id) {
       const lockedParent = await lockActivePageForChildWrite(params.parent_page_id, client);
       if (lockedParent.workspace_id !== params.workspace_id) {
@@ -290,14 +289,8 @@ export async function createDatabase(params: {
       createdProperties.push(propertyRows[0]);
     }
 
-    await client.query('COMMIT');
     return { ...database, properties: createdProperties };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export async function getDatabase(
@@ -451,10 +444,7 @@ export async function addDatabaseProperty(
   const options = normalizePropertyOptions(params.property_type, params.options);
   await requireDatabase(databaseId);
 
-  const client = await getPool().connect();
-  let finished = false;
-  try {
-    await client.query('BEGIN');
+  return withTransaction(async (client, transaction) => {
     const { rows: databaseRows } = await client.query<{ id: string; revision: number }>(
       `UPDATE databases
        SET revision = revision + 1, updated_at = NOW()
@@ -463,8 +453,7 @@ export async function addDatabaseProperty(
       [databaseId, params.database_revision]
     );
     if (!databaseRows[0]) {
-      await client.query('ROLLBACK');
-      finished = true;
+      await transaction.rollback();
       await assertDatabaseRevision(databaseId, params.database_revision, client);
       throw new Error(`Database ${databaseId} not found`);
     }
@@ -512,15 +501,8 @@ export async function addDatabaseProperty(
        RETURNING ${PROPERTY_COLUMNS}`,
       [databaseId, name, params.property_type, JSON.stringify(options), position]
     );
-    await client.query('COMMIT');
-    finished = true;
     return { property: rows[0], database_revision: databaseRows[0].revision };
-  } catch (error) {
-    if (!finished) await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 interface LockedProperty {
@@ -599,17 +581,15 @@ export async function updateDatabaseProperty(
     throw new Error('At least one property field is required');
   }
 
-  const client = await getPool().connect();
-  try {
-    await client.query('BEGIN');
+  return withTransaction(async (client, transaction) => {
     const databaseId = await lockParentDatabaseForProperty(client, propertyId);
     if (!databaseId) {
-      await client.query('ROLLBACK');
+      await transaction.rollback();
       return null;
     }
     const property = await lockProperty(client, propertyId);
     if (!property) {
-      await client.query('ROLLBACK');
+      await transaction.rollback();
       return null;
     }
     if (property.database_id !== databaseId) {
@@ -619,7 +599,7 @@ export async function updateDatabaseProperty(
       throw new Error(`Conflict: database property ${propertyId} is at revision ${property.revision}, not ${params.revision}`);
     }
     if (property.archived_at) {
-      await client.query('ROLLBACK');
+      await transaction.rollback();
       return null;
     }
 
@@ -689,16 +669,10 @@ export async function updateDatabaseProperty(
     const databaseRevision = rows[0]
       ? await bumpParentDatabaseRevision(client, property.database_id)
       : null;
-    await client.query('COMMIT');
     return rows[0] && databaseRevision !== null
       ? { property: rows[0], database_revision: databaseRevision }
       : null;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 async function setPropertyArchived(
@@ -707,17 +681,15 @@ async function setPropertyArchived(
   archived: boolean
 ): Promise<DatabasePropertyMutationResult | null> {
   assertRevision(revision);
-  const client = await getPool().connect();
-  try {
-    await client.query('BEGIN');
+  return withTransaction(async (client, transaction) => {
     const databaseId = await lockParentDatabaseForProperty(client, propertyId);
     if (!databaseId) {
-      await client.query('ROLLBACK');
+      await transaction.rollback();
       return null;
     }
     const property = await lockProperty(client, propertyId);
     if (!property) {
-      await client.query('ROLLBACK');
+      await transaction.rollback();
       return null;
     }
     if (property.database_id !== databaseId) {
@@ -766,16 +738,10 @@ async function setPropertyArchived(
     const databaseRevision = rows[0]
       ? await bumpParentDatabaseRevision(client, property.database_id)
       : null;
-    await client.query('COMMIT');
     return rows[0] && databaseRevision !== null
       ? { property: rows[0], database_revision: databaseRevision }
       : null;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export function archiveDatabaseProperty(

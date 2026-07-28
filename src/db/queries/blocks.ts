@@ -1,4 +1,5 @@
 import { getPool, type PoolClient } from '../client.js';
+import { withTransaction } from '../transaction.js';
 import { assertArchiveTransition } from './archiveState.js';
 
 const BLOCK_COLUMNS = `
@@ -102,13 +103,7 @@ export async function appendBlocks(
 ): Promise<Block[]> {
   if (blocks.length === 0) return [];
 
-  const pool = getPool();
-  const client = existingClient ?? await pool.connect();
-  const managesTransaction = !existingClient;
-
-  try {
-    if (managesTransaction) await client.query('BEGIN');
-
+  const append = async (client: PoolClient): Promise<Block[]> => {
     // Every append locks the page first. This serializes position allocation even
     // when appendBlocks is called directly instead of through the page wrapper.
     const pageResult = await client.query<{ id: string }>(
@@ -149,14 +144,10 @@ export async function appendBlocks(
       position += 1;
     }
 
-    if (managesTransaction) await client.query('COMMIT');
     return inserted;
-  } catch (error) {
-    if (managesTransaction) await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    if (managesTransaction) client.release();
-  }
+  };
+
+  return existingClient ? append(existingClient) : withTransaction(append);
 }
 
 export async function updateBlock(
