@@ -9,11 +9,25 @@ Use Node.js 22 or later. Docker is required for launcher-backed local smoke test
 ```bash
 npm ci
 npm run verify
+npm run test:coverage
 npm run build
 npm run test:smoke:local
 ```
 
-`npm run verify` runs linting, type checks, and unit tests. Run the focused test suite that covers a change, then run the full verification gate before opening a pull request. Changes to launcher, installer, runtime configuration, or package contents also need a clean-environment and packed-artifact check.
+`npm run verify` runs linting, type checks, and unit tests. `npm test` and `npm run test:coverage` explicitly exclude `*.integration.test.ts`, so these ordinary local checks stay fast and never require Docker, PostgreSQL, Qdrant, or another external service. Vitest also turns React “not wrapped in act(...)” warnings into test failures without hiding the original warning. Coverage enforces the repository's configured branch, function, line, and statement thresholds. Run the focused test suite that covers a change, then run the full verification and coverage gates before opening a pull request. Changes to launcher, installer, runtime configuration, or package contents also need a clean-environment and packed-artifact check.
+
+### PostgreSQL integration tests
+
+The concurrency, search-generation, and canonical RAG suites require a disposable PostgreSQL database. Point the dedicated integration variable at that database and run the explicit integration command:
+
+```bash
+HORIZONLAYER_INTEGRATION_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/horizonlayer_test' \
+  npm run test:integration:postgres
+```
+
+The database role must be able to create and drop schemas and install the `pgcrypto` and `pg_trgm` extensions. The suites create unique schemas, apply the canonical `schema.sql`, run serially, and remove their schemas afterward. The command fails when `HORIZONLAYER_INTEGRATION_DATABASE_URL` is unset so an integration run cannot silently report only skipped tests. Do not point it at a database whose availability or contents matter.
+
+GitHub Actions runs on Node.js 22 in two jobs. The verification job has no service containers and runs linting, typechecking, unit tests, coverage, and the production build. The integration job starts a fresh PostgreSQL 17 service, sets `HORIZONLAYER_INTEGRATION_DATABASE_URL`, and executes all three PostgreSQL suites. CI does not require Qdrant or the Docker-managed local runtime.
 
 ## Pull requests
 

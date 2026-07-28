@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -357,7 +357,7 @@ describe('DatabaseView', () => {
     await user.click(screen.getByRole('button', { name: 'Next' }));
     expect(await screen.findByLabelText('Name for Gamma')).toBeTruthy();
 
-    resolveFirst(firstResult);
+    await act(async () => resolveFirst(firstResult));
 
     await waitFor(() => expect(updateCount).toBeGreaterThanOrEqual(2));
     const updates = rowMethod.mock.calls.filter(([input]) => input.action === 'update');
@@ -405,7 +405,7 @@ describe('DatabaseView', () => {
     await user.clear(title);
     await user.type(title, 'Beta');
     await user.tab();
-    rejectFirst(conflict);
+    await act(async () => rejectFirst(conflict));
 
     await waitFor(() => expect(context.showToast).toHaveBeenCalledWith(
       'This changed elsewhere. The latest version is loading.',
@@ -474,7 +474,7 @@ describe('DatabaseView', () => {
     view.rerenderView(nextRow.id);
 
     expect(await screen.findByRole('dialog', { name: 'Opening record…' })).toBeTruthy();
-    resolveNext(nextEnvelope);
+    await act(async () => resolveNext(nextEnvelope));
     expect(await screen.findByRole('dialog', { name: 'Beta' })).toBeTruthy();
   });
 });

@@ -142,10 +142,11 @@ From a repository checkout:
 ```bash
 npm ci
 npm run verify
+npm run test:coverage
 npm run build
 npm run test:smoke:local
 ```
 
-`npm run test:smoke:local` provisions an isolated Docker PostgreSQL instance and exercises the launcher-backed MCP and dashboard smoke paths. See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution expectations, [CHANGELOG.md](CHANGELOG.md) for release history, and [SECURITY.md](SECURITY.md) for responsible disclosure.
+The unit and coverage commands do not require Docker or external services. `npm run test:smoke:local` provisions an isolated Docker PostgreSQL instance and exercises the launcher-backed MCP and dashboard smoke paths. See [CONTRIBUTING.md](CONTRIBUTING.md#postgresql-integration-tests) for the PostgreSQL integration command and CI assumptions, [CHANGELOG.md](CHANGELOG.md) for release history, and [SECURITY.md](SECURITY.md) for responsible disclosure.
 
 License: [MIT](LICENSE).

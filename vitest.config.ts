@@ -1,7 +1,11 @@
+import { availableParallelism } from 'node:os';
 import { defineConfig } from 'vitest/config';
+
+const maxWorkers = Math.max(1, Math.min(4, availableParallelism() - 1));
 
 export default defineConfig({
   test: {
+    clearMocks: true,
     coverage: {
       exclude: [
         'dist/**',
@@ -40,5 +44,13 @@ export default defineConfig({
       'src/**/*.test.ts',
       'scripts/**/*.test.mjs',
     ],
+    isolate: true,
+    // jsdom-heavy dashboard files become slower, rather than faster, when the
+    // default worker count saturates the host. Keep enough concurrency for a
+    // fast local suite without making per-test timeouts depend on CPU load.
+    maxWorkers,
+    setupFiles: ['./vitest.setup.ts'],
+    unstubEnvs: true,
+    unstubGlobals: true,
   },
 });

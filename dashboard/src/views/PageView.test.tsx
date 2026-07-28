@@ -164,6 +164,10 @@ describe('PageView', () => {
     unmount();
 
     expect(laterSignal?.aborted).toBe(true);
+    await act(async () => {
+      laterPage.reject(new DOMException('The request was aborted', 'AbortError'));
+      await laterPage.promise.catch(() => undefined);
+    });
   });
 
   it('serializes title edits and gives the queued write the returned page revision', async () => {

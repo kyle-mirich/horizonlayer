@@ -110,8 +110,9 @@ describe('PageView behavior', () => {
     await user.click(screen.getByRole('button', { name: 'Details' }));
     const details = screen.getByRole('region', { name: 'Page details' });
     const tags = within(details).getByRole('textbox', { name: /^Tags/ });
-    await user.clear(tags);
-    await user.type(tags, Array.from({ length: 51 }, (_, index) => `tag${index}`).join(','));
+    fireEvent.change(tags, {
+      target: { value: Array.from({ length: 51 }, (_, index) => `tag${index}`).join(',') },
+    });
     await user.click(within(details).getByRole('button', { name: 'Save details' }));
     expect(showToast).toHaveBeenCalledWith('Use at most 50 tags, each no longer than 100 characters', { tone: 'error' });
     await user.clear(tags);

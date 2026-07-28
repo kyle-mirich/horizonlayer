@@ -208,19 +208,27 @@ function makeApi(options: ApiOptions = {}) {
 }
 
 async function waitForWorkspace(id: string) {
-  await waitFor(() => expect(screen.getByTestId('content-workspace').textContent).toContain(id));
+  await waitFor(() => {
+    expect(screen.getByTestId('content-workspace').textContent).toContain(id);
+    expect(screen.getByTestId('sidebar').getAttribute('data-loading')).toBe('false');
+  });
 }
 
 beforeEach(() => {
   window.history.replaceState(null, '', '/');
   window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 afterEach(() => {
   cleanup();
-  vi.useRealTimers();
+  if (vi.isFakeTimers()) {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
   window.history.replaceState(null, '', '/');
   window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 describe('App orchestration', () => {
@@ -267,7 +275,7 @@ describe('App orchestration', () => {
   it('renders startup progress, retries failures, and describes non-Error startup failures safely', async () => {
     const pending = deferred<DashboardStatus>();
     const { api, statusMock, workspaceMock } = makeApi({ status: () => pending.promise });
-    render(<App api={api} />);
+    const firstView = render(<App api={api} />);
     expect(screen.getByRole('main', { name: 'Loading HorizonLayer' })).toBeTruthy();
     await act(async () => pending.reject(new Error('PostgreSQL unavailable')));
     expect(await screen.findByText('PostgreSQL unavailable')).toBeTruthy();
@@ -277,7 +285,7 @@ describe('App orchestration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitForWorkspace('workspace-1');
 
-    cleanup();
+    firstView.unmount();
     const nonError = makeApi({ status: async () => Promise.reject('bad startup') });
     render(<App api={nonError.api} />);
     expect(await screen.findByText('The local dashboard could not start.')).toBeTruthy();
@@ -460,7 +468,7 @@ describe('App orchestration', () => {
     expect(await screen.findByText('database object failure')).toBeTruthy();
   });
 
-  it('retries failed workspace indexes, ignores stale index responses, and controls dialogs and navigation', async () => {
+  it('retries failed workspace indexes and ignores stale index responses', async () => {
     const first = workspace('workspace-1', 'First');
     const second = workspace('workspace-2', 'Second');
     const firstPages = deferred<ReturnType<typeof success>>();
@@ -491,6 +499,15 @@ describe('App orchestration', () => {
     await act(async () => firstPages.resolve(success('list', { items: [page('stale-page', first.id)], page: pageInfo })));
     expect(screen.getByTestId('content-pages').textContent).toBe('second-page');
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('controls the drawer, navigation, status, and search entry points', async () => {
+    const { api } = makeApi({
+      databases: [database('existing-database', 'workspace-1')],
+      pages: [page('existing-page', 'workspace-1')],
+    });
+    render(<App api={api} />);
+    await waitForWorkspace('workspace-1');
 
     fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
     expect(screen.getByTestId('sidebar').getAttribute('data-drawer')).toBe('true');
@@ -574,8 +591,9 @@ describe('App orchestration', () => {
     fireEvent.click(skip);
 
     vi.useFakeTimers();
-    fireEvent.click(screen.getByRole('button', { name: 'sidebar create page' }));
-    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'sidebar create page' }));
+    });
     expect(screen.getByRole('alert').textContent).toContain('A new page could not be created.');
     await act(async () => vi.advanceTimersByTimeAsync(4_600));
     expect(screen.queryByRole('alert')).toBeNull();

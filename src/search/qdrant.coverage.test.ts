@@ -1,4 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const qdrantClientConstructor = vi.hoisted(() => vi.fn());
+
+vi.mock('@qdrant/js-client-rest', () => ({
+  QdrantClient: qdrantClientConstructor,
+}));
 
 import { getVectorStore, QdrantVectorStore, resetVectorStore } from './qdrant.js';
 
@@ -19,6 +25,15 @@ function client() {
     versionInfo: vi.fn().mockResolvedValue({ version: '1.18.2' }),
   };
 }
+
+beforeEach(() => {
+  resetVectorStore();
+  qdrantClientConstructor.mockImplementation(function QdrantClientMock() {
+    return client();
+  });
+});
+
+afterEach(() => resetVectorStore());
 
 describe('QdrantVectorStore coverage cases', () => {
   it('treats a missing derived collection as an empty index for reads and cleanup', async () => {
@@ -112,11 +127,11 @@ describe('QdrantVectorStore coverage cases', () => {
   });
 
   it('provides a resettable process singleton without connecting on access', () => {
-    resetVectorStore();
     const first = getVectorStore();
     expect(getVectorStore()).toBe(first);
+    expect(qdrantClientConstructor).toHaveBeenCalledTimes(1);
     resetVectorStore();
     expect(getVectorStore()).not.toBe(first);
-    resetVectorStore();
+    expect(qdrantClientConstructor).toHaveBeenCalledTimes(2);
   });
 });

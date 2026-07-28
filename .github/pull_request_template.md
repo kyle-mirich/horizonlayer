@@ -6,6 +6,9 @@
 ## Validation
 
 - [ ] `npm run verify`
+- [ ] `npm run test:coverage`
+- [ ] `npm run build`
+- [ ] `npm run test:integration:postgres` (if PostgreSQL behavior changed)
 - [ ] `make smoke-local` (if startup, transport, schema, or cross-tool behavior changed)
 
 ## Notes
