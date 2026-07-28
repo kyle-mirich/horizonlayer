@@ -57,7 +57,7 @@ describe('database initializer', () => {
     expect(mocks.release).toHaveBeenCalledTimes(1);
   });
 
-  it('releases the client when schema.sql cannot be loaded', async () => {
+  it('does not check out a client when schema.sql cannot be loaded', async () => {
     const readError = new Error('schema missing');
     mocks.readFileSync.mockImplementation(() => {
       throw readError;
@@ -67,6 +67,7 @@ describe('database initializer', () => {
     await expect(initializeDatabase()).rejects.toBe(readError);
 
     expect(mocks.clientQuery).not.toHaveBeenCalled();
-    expect(mocks.release).toHaveBeenCalledTimes(1);
+    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(mocks.release).not.toHaveBeenCalled();
   });
 });

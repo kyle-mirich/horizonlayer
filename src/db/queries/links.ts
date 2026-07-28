@@ -1,5 +1,6 @@
 import { getPool, type PoolClient } from '../client.js';
 import { isLinkItemType, type LinkItemType } from '../../domain.js';
+import { withTransaction } from '../transaction.js';
 import {
   lockActiveLinkedItemsForWrite,
   requireActiveWorkspace,
@@ -89,11 +90,7 @@ export async function createLink(params: {
   if (!linkType) throw new Error('link_type cannot be empty');
 
   await requireActiveWorkspace(params.workspace_id);
-  const client = await getPool().connect();
-  let transactionOpen = false;
-  try {
-    await client.query('BEGIN');
-    transactionOpen = true;
+  return withTransaction(async (client) => {
     await lockLinkEndpoints(client, params.workspace_id, [
       { id: params.from_id, type: fromType },
       { id: params.to_id, type: toType },
@@ -105,15 +102,8 @@ export async function createLink(params: {
        RETURNING ${LINK_COLUMNS}`,
       [params.workspace_id, fromType, params.from_id, toType, params.to_id, linkType]
     );
-    await client.query('COMMIT');
-    transactionOpen = false;
     return rows[0];
-  } catch (error) {
-    if (transactionOpen) await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export async function listLinks(params: {
@@ -218,11 +208,7 @@ export function restoreLink(
 }
 
 async function restoreArchivedLink(id: string, revision: number): Promise<Link | null> {
-  const client = await getPool().connect();
-  let transactionOpen = false;
-  try {
-    await client.query('BEGIN');
-    transactionOpen = true;
+  return withTransaction(async (client, transaction) => {
     const { rows: lockedRows } = await client.query<Link>(
       `SELECT ${LINK_COLUMNS}
        FROM links
@@ -232,8 +218,7 @@ async function restoreArchivedLink(id: string, revision: number): Promise<Link |
     );
     const link = lockedRows[0];
     if (!link) {
-      await client.query('ROLLBACK');
-      transactionOpen = false;
+      await transaction.rollback();
       return null;
     }
     assertArchiveTransition('link', id, revision, false, link);
@@ -251,13 +236,6 @@ async function restoreArchivedLink(id: string, revision: number): Promise<Link |
        RETURNING ${LINK_COLUMNS}`,
       [id, revision]
     );
-    await client.query('COMMIT');
-    transactionOpen = false;
     return rows[0] ?? null;
-  } catch (error) {
-    if (transactionOpen) await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }

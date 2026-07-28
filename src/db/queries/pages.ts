@@ -1,4 +1,5 @@
 import { getPool, type PoolClient } from '../client.js';
+import { withTransaction } from '../transaction.js';
 import {
   appendBlocks,
   archiveBlock as archiveStoredBlock,
@@ -184,13 +185,7 @@ export async function createPage(params: {
     throw new Error('workspace_id is required for page creation');
   }
 
-  const pool = getPool();
-  const client = await pool.connect();
-  let transactionOpen = false;
-  try {
-    await client.query('BEGIN');
-    transactionOpen = true;
-
+  return withTransaction(async (client) => {
     if (params.parent_page_id) {
       const lockedParent = await lockActivePageForChildWrite(params.parent_page_id, client);
       if (lockedParent.workspace_id !== workspaceId) {
@@ -233,15 +228,8 @@ export async function createPage(params: {
       : [];
     await touchSession(page.session_id, client);
 
-    await client.query('COMMIT');
-    transactionOpen = false;
     return { ...page, blocks };
-  } catch (error) {
-    if (transactionOpen) await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export async function getPage(
@@ -364,12 +352,7 @@ export async function appendPageBlocks(
   }
 
   // All validation above intentionally happens before client checkout.
-  const client = await pool.connect();
-  let transactionOpen = false;
-  try {
-    await client.query('BEGIN');
-    transactionOpen = true;
-
+  return withTransaction(async (client) => {
     const touchResult = await client.query<{ revision: number }>(
       `UPDATE pages
        SET revision = revision + 1,
@@ -387,18 +370,11 @@ export async function appendPageBlocks(
 
     const inserted = await appendBlocks(pageId, blocks, client);
     await touchSession(page.session_id, client);
-    await client.query('COMMIT');
-    transactionOpen = false;
     return {
       blocks: inserted,
       page_revision: touchResult.rows[0].revision,
     };
-  } catch (error) {
-    if (transactionOpen) await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export async function listPages(params: {
@@ -493,13 +469,7 @@ async function mutatePageBlock(
   const context = await getBlockMutationContext(blockId);
   if (!context) return null;
 
-  const pool = getPool();
-  const client = await pool.connect();
-  let transactionOpen = false;
-  try {
-    await client.query('BEGIN');
-    transactionOpen = true;
-
+  return withTransaction(async (client, transaction) => {
     const pageResult = await client.query<{ revision: number }>(
       `UPDATE pages
        SET revision = revision + 1,
@@ -510,31 +480,22 @@ async function mutatePageBlock(
       [context.page_id]
     );
     if (!pageResult.rows[0]) {
-      await client.query('ROLLBACK');
-      transactionOpen = false;
+      await transaction.rollback();
       return null;
     }
 
     const block = await mutation(client);
     if (!block) {
-      await client.query('ROLLBACK');
-      transactionOpen = false;
+      await transaction.rollback();
       return null;
     }
 
     await touchSession(context.session_id, client);
-    await client.query('COMMIT');
-    transactionOpen = false;
     return {
       block,
       page_revision: pageResult.rows[0].revision,
     };
-  } catch (error) {
-    if (transactionOpen) await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export async function updatePageBlock(

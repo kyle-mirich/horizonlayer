@@ -1,5 +1,6 @@
 import { getPool, type PoolClient } from '../client.js';
 import { isPropertyType, type PropertyType } from '../../domain.js';
+import { withTransaction } from '../transaction.js';
 import { assertArchiveTransition } from './archiveState.js';
 import { normalizePropertyOptions, type DatabaseProperty } from './databases.js';
 import { requireActiveWorkspace } from './scopeGuards.js';
@@ -418,9 +419,7 @@ export async function createRow(params: {
   importance?: number;
 }): Promise<HydratedRow> {
   assertImportance(params.importance);
-  const client = await getPool().connect();
-  try {
-    await client.query('BEGIN');
+  return withTransaction(async (client) => {
     const database = await loadDatabaseSchema(params.database_id, false, client, true);
     if (!database) throw new Error(`Database ${params.database_id} not found`);
     await requireActiveWorkspace(database.workspace_id, client);
@@ -434,14 +433,8 @@ export async function createRow(params: {
     );
     await writeRowValues(client, rows[0].id, params.values, database.properties);
     const hydrated = (await hydrateRows(rows, database.properties, client))[0];
-    await client.query('COMMIT');
     return hydrated;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export async function getRow(
@@ -686,21 +679,19 @@ export async function updateRow(
     throw new Error('At least one row field is required');
   }
 
-  const client = await getPool().connect();
-  try {
-    await client.query('BEGIN');
+  return withTransaction(async (client, transaction) => {
     const { rows: identityRows } = await client.query<{ database_id: string }>(
       'SELECT database_id FROM database_rows WHERE id = $1',
       [id]
     );
     const identity = identityRows[0];
     if (!identity) {
-      await client.query('ROLLBACK');
+      await transaction.rollback();
       return null;
     }
     const database = await loadDatabaseSchema(identity.database_id, false, client, true);
     if (!database) {
-      await client.query('ROLLBACK');
+      await transaction.rollback();
       return null;
     }
     await requireActiveWorkspace(database.workspace_id, client);
@@ -716,7 +707,7 @@ export async function updateRow(
     );
     const selected = selectedRows[0];
     if (!selected) {
-      await client.query('ROLLBACK');
+      await transaction.rollback();
       return null;
     }
     const { workspace_id: workspaceId, ...currentRow } = selected;
@@ -753,14 +744,8 @@ export async function updateRow(
       await writeRowValues(client, id, params.values, properties);
     }
     const hydrated = rows[0] ? (await hydrateRows(rows, properties, client))[0] : null;
-    await client.query('COMMIT');
     return hydrated;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 async function setRowArchived(
@@ -769,20 +754,14 @@ async function setRowArchived(
   archived: boolean
 ): Promise<HydratedRow | null> {
   assertRevision(revision);
-  const client = await getPool().connect();
-  let transactionOpen = false;
-  try {
-    await client.query('BEGIN');
-    transactionOpen = true;
-
+  return withTransaction(async (client, transaction) => {
     const { rows: identityRows } = await client.query<{ database_id: string }>(
       'SELECT database_id FROM database_rows WHERE id = $1',
       [id]
     );
     const identity = identityRows[0];
     if (!identity) {
-      await client.query('ROLLBACK');
-      transactionOpen = false;
+      await transaction.rollback();
       return null;
     }
 
@@ -790,8 +769,7 @@ async function setRowArchived(
     // workspace trigger. Database archive therefore cannot overtake this write.
     const database = await loadDatabaseSchema(identity.database_id, false, client, true);
     if (!database) {
-      await client.query('ROLLBACK');
-      transactionOpen = false;
+      await transaction.rollback();
       return null;
     }
     await requireActiveWorkspace(database.workspace_id, client);
@@ -811,15 +789,8 @@ async function setRowArchived(
       ? (await hydrateRows(rows, database.properties, client))[0]
       : null;
 
-    await client.query('COMMIT');
-    transactionOpen = false;
     return hydrated;
-  } catch (error) {
-    if (transactionOpen) await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export function archiveRow(
