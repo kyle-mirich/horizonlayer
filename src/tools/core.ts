@@ -1,4 +1,4 @@
-import type { AppServer } from '../mcp.js';
+import type { AppServer, AppToolDefinition } from '../mcp.js';
 import {
   archiveWorkspace,
   createWorkspace,
@@ -64,15 +64,8 @@ import {
   startRun,
 } from '../db/queries/runs.js';
 import {
-  DatabaseSchema,
-  CORE_TOOL_OUTPUT_SCHEMAS,
-  LinkSchema,
-  PageSchema,
-  RowSchema,
-  RunSchema,
-  SearchSchema,
-  SessionSchema,
-  WorkspaceSchema,
+  CORE_TOOL_SCHEMAS,
+  type CoreToolName,
 } from './schemas.js';
 import { errorEnvelopeFromUnknown, successEnvelope } from './common.js';
 import { formatRagSearch, formatRecordSearch } from './searchFormat.js';
@@ -98,12 +91,29 @@ function queryLimit(limit?: number): number {
   return (limit ?? DEFAULT_LIMIT) + 1;
 }
 
-export function registerCoreTools(server: AppServer): void {
-  server.addTool({
-    name: 'workspace',
-    description: 'Discover and manage durable workspace scopes. Call list before create to reuse existing knowledge.',
-    parameters: WorkspaceSchema,
-    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.workspace,
+type CoreToolParameters<Name extends CoreToolName> =
+  (typeof CORE_TOOL_SCHEMAS)[Name]['parameters'];
+
+function coreTool<Name extends CoreToolName>(
+  name: Name,
+  definition: Omit<
+    AppToolDefinition<CoreToolParameters<Name>>,
+    'annotations' | 'description' | 'name' | 'outputSchema' | 'parameters'
+  >
+): AppToolDefinition<CoreToolParameters<Name>> {
+  const contract = CORE_TOOL_SCHEMAS[name];
+  return {
+    ...definition,
+    ...contract,
+    name,
+    parameters: contract.parameters as CoreToolParameters<Name>,
+  };
+}
+
+/** The canonical catalog joining each agent-visible tool to its handler. */
+export function coreToolDefinitions() {
+  return [
+  coreTool('workspace', {
     execute: async (params) => {
       const action = params.action;
       try {
@@ -141,13 +151,9 @@ export function registerCoreTools(server: AppServer): void {
         return errorEnvelopeFromUnknown(action, error);
       }
     },
-  });
+  }),
 
-  server.addTool({
-    name: 'session',
-    description: 'Start, list, resume, and close agent work sessions inside an existing workspace.',
-    parameters: SessionSchema,
-    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.session,
+  coreTool('session', {
     execute: async (params) => {
       const action = params.action;
       try {
@@ -173,13 +179,9 @@ export function registerCoreTools(server: AppServer): void {
         return errorEnvelopeFromUnknown(action, error);
       }
     },
-  });
+  }),
 
-  server.addTool({
-    name: 'page',
-    description: 'Store and edit unstructured knowledge as nested pages and ordered text blocks.',
-    parameters: PageSchema,
-    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.page,
+  coreTool('page', {
     execute: async (params) => {
       const action = params.action;
       try {
@@ -254,13 +256,9 @@ export function registerCoreTools(server: AppServer): void {
         return errorEnvelopeFromUnknown(action, error);
       }
     },
-  });
+  }),
 
-  server.addTool({
-    name: 'database',
-    description: 'Manage structured database schemas and typed properties. Row data is handled by the row tool.',
-    parameters: DatabaseSchema,
-    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.database,
+  coreTool('database', {
     execute: async (params) => {
       const action = params.action;
       try {
@@ -325,13 +323,9 @@ export function registerCoreTools(server: AppServer): void {
         return errorEnvelopeFromUnknown(action, error);
       }
     },
-  });
+  }),
 
-  server.addTool({
-    name: 'row',
-    description: 'Create, query, update, archive, and restore typed rows. Row value keys, filter properties, and sort_by are exact database property names.',
-    parameters: RowSchema,
-    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.row,
+  coreTool('row', {
     execute: async (params) => {
       const action = params.action;
       try {
@@ -375,13 +369,9 @@ export function registerCoreTools(server: AppServer): void {
         return errorEnvelopeFromUnknown(action, error);
       }
     },
-  });
+  }),
 
-  server.addTool({
-    name: 'link',
-    description: 'Create and inspect explicit same-workspace relationships between pages, databases, rows, blocks, and workspaces.',
-    parameters: LinkSchema,
-    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.link,
+  coreTool('link', {
     execute: async (params) => {
       const action = params.action;
       try {
@@ -407,14 +397,9 @@ export function registerCoreTools(server: AppServer): void {
         return errorEnvelopeFromUnknown(action, error);
       }
     },
-  });
+  }),
 
-  server.addTool({
-    name: 'search',
-    description: 'Find actionable page/row records or semantic evidence. Compact by default; RAG chunks cite sources[index].',
-    annotations: { readOnlyHint: true, idempotentHint: true },
-    parameters: SearchSchema,
-    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.search,
+  coreTool('search', {
     execute: async (params) => {
       const action = 'search';
       try {
@@ -451,13 +436,9 @@ export function registerCoreTools(server: AppServer): void {
         return errorEnvelopeFromUnknown(action, error);
       }
     },
-  });
+  }),
 
-  server.addTool({
-    name: 'run',
-    description: 'Optional execution journal for one agent attempt: start, inspect, checkpoint resumable state, and finish. Not a task queue.',
-    parameters: RunSchema,
-    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.run,
+  coreTool('run', {
     execute: async (params) => {
       const action = params.action;
       try {
@@ -491,5 +472,14 @@ export function registerCoreTools(server: AppServer): void {
         return errorEnvelopeFromUnknown(action, error);
       }
     },
-  });
+  }),
+  ] as const;
+}
+
+export function registerCoreTools(server: AppServer): void {
+  for (const tool of coreToolDefinitions()) {
+    // The catalog preserves each schema/handler pairing, but TypeScript loses
+    // that correlation when iterating a heterogeneous tuple.
+    server.addTool(tool as never);
+  }
 }
