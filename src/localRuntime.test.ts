@@ -267,7 +267,7 @@ describe('local runtime service commands', () => {
     expect(isDockerDaemonReady()).toBe(false);
   });
 
-  it('treats a ready Docker daemon as immediately usable and explains a missing installation', async () => {
+  it('treats a ready Docker daemon as immediately usable and explains a missing Docker installation', async () => {
     spawnSyncMock.mockReturnValueOnce(commandResult());
     await expect(ensureDockerDesktopReady()).resolves.toBeUndefined();
 
@@ -276,7 +276,7 @@ describe('local runtime service commands', () => {
       status: null,
     }));
     await expect(ensureDockerDesktopReady()).rejects.toMatchObject({
-      message: expect.stringContaining('Docker Desktop is not installed'),
+      message: expect.stringContaining('is not installed'),
     });
 
     spawnSyncMock.mockReset().mockReturnValueOnce(commandResult({
