@@ -1108,3 +1108,49 @@ export const CORE_TOOL_OUTPUT_SCHEMAS = {
     finish: RunFinishMutationOutput,
   }),
 } as const;
+
+export const CORE_TOOL_SCHEMAS = {
+  workspace: {
+    description: 'Discover and manage durable workspace scopes. Call list before create to reuse existing knowledge.',
+    parameters: WorkspaceSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.workspace,
+  },
+  session: {
+    description: 'Start, list, resume, and close agent work sessions inside an existing workspace.',
+    parameters: SessionSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.session,
+  },
+  page: {
+    description: 'Store and edit unstructured knowledge as nested pages and ordered text blocks.',
+    parameters: PageSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.page,
+  },
+  database: {
+    description: 'Manage structured database schemas and typed properties. Row data is handled by the row tool.',
+    parameters: DatabaseSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.database,
+  },
+  row: {
+    description: 'Create, query, update, archive, and restore typed rows. Row value keys, filter properties, and sort_by are exact database property names.',
+    parameters: RowSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.row,
+  },
+  link: {
+    description: 'Create and inspect explicit same-workspace relationships between pages, databases, rows, blocks, and workspaces.',
+    parameters: LinkSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.link,
+  },
+  search: {
+    annotations: { idempotentHint: true, readOnlyHint: true },
+    description: 'Find actionable page/row records or semantic evidence. Compact by default; RAG chunks cite sources[index].',
+    parameters: SearchSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.search,
+  },
+  run: {
+    description: 'Optional execution journal for one agent attempt: start, inspect, checkpoint resumable state, and finish. Not a task queue.',
+    parameters: RunSchema,
+    outputSchema: CORE_TOOL_OUTPUT_SCHEMAS.run,
+  },
+} as const;
+
+export type CoreToolName = keyof typeof CORE_TOOL_SCHEMAS;

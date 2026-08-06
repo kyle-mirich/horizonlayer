@@ -45,6 +45,12 @@ describe('AppServer official SDK adapter', () => {
         'search',
         'run',
       ]);
+      expect(listed.tools.every((tool) => typeof tool.description === 'string' && tool.description.length > 0))
+        .toBe(true);
+      expect(listed.tools.find((tool) => tool.name === 'search')?.annotations).toMatchObject({
+        idempotentHint: true,
+        readOnlyHint: true,
+      });
       expect(listed.tools.every((tool) => tool.inputSchema.type === 'object')).toBe(true);
       expect(listed.tools.every((tool) => tool.outputSchema?.type === 'object')).toBe(true);
       expect(listed.tools.every((tool) => tool.outputSchema?.additionalProperties === false)).toBe(true);
