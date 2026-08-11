@@ -289,20 +289,16 @@ describe('local runtime service commands', () => {
   });
 
   it('starts Docker Desktop when available and reports launch or readiness failures', async () => {
-    const launch = dockerDesktopLaunchCommand();
-    if (!launch) {
-      spawnSyncMock.mockReturnValueOnce(commandResult({ status: 1, stderr: 'daemon unavailable' }));
-      await expect(ensureDockerDesktopReady()).rejects.toMatchObject({
-        message: expect.stringContaining('daemon is unavailable'),
-      });
-      return;
-    }
+    spawnSyncMock.mockReturnValueOnce(commandResult({ status: 1, stderr: 'daemon unavailable' }));
+    await expect(ensureDockerDesktopReady(120_000, 'linux')).rejects.toMatchObject({
+      message: expect.stringContaining('daemon is unavailable'),
+    });
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    spawnSyncMock
+    spawnSyncMock.mockReset()
       .mockReturnValueOnce(commandResult({ status: 1, stderr: 'daemon unavailable' }))
       .mockReturnValueOnce(commandResult({ status: 1, stderr: 'launch failed' }));
-    await expect(ensureDockerDesktopReady()).rejects.toMatchObject({
+    await expect(ensureDockerDesktopReady(120_000, 'darwin')).rejects.toMatchObject({
       message: expect.stringContaining('could not be opened automatically'),
       details: 'launch failed',
     });
@@ -311,21 +307,18 @@ describe('local runtime service commands', () => {
       .mockReset()
       .mockReturnValueOnce(commandResult({ status: 1 }))
       .mockReturnValueOnce(commandResult());
-    await expect(ensureDockerDesktopReady(0)).rejects.toThrow('did not become ready in time');
+    await expect(ensureDockerDesktopReady(0, 'darwin')).rejects.toThrow('did not become ready in time');
     expect(consoleErrorSpy).toHaveBeenCalledWith('Starting Docker Desktop...');
   });
 
   it('waits for Docker Desktop to become ready after launching it', async () => {
-    const launch = dockerDesktopLaunchCommand();
-    if (!launch) return;
-
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     spawnSyncMock
       .mockReturnValueOnce(commandResult({ status: 1 }))
       .mockReturnValueOnce(commandResult())
       .mockReturnValueOnce(commandResult());
     vi.useFakeTimers();
-    const ready = ensureDockerDesktopReady(2_000);
+    const ready = ensureDockerDesktopReady(2_000, 'darwin');
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(ready).resolves.toBeUndefined();
     expect(consoleErrorSpy).toHaveBeenCalledWith('Starting Docker Desktop...');
