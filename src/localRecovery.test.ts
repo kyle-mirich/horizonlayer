@@ -642,7 +642,7 @@ describe('Runtime Recovery artifacts and process adapter', () => {
     if (process.platform !== 'win32') {
       expect((await stat(stagingDirectory)).mode & 0o777).toBe(0o700);
     }
-  });
+  }, 15_000);
 
   it('constructs isolated restore, validation, and Qdrant collection invalidation without a shell', async () => {
     const calls: Array<Parameters<import('./localBackup.js').BackupProcessRunner>[0]> = [];

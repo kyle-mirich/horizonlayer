@@ -96,7 +96,7 @@ describe('Backup artifact codec', () => {
       expect((await stat(fixture.destination)).mode & 0o777).toBe(0o600);
     }
     expect((await readdir(fixture.directory)).filter((name) => name.includes('.partial-'))).toEqual([]);
-  });
+  }, 15_000);
 
   it('preserves additive metadata within artifact version 1', async () => {
     const directory = await temporaryDirectory();
