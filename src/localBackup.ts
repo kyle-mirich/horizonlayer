@@ -19,7 +19,6 @@ import {
   hasExplicitRuntimeOverride,
   localRuntimeConfigPath,
   readLocalRuntimeConfig,
-  runCompose,
   runtimeEnvironment,
   withLocalRuntimeLifecycleLock,
   type LocalRuntimeConfig,
@@ -67,13 +66,16 @@ export interface ManagedBackupDependencies {
   now: () => Date;
   randomId: () => string;
   readConfig: typeof readLocalRuntimeConfig;
-  startRuntime: (config: LocalRuntimeConfig) => Promise<void>;
+  startDatabase: (
+    config: LocalRuntimeConfig,
+    environment: NodeJS.ProcessEnv
+  ) => Promise<void>;
   validateDatabaseDump: (
     config: LocalRuntimeConfig,
     path: string,
     environment: NodeJS.ProcessEnv
   ) => Promise<void>;
-  waitForServices: (config: LocalRuntimeConfig) => Promise<void>;
+  waitForDatabase: (config: LocalRuntimeConfig) => Promise<void>;
   withInterruptionGuard: <T>(
     operation: (checkInterruption: () => void) => Promise<T>
   ) => Promise<T>;
@@ -197,6 +199,19 @@ function composeExecArgs(config: LocalRuntimeConfig, command: string[]): string[
   ];
 }
 
+function composeStartDatabaseArgs(config: LocalRuntimeConfig): string[] {
+  return [
+    'compose',
+    '-f',
+    bundledComposePath(),
+    '-p',
+    config.compose_project,
+    'up',
+    '-d',
+    'db',
+  ];
+}
+
 export interface ProcessResult {
   stderr: string;
   stdout: string;
@@ -268,6 +283,19 @@ async function runProcess(params: Parameters<BackupProcessRunner>[0]): Promise<P
     );
   }
   return { stderr, stdout };
+}
+
+async function startDatabase(
+  config: LocalRuntimeConfig,
+  environment: NodeJS.ProcessEnv,
+  runner: BackupProcessRunner = runProcess
+): Promise<void> {
+  await runner({
+    args: composeStartDatabaseArgs(config),
+    command: 'docker',
+    environment: { ...process.env, ...environment, ...runtimeEnvironment(config) },
+    stdout: 'ignore',
+  });
 }
 
 async function pipelineToFile(stream: NodeJS.ReadableStream, path: string): Promise<void> {
@@ -434,7 +462,24 @@ async function waitForServices(
     await wait(1_000);
   }
   throw new LocalBackupError(
-    'Managed PostgreSQL and Qdrant did not become ready for Backup. Run `horizonlayer doctor`.'
+    'Managed PostgreSQL and Qdrant did not become ready. Run `horizonlayer doctor`.'
+  );
+}
+
+async function waitForDatabase(
+  config: LocalRuntimeConfig,
+  timeoutMs = 90_000,
+  probe: (config: LocalRuntimeConfig) => Promise<boolean> = canConnect,
+  clock: () => number = Date.now,
+  wait: (milliseconds: number) => Promise<unknown> = sleep
+): Promise<void> {
+  const deadline = clock() + timeoutMs;
+  while (clock() < deadline) {
+    if (await probe(config)) return;
+    await wait(1_000);
+  }
+  throw new LocalBackupError(
+    'Managed PostgreSQL did not become ready for Backup. Run `horizonlayer doctor`.'
   );
 }
 
@@ -447,9 +492,9 @@ const defaultDependencies: ManagedBackupDependencies = {
   now: () => new Date(),
   randomId: randomUUID,
   readConfig: readLocalRuntimeConfig,
-  startRuntime: async (config) => runCompose('start', config),
+  startDatabase,
   validateDatabaseDump,
-  waitForServices,
+  waitForDatabase,
   withInterruptionGuard,
   withLifecycleLock: withLocalRuntimeLifecycleLock,
 };
@@ -492,9 +537,9 @@ export async function createManagedRuntimeBackup(
         checkInterruption();
         await dependencies.ensureDocker();
         checkInterruption();
-        await dependencies.startRuntime(config);
+        await dependencies.startDatabase(config, environment);
         checkInterruption();
-        await dependencies.waitForServices(config);
+        await dependencies.waitForDatabase(config);
         checkInterruption();
         const postgresql = await dependencies.inspectPostgreSql(config, environment);
         checkInterruption();
@@ -561,13 +606,16 @@ export const localBackupInternals = {
   canConnect,
   collect,
   composeExecArgs,
+  composeStartDatabaseArgs,
   dumpDatabase,
   inspectPostgreSql,
   isQdrantReady,
   prepareDestination,
   resolveDestination,
   runProcess,
+  startDatabase,
   validateDatabaseDump,
+  waitForDatabase,
   waitForServices,
   withInterruptionGuard,
 };

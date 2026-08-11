@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   BACKUP_MAGIC,
+  backupArtifactInternals,
   createBackupArtifact,
   createBackupPayloadStream,
   inspectBackupArtifact,
@@ -75,6 +76,29 @@ afterEach(async () => {
 });
 
 describe('Backup artifact codec', () => {
+  it('retries short positional reads and rejects only an actual early EOF', async () => {
+    const source = Buffer.from('portable backup header');
+    const positions: number[] = [];
+    const shortReader = {
+      read: async (buffer: Buffer, offset: number, length: number, position: number) => {
+        positions.push(position);
+        const bytesRead = Math.min(3, length, source.length - position);
+        if (bytesRead > 0) source.copy(buffer, offset, position, position + bytesRead);
+        return { buffer, bytesRead };
+      },
+    } as unknown as Parameters<typeof backupArtifactInternals.readExactly>[0];
+
+    await expect(backupArtifactInternals.readExactly(shortReader, source.length, 0))
+      .resolves.toEqual(source);
+    expect(positions).toEqual([0, 3, 6, 9, 12, 15, 18, 21]);
+
+    const truncatedReader = {
+      read: async (buffer: Buffer) => ({ buffer, bytesRead: 0 }),
+    } as unknown as Parameters<typeof backupArtifactInternals.readExactly>[0];
+    await expect(backupArtifactInternals.readExactly(truncatedReader, 1, 0))
+      .rejects.toThrow('truncated');
+  });
+
   it('round-trips a multi-chunk binary payload with private atomic publication', async () => {
     const fixture = await artifactFixture();
     const inspected = await inspectBackupArtifact(fixture.destination);

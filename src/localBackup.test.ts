@@ -71,13 +71,13 @@ function dependencies(
       order.push('config');
       return config;
     },
-    startRuntime: async () => {
+    startDatabase: async () => {
       order.push('start');
     },
     validateDatabaseDump: async () => {
       order.push('validate-dump');
     },
-    waitForServices: async () => {
+    waitForDatabase: async () => {
       order.push('wait');
     },
     withInterruptionGuard: async (operation) => operation(() => undefined),
@@ -274,7 +274,30 @@ describe('managed runtime Backup', () => {
     expect(await readdir(directory)).toEqual([]);
   });
 
-  it('builds Compose exec arguments without a shell or manifest-provided target', () => {
+  it('starts only PostgreSQL and builds Compose exec arguments without a shell', async () => {
+    const startArgs = [
+      'compose',
+      '-f',
+      expect.stringContaining('docker-compose.yml'),
+      '-p',
+      'horizonlayer-test',
+      'up',
+      '-d',
+      'db',
+    ];
+    expect(localBackupInternals.composeStartDatabaseArgs(config)).toEqual(startArgs);
+    const runner = vi.fn(async () => ({ stderr: '', stdout: '' }));
+    await localBackupInternals.startDatabase(config, { PATH: '/test/bin' }, runner);
+    expect(runner).toHaveBeenCalledWith({
+      args: startArgs,
+      command: 'docker',
+      environment: expect.objectContaining({
+        DB_PORT: '55432',
+        PATH: '/test/bin',
+      }),
+      stdout: 'ignore',
+    });
+
     expect(localBackupInternals.composeExecArgs(config, [
       'pg_dump',
       '--username',
@@ -477,7 +500,7 @@ describe('managed runtime Backup', () => {
       .rejects.toThrow('inspect managed pg_dump cleanly');
   });
 
-  it('probes database and Qdrant readiness and times out deterministically', async () => {
+  it('probes database and runtime readiness and times out deterministically', async () => {
     const end = vi.fn(async () => undefined);
     await expect(localBackupInternals.canConnect(config, () => ({
       connect: async () => undefined,
@@ -496,6 +519,32 @@ describe('managed runtime Backup', () => {
     }))).resolves.toBe(false);
     expect(failedEnd).toHaveBeenCalledOnce();
 
+    const database = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    let time = 0;
+    await expect(localBackupInternals.waitForDatabase(
+      config,
+      2_000,
+      database,
+      () => time,
+      async (milliseconds) => {
+        time += milliseconds;
+      }
+    )).resolves.toBeUndefined();
+    expect(database).toHaveBeenCalledTimes(2);
+
+    time = 0;
+    await expect(localBackupInternals.waitForDatabase(
+      config,
+      1,
+      vi.fn(async () => false),
+      () => time,
+      async (milliseconds) => {
+        time += milliseconds;
+      }
+    )).rejects.toThrow('did not become ready');
+
     await expect(localBackupInternals.isQdrantReady(
       config,
       vi.fn(async () => new Response('', { status: 200 }))
@@ -508,21 +557,21 @@ describe('managed runtime Backup', () => {
       throw new Error('offline');
     }))).resolves.toBe(false);
 
-    const database = vi.fn()
+    const runtimeDatabase = vi.fn()
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
     const qdrant = vi.fn().mockResolvedValue(true);
-    let time = 0;
+    time = 0;
     await expect(localBackupInternals.waitForServices(
       config,
       2_000,
-      { database, qdrant },
+      { database: runtimeDatabase, qdrant },
       () => time,
       async (milliseconds) => {
         time += milliseconds;
       }
     )).resolves.toBeUndefined();
-    expect(database).toHaveBeenCalledTimes(2);
+    expect(runtimeDatabase).toHaveBeenCalledTimes(2);
     expect(qdrant).toHaveBeenCalledOnce();
 
     time = 0;

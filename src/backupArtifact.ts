@@ -199,8 +199,17 @@ async function readExactly(
   position: number
 ): Promise<Buffer> {
   const buffer = Buffer.alloc(length);
-  const { bytesRead } = await handle.read(buffer, 0, length, position);
-  if (bytesRead !== length) throw new BackupArtifactError('Backup artifact is truncated.');
+  let total = 0;
+  while (total < length) {
+    const { bytesRead } = await handle.read(
+      buffer,
+      total,
+      length - total,
+      position + total
+    );
+    if (bytesRead === 0) throw new BackupArtifactError('Backup artifact is truncated.');
+    total += bytesRead;
+  }
   return buffer;
 }
 
@@ -271,3 +280,5 @@ async function hashFileRange(path: string, start: number): Promise<{ bytes: numb
 export function createBackupPayloadStream(inspection: BackupArtifactInspection) {
   return createReadStream(inspection.path, { start: inspection.payloadOffset });
 }
+
+export const backupArtifactInternals = { readExactly };
