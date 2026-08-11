@@ -79,16 +79,37 @@ Stop the managed services while keeping configuration and data:
 npx -y horizonlayer@2.0.0 stop
 ```
 
-### Reset local development data safely
+### Back up and recover Canonical Knowledge
 
-Resetting is destructive: it permanently removes the managed local PostgreSQL knowledge, Qdrant index, containers, volumes, and saved `runtime.json`. First run `doctor` and confirm the configuration path is the local runtime you intend to erase. Then use the confirmation-gated reset command:
+Create a private, point-in-time Backup of the saved managed runtime:
 
 ```bash
+npx -y horizonlayer@2.0.0 backup
+npx -y horizonlayer@2.0.0 backup /path/to/knowledge.hlbackup
+```
+
+Without `FILE`, HorizonLayer writes a collision-safe `.hlbackup` file under the runtime's `backups/` directory. The receipt reports its absolute path, snapshot interval, size, checksum, and compatibility versions. A Backup contains the complete PostgreSQL Canonical Knowledge store and must be handled as sensitive data. It excludes Qdrant because the Derived Search Index is rebuilt from PostgreSQL after recovery.
+
+Recovery is deliberately two-step. First preview the exact managed target; preview makes no changes and exits nonzero so it cannot be mistaken for completion:
+
+```bash
+npx -y horizonlayer@2.0.0 recover /path/to/knowledge.hlbackup
+npx -y horizonlayer@2.0.0 recover /path/to/knowledge.hlbackup --yes
+```
+
+Only use `--yes` after checking the artifact path, saved configuration path, Compose project, compatibility, checksum, and trust warning. Confirmed recovery validates the archive, retains a safety Backup of the current database, stops published services, restores atomically in an isolated PostgreSQL container, validates the canonical schema, clears the derived Qdrant collection, and restarts healthy services. It never targets an explicit `DATABASE_URL` and never deletes Docker volumes. Keep the reported safety Backup until the recovered state has been inspected through MCP or the dashboard. See the [Backup and Runtime Recovery guide](docs/backup-and-recovery.md) for the failure model and troubleshooting workflow.
+
+### Reset local development data safely
+
+Resetting is destructive: it permanently removes the managed local PostgreSQL knowledge, Qdrant index, containers, volumes, and saved `runtime.json`. First create and inspect a `.hlbackup`, then run `doctor` and confirm the configuration path is the local runtime you intend to erase. The default `backups/` directory is outside Docker volumes and survives reset.
+
+```bash
+npx -y horizonlayer@2.0.0 backup
 npx -y horizonlayer@2.0.0 doctor
 npx -y horizonlayer@2.0.0 reset --yes
 ```
 
-The command uses the saved Compose project, so it removes only that managed runtime. It never targets an external `DATABASE_URL`. Run `setup` again to create a fully fresh local runtime. Back up `runtime.json` and Docker volumes before resetting if you need to retain local knowledge.
+The command uses the saved Compose project, so it removes only that managed runtime. It never targets an external `DATABASE_URL`. Run `setup` again, then recover the retained Backup to return its Canonical Knowledge to the fresh runtime.
 
 ## Advanced: use an existing PostgreSQL instance
 
@@ -119,6 +140,10 @@ Set `RAG_ENABLED=true` and `QDRANT_URL` only when you also operate a compatible 
 | PostgreSQL or Qdrant is unavailable | Run `doctor`, inspect Docker Desktop or the local containers, then rerun `setup`. The launcher reports the failed dependency and recovery direction. |
 | No candidate local port is available | Free one of the reported loopback ports, then rerun `setup`. Setup chooses an available supported port automatically. |
 | Another HorizonLayer lifecycle command is already running | Let it finish, then rerun the command. If it was interrupted and no lifecycle command remains, remove the reported `.setup.lock` file and retry. |
+| Backup refuses an existing destination | Choose a new `.hlbackup` path. HorizonLayer never overwrites an existing file. |
+| Recovery preview exits with status 1 | Expected: preview is read-only. Review its output, then append `--yes` to the exact displayed command only if the target and artifact are correct. |
+| Backup validation or compatibility fails | Keep the current runtime running. Use an intact HorizonLayer `.hlbackup` produced by a compatible PostgreSQL 17 managed runtime; do not edit or rename another archive format. |
+| Confirmed recovery fails | Read whether the receipt says the original state was preserved, the safety Backup was restored, or valid recovered data was retained. Keep both artifact paths, run `doctor`, and follow [recovery troubleshooting](docs/backup-and-recovery.md#failure-outcomes-and-troubleshooting). |
 | `runtime.json` is invalid or unreadable | Restore a backup to retain existing data. For a disposable development runtime, inspect the saved project/volume names from that backup before manually removing only those resources and the invalid config; then run `setup`. |
 | An external database cannot connect | Check `DATABASE_URL`, network access, and the role's schema permissions; then launch `mcp` or `dashboard` with the corrected environment. |
 
@@ -144,9 +169,12 @@ npm ci
 npm run verify
 npm run test:coverage
 npm run build
+npm run test:integration:postgres
 npm run test:smoke:local
+npm run test:smoke:recovery
+npm pack --dry-run
 ```
 
-The unit and coverage commands do not require Docker or external services. `npm run test:smoke:local` provisions an isolated Docker PostgreSQL instance and exercises the launcher-backed MCP and dashboard smoke paths. See [CONTRIBUTING.md](CONTRIBUTING.md#postgresql-integration-tests) for the PostgreSQL integration command and CI assumptions, [CHANGELOG.md](CHANGELOG.md) for release history, and [SECURITY.md](SECURITY.md) for responsible disclosure.
+The unit and coverage commands do not require Docker or external services. The integration command requires `HORIZONLAYER_INTEGRATION_DATABASE_URL`. `test:smoke:local` provisions an isolated Docker PostgreSQL instance; `test:smoke:recovery` packs the public CLI and proves the isolated A→B→A→safety-B, reset, corruption, interruption, MCP, dashboard, SQL, and semantic-search journey. See [CONTRIBUTING.md](CONTRIBUTING.md#postgresql-integration-tests) for setup details, [CHANGELOG.md](CHANGELOG.md) for release history, and [SECURITY.md](SECURITY.md) for responsible disclosure.
 
 License: [MIT](LICENSE).

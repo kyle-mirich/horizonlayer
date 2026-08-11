@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   databaseUnavailableGuidance,
-  hasExplicitRuntimeOverride,
   isQdrantReady,
   isDatabaseUnavailable,
   localRuntimeRecoveryGuidance,
@@ -11,7 +10,7 @@ import {
   shouldProvisionManagedRuntime,
   shouldStartSavedRuntime,
 } from './launcher.js';
-import type { LocalRuntimeConfig } from './localRuntime.js';
+import { hasExplicitRuntimeOverride, type LocalRuntimeConfig } from './localRuntime.js';
 
 const localRuntime: LocalRuntimeConfig = {
   compose_project: 'horizonlayer',
@@ -29,6 +28,9 @@ describe('launcher commands', () => {
     expect(parseLauncherMode(['mcp'])).toBe('mcp');
     expect(parseLauncherMode(['dashboard'])).toBe('dashboard');
     expect(parseLauncherMode(['setup'])).toBe('setup');
+    expect(parseLauncherMode(['backup'])).toBe('backup');
+    expect(parseLauncherMode(['recover', 'knowledge.hlbackup'])).toBe('recover');
+    expect(parseLauncherMode(['recover', 'knowledge.hlbackup', '--yes'])).toBe('recover');
     expect(parseLauncherMode(['doctor'])).toBe('doctor');
     expect(parseLauncherMode(['reset'])).toBe('reset');
     expect(parseLauncherMode(['reset', '--yes'])).toBe('reset');
@@ -57,8 +59,40 @@ describe('launcher commands', () => {
       mode: 'reset',
       openDashboard: false,
     });
+    expect(parseLauncherCommand(['backup'])).toEqual({
+      backupPath: undefined,
+      confirmReset: false,
+      mode: 'backup',
+      openDashboard: false,
+    });
+    expect(parseLauncherCommand(['backup', 'knowledge.hlbackup'])).toEqual({
+      backupPath: 'knowledge.hlbackup',
+      confirmReset: false,
+      mode: 'backup',
+      openDashboard: false,
+    });
+    expect(parseLauncherCommand(['recover', 'knowledge.hlbackup'])).toEqual({
+      confirmRecovery: false,
+      confirmReset: false,
+      mode: 'recover',
+      openDashboard: false,
+      recoveryPath: 'knowledge.hlbackup',
+    });
+    expect(parseLauncherCommand(['recover', 'knowledge.hlbackup', '--yes'])).toEqual({
+      confirmRecovery: true,
+      confirmReset: false,
+      mode: 'recover',
+      openDashboard: false,
+      recoveryPath: 'knowledge.hlbackup',
+    });
     expect(() => parseLauncherMode(['dashboard', '--other'])).toThrow('dashboard [--open]');
     expect(() => parseLauncherMode(['install', 'codex', 'extra'])).toThrow('Unknown command');
+    expect(() => parseLauncherMode(['backup', 'one.hlbackup', 'extra'])).toThrow('Unknown command');
+    expect(() => parseLauncherMode(['recover'])).toThrow('Unknown command');
+    expect(() => parseLauncherMode(['recover', '--yes'])).toThrow('Unknown command');
+    expect(() => parseLauncherMode(['recover', '--yes', 'knowledge.hlbackup'])).toThrow('Unknown command');
+    expect(() => parseLauncherMode(['recover', 'knowledge.hlbackup', '--force'])).toThrow('Unknown command');
+    expect(() => parseLauncherMode(['recover', 'knowledge.hlbackup', '--yes', 'extra'])).toThrow('Unknown command');
     expect(() => parseLauncherMode(['unknown'])).toThrow('Unknown command: unknown');
   });
 
@@ -68,6 +102,7 @@ describe('launcher commands', () => {
     expect(shouldStartSavedRuntime('mcp', true)).toBe(false);
     expect(shouldStartSavedRuntime('dashboard', true)).toBe(false);
     expect(shouldStartSavedRuntime('doctor')).toBe(false);
+    expect(shouldStartSavedRuntime('recover')).toBe(false);
     expect(shouldStartSavedRuntime('reset')).toBe(false);
     expect(shouldStartSavedRuntime('setup')).toBe(false);
   });

@@ -48,6 +48,15 @@ export interface LocalRuntimeSetupLock {
 
 export type ComposeAction = 'reset' | 'start' | 'stop';
 
+export function hasExplicitRuntimeOverride(
+  environment: NodeJS.ProcessEnv = process.env
+): boolean {
+  return ['DATABASE_URL', 'QDRANT_URL', 'RAG_ENABLED'].some((name) => {
+    const value = environment[name];
+    return value != null && value !== '';
+  });
+}
+
 function runCommand(
   command: string,
   args: string[],

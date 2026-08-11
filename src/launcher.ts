@@ -8,6 +8,7 @@ import {
   applyLocalRuntimeEnvironment,
   createLocalRuntimeConfig,
   ensureDockerDesktopReady,
+  hasExplicitRuntimeOverride,
   isDockerDaemonReady,
   localRuntimeConfigPath,
   openDashboardUrl,
@@ -23,12 +24,15 @@ import { isDependencyUnavailableCode } from './tools/common.js';
 
 const { Client } = pg;
 
-export type LauncherMode = 'dashboard' | 'doctor' | 'help' | 'install' | 'mcp' | 'reset' | 'setup' | 'stop';
+export type LauncherMode = 'backup' | 'dashboard' | 'doctor' | 'help' | 'install' | 'mcp' | 'recover' | 'reset' | 'setup' | 'stop';
 
 export interface LauncherCommand {
+  backupPath?: string;
+  confirmRecovery?: boolean;
   confirmReset: boolean;
   mode: LauncherMode;
   openDashboard: boolean;
+  recoveryPath?: string;
 }
 
 class FriendlyBootstrapError extends Error {
@@ -38,7 +42,7 @@ class FriendlyBootstrapError extends Error {
   }
 }
 
-const USAGE = 'Usage: horizonlayer [mcp|setup|dashboard [--open]|doctor|stop|reset --yes|install [all|codex|claude]]';
+const USAGE = 'Usage: horizonlayer [mcp|setup|backup [FILE]|recover FILE [--yes]|dashboard [--open]|doctor|stop|reset --yes|install [all|codex|claude]]';
 
 export function parseLauncherCommand(args: string[]): LauncherCommand {
   if (args.length === 0 || (args.length === 1 && args[0] === 'mcp')) {
@@ -50,6 +54,25 @@ export function parseLauncherCommand(args: string[]): LauncherCommand {
   }
   if (args.length === 1 && ['doctor', 'setup', 'stop'].includes(args[0]!)) {
     return { confirmReset: false, mode: args[0] as 'doctor' | 'setup' | 'stop', openDashboard: false };
+  }
+  if (args[0] === 'backup' && args.length <= 2) {
+    return {
+      backupPath: args[1],
+      confirmReset: false,
+      mode: 'backup',
+      openDashboard: false,
+    };
+  }
+  if (args[0] === 'recover'
+    && args[1] !== '--yes'
+    && (args.length === 2 || (args.length === 3 && args[2] === '--yes'))) {
+    return {
+      confirmRecovery: args[2] === '--yes',
+      confirmReset: false,
+      mode: 'recover',
+      openDashboard: false,
+      recoveryPath: args[1],
+    };
   }
   if (args[0] === 'reset' && (args.length === 1 || (args.length === 2 && args[1] === '--yes'))) {
     return { confirmReset: args[1] === '--yes', mode: 'reset', openDashboard: false };
@@ -82,15 +105,6 @@ export function shouldProvisionManagedRuntime(
   hasExplicitRuntimeOverride = false
 ): boolean {
   return !hasSavedRuntime && !hasExplicitRuntimeOverride;
-}
-
-export function hasExplicitRuntimeOverride(
-  environment: NodeJS.ProcessEnv = process.env
-): boolean {
-  return ['DATABASE_URL', 'QDRANT_URL', 'RAG_ENABLED'].some((name) => {
-    const value = environment[name];
-    return value != null && value !== '';
-  });
 }
 
 export interface ManagedRuntimeResolution {
@@ -373,6 +387,8 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
       '',
       '  mcp        Start the stdio MCP server (default)',
       '  setup      Start Docker Desktop, provision services, initialize the schema, and warm the model',
+      '  backup     Create a point-in-time Backup of all managed Canonical Knowledge',
+      '  recover    Preview a managed Runtime Recovery; pass --yes after FILE to perform it',
       '  dashboard  Start the local dashboard; pass --open to open it in a browser',
       '  doctor     Check configuration, Docker, PostgreSQL, and Qdrant',
       '  stop       Stop the managed PostgreSQL and Qdrant services',
@@ -395,6 +411,32 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
 
   if (mode === 'setup') {
     await runSetup();
+    return;
+  }
+
+  if (mode === 'backup') {
+    const { createManagedRuntimeBackup, formatManagedBackupReceipt } = await import('./localBackup.js');
+    const result = await createManagedRuntimeBackup({ destination: command.backupPath });
+    console.error(formatManagedBackupReceipt(result));
+    return;
+  }
+
+  if (mode === 'recover') {
+    const {
+      formatManagedRecoveryPreview,
+      formatManagedRecoveryReceipt,
+      previewManagedRuntimeRecovery,
+      recoverManagedRuntime,
+    } = await import('./localRecovery.js');
+    const options = { artifact: command.recoveryPath! };
+    if (!command.confirmRecovery) {
+      const preview = await previewManagedRuntimeRecovery(options);
+      console.error(formatManagedRecoveryPreview(preview));
+      process.exitCode = 1;
+      return;
+    }
+    const result = await recoverManagedRuntime(options);
+    console.error(formatManagedRecoveryReceipt(result));
     return;
   }
 
