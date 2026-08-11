@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { DEFAULT_QDRANT_COLLECTION } from './search/constants.js';
 
 const packageMetadata = z.object({
   version: z.string().regex(/^\d+\.\d+\.\d+$/),
@@ -43,7 +44,7 @@ const RagSchema = z.object({
   enabled: z.boolean().default(false),
   qdrant_url: HttpUrlSchema.default('http://127.0.0.1:6333'),
   api_key: z.string().trim().min(1).optional(),
-  collection: z.string().trim().min(1).default('horizonlayer_rag'),
+  collection: z.string().trim().min(1).default(DEFAULT_QDRANT_COLLECTION),
   timeout_ms: z.number().int().min(100).max(120_000).default(5_000),
   embedding_model: z.string().trim().min(1)
     .default('onnx-community/all-MiniLM-L6-v2-ONNX'),

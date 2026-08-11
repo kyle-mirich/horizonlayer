@@ -55,6 +55,7 @@
     "test:smoke:dashboard": "tsx src/testing/dashboardLiveSmoke.ts",
     "test:smoke:live": "tsx src/testing/liveSmoke.ts",
     "test:smoke:local": "bash scripts/smoke-local.sh",
+    "test:smoke:recovery": "bash scripts/smoke-recovery.sh",
     "typecheck": "npm run typecheck:server && npm run typecheck:dashboard",
     "typecheck:server": "tsc --noEmit",
     "typecheck:dashboard": "tsc -p dashboard/tsconfig.json --noEmit",

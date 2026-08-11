@@ -552,6 +552,7 @@ async function main(): Promise<void> {
     getRevision(row, 'row/restore');
 
     const search = asRecord(await callTool(baseUrl, 'search', 'search', {
+      format: 'full',
       limit: 20,
       mode: 'records',
       query: searchToken,
