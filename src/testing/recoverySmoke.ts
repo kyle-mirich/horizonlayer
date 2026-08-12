@@ -37,6 +37,7 @@ const launcher = requiredEnvironment('PACKED_LAUNCHER');
 const smokeRoot = requiredEnvironment('RECOVERY_SMOKE_WORKSPACE');
 
 const configPath = join(home, 'runtime.json');
+const projectConfigPath = join(smokeRoot, '.horizonlayer.json');
 const explicitBackup = join(smokeRoot, 'state-a.hlbackup');
 const corruptedBackup = join(smokeRoot, 'corrupted.hlbackup');
 const restoreFailureBackup = join(smokeRoot, 'restore-failure.hlbackup');
@@ -61,6 +62,14 @@ interface StateIds {
   runId: string;
   sessionId: string;
   workspaceId: string;
+  issueProjectId: string;
+  issueProjectKey: string;
+  issueId: string;
+  childIssueId: string;
+  blockerIssueId: string;
+  dependencyId: string;
+  issueLinkId: string;
+  bOnlyIssueId: string | null;
 }
 
 function cleanEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -82,6 +91,7 @@ function collect(stream: NodeJS.ReadableStream | null): Promise<string> {
 
 async function runCli(args: string[], expectedCode = 0): Promise<CommandResult> {
   const child = spawn(process.execPath, [launcher, ...args], {
+    cwd: smokeRoot,
     env: cleanEnvironment(),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -127,9 +137,9 @@ function databaseUrl(config: LocalRuntimeConfig): string {
 async function withMcp<T>(operation: (client: McpClient) => Promise<T>): Promise<T> {
   const client = new McpClient({ name: 'horizonlayer-recovery-smoke', version: '0.0.1' }, { capabilities: {} });
   const transport = new StdioClientTransport({
-    args: [launcher],
+    args: [launcher, 'legacy-mcp'],
     command: process.execPath,
-    cwd: process.cwd(),
+    cwd: smokeRoot,
     env: cleanEnvironment() as Record<string, string>,
   });
   try {
@@ -140,12 +150,45 @@ async function withMcp<T>(operation: (client: McpClient) => Promise<T>): Promise
   }
 }
 
+async function withModuleMcp<T>(
+  operation: (client: McpClient) => Promise<T>,
+  expectedTools: Array<'issues' | 'knowledge'> = ['issues', 'knowledge']
+): Promise<T> {
+  const client = new McpClient({ name: 'horizonlayer-v3-recovery-smoke', version: '0.0.1' }, { capabilities: {} });
+  const transport = new StdioClientTransport({
+    args: [launcher],
+    command: process.execPath,
+    cwd: smokeRoot,
+    env: cleanEnvironment() as Record<string, string>,
+  });
+  try {
+    await client.connect(transport);
+    const tools = (await client.listTools()).tools.map((tool) => tool.name).sort();
+    assert(JSON.stringify(tools) === JSON.stringify([...expectedTools].sort()),
+      `default selected-module MCP exposed an unexpected tool catalog: ${tools.join(', ')}`);
+    return await operation(client);
+  } finally {
+    await closeClient(client);
+  }
+}
+
+async function callModule<Result = JsonObject>(
+  client: McpClient,
+  name: 'issues' | 'knowledge',
+  args: JsonObject
+): Promise<Result> {
+  const response = await client.callTool({ name, arguments: args });
+  const envelope = record(response.structuredContent, `${name} module envelope`);
+  assert(envelope.ok === true, `${name} module call failed: ${JSON.stringify(envelope.error)}`);
+  return envelope.result as Result;
+}
+
 function record(value: unknown, label: string): JsonObject {
   return asRecord(value, `${label} did not return an object`);
 }
 
 async function createStateA(): Promise<StateIds> {
-  return withMcp(async (client) => {
+  const knowledgeIds = await withMcp(async (client) => {
     const workspaceRecord = record((await callTool(client, 'workspace', {
       action: 'create',
       description: 'Packed CLI Runtime Recovery smoke state',
@@ -257,6 +300,79 @@ async function createStateA(): Promise<StateIds> {
       workspaceId,
     };
   });
+  return withModuleMcp(async (client) => {
+    const workspace = await callModule(client, 'knowledge', {
+      operation: 'workspace',
+      input: { action: 'get', workspace_id: knowledgeIds.workspaceId },
+    });
+    assert(workspace.id === knowledgeIds.workspaceId,
+      'compact Knowledge module could not read the recovery workspace');
+    const project = await callModule(client, 'issues', {
+      action: 'project.create',
+      input: { name: `Recovery smoke ${process.pid}`, project_key: `RSM${process.pid}` },
+    });
+    const issueProjectId = getString(project, 'id');
+    const issueProjectKey = getString(project, 'project_key');
+    const issue = await callModule(client, 'issues', {
+      action: 'issue.create',
+      input: {
+        created_by: 'recovery-smoke',
+        project_id: issueProjectId,
+        tags: ['recovery-smoke', 'state-a'],
+        title: `Issue state A ${tokenA}`,
+      },
+    });
+    const issueId = getString(issue, 'id');
+    const blocker = await callModule(client, 'issues', {
+      action: 'issue.create',
+      input: { created_by: 'recovery-smoke', project_id: issueProjectId, title: 'Recovery blocker' },
+    });
+    const blockerIssueId = getString(blocker, 'id');
+    const child = await callModule(client, 'issues', {
+      action: 'issue.create',
+      input: {
+        created_by: 'recovery-smoke',
+        parent_issue: getString(issue, 'issue_key'),
+        project_id: issueProjectId,
+        title: 'Recovery child',
+      },
+    });
+    const childIssueId = getString(child, 'id');
+    const dependency = await callModule(client, 'issues', {
+      action: 'dependency.create',
+      input: {
+        blocked_issue: getString(child, 'issue_key'),
+        blocking_issue: getString(blocker, 'issue_key'),
+      },
+    });
+    const dependencyId = getString(dependency, 'id');
+    await callModule(client, 'issues', {
+      action: 'comment.add',
+      input: { author: 'recovery-smoke', body: `Issue comment A ${tokenA}`, issue: getString(issue, 'issue_key') },
+    });
+    const issueLink = await callModule(client, 'issues', {
+      action: 'link.create',
+      input: {
+        from_id: knowledgeIds.pageId,
+        from_type: 'page',
+        link_type: 'implements',
+        to_id: issueId,
+        to_type: 'issue',
+        workspace_id: knowledgeIds.workspaceId,
+      },
+    });
+    return {
+      ...knowledgeIds,
+      bOnlyIssueId: null,
+      blockerIssueId,
+      childIssueId,
+      dependencyId,
+      issueId,
+      issueLinkId: getString(issueLink, 'id'),
+      issueProjectId,
+      issueProjectKey,
+    };
+  });
 }
 
 async function mutateToStateB(ids: StateIds): Promise<void> {
@@ -321,6 +437,45 @@ async function mutateToStateB(ids: StateIds): Promise<void> {
     })).result, 'B-only page/create');
     ids.bOnlyPageId = getString(bOnlyPage, 'id');
     await assertSemanticState(client, ids.workspaceId, tokenB, tokenA);
+  });
+  await withModuleMcp(async (client) => {
+    const loaded = await callModule(client, 'issues', {
+      action: 'issue.get', input: { include_comments: true, include_links: true, issue: ids.issueId },
+    });
+    const issue = record(loaded.issue, 'Issue state before B');
+    await callModule(client, 'issues', {
+      action: 'issue.update',
+      input: {
+        issue: ids.issueId,
+        revision: getRevision(issue, 'Issue state before B'),
+        status: 'done',
+        tags: ['recovery-smoke', 'state-b'],
+        title: `Issue state B ${tokenB}`,
+      },
+    });
+    await callModule(client, 'issues', {
+      action: 'comment.add',
+      input: { author: 'recovery-smoke', body: `Issue comment B ${tokenB}`, issue: ids.issueId },
+    });
+    const links = await callModule<unknown[]>(client, 'issues', {
+      action: 'link.list', input: { include_archived: true, item_id: ids.issueId, item_type: 'issue' },
+    });
+    const issueLink = asArray(links, 'Issue links').map((value) => record(value, 'Issue link'))
+      .find((value) => value.id === ids.issueLinkId);
+    assert(issueLink, 'Page-Issue link disappeared before state B');
+    await callModule(client, 'issues', {
+      action: 'link.archive',
+      input: { link_id: ids.issueLinkId, revision: getRevision(issueLink, 'Page-Issue link') },
+    });
+    const bOnly = await callModule(client, 'issues', {
+      action: 'issue.create',
+      input: {
+        created_by: 'recovery-smoke',
+        project_id: ids.issueProjectId,
+        title: `B-only Issue ${tokenB}`,
+      },
+    });
+    ids.bOnlyIssueId = getString(bOnly, 'id');
   });
 }
 
@@ -420,6 +575,69 @@ async function verifyMcpState(ids: StateIds, phase: 'A' | 'B'): Promise<void> {
     assert(asArray(resume.recent_runs, 'recent runs').length > 0, 'resumable session lost its run');
     await assertSemanticState(client, ids.workspaceId, present, absent);
   });
+  await verifyIssueState(ids, phase);
+}
+
+async function verifyIssueState(ids: StateIds, phase: 'A' | 'B'): Promise<void> {
+  const present = phase === 'A' ? tokenA : tokenB;
+  const absent = phase === 'A' ? tokenB : tokenA;
+  await withModuleMcp(async (client) => {
+    const project = await callModule(client, 'issues', {
+      action: 'project.get', input: { project_id: ids.issueProjectId },
+    });
+    assert(project.project_key === ids.issueProjectKey, 'Issue Project was not recovered');
+    const details = await callModule(client, 'issues', {
+      action: 'issue.get',
+      input: { include_comments: true, include_links: true, issue: ids.issueId },
+    });
+    const issue = record(details.issue, 'recovered Issue');
+    assert(String(issue.title).includes(present), `Issue does not contain state ${phase}`);
+    assert(!String(issue.title).includes(absent), `Issue retained the other state after ${phase}`);
+    assert(issue.status === (phase === 'A' ? 'open' : 'done'), `Issue status does not match ${phase}`);
+    const comments = asArray(details.comments, 'Issue comments');
+    const commentText = JSON.stringify(comments);
+    assert(commentText.includes(present), `Issue comments do not contain state ${phase}`);
+    if (phase === 'A') {
+      assert(!commentText.includes(tokenB), 'State A recovery retained the later Issue comment');
+    } else {
+      assert(commentText.includes(tokenA), 'State B recovery lost the original Issue comment history');
+    }
+    const subtasks = asArray(details.subtasks, 'Issue subtasks').map((value) => record(value, 'Issue subtask'));
+    assert(subtasks.some((subtask) => subtask.id === ids.childIssueId), 'Issue subtask was not recovered');
+    const dependencies = await callModule<unknown[]>(client, 'issues', {
+      action: 'dependency.list', input: { issue: ids.childIssueId },
+    });
+    assert(dependencies.map((value) => record(value, 'Issue dependency'))
+      .some((dependency) => dependency.id === ids.dependencyId), 'Issue dependency was not recovered');
+    const links = await callModule<unknown[]>(client, 'issues', {
+      action: 'link.list',
+      input: { include_archived: true, item_id: ids.issueId, item_type: 'issue' },
+    });
+    const issueLink = links.map((value) => record(value, 'Page-Issue link'))
+      .find((link) => link.id === ids.issueLinkId);
+    assert(issueLink, 'Page-Issue link was not recovered');
+    assert((issueLink.archived_at == null) === (phase === 'A'),
+      `Page-Issue link archive state does not match ${phase}`);
+    const queried = await callModule<unknown[]>(client, 'issues', {
+      action: 'issue.query',
+      input: { query: `project = ${ids.issueProjectKey} AND text ~ "${present}"` },
+    });
+    assert(queried.map((value) => record(value, 'queried Issue')).some((candidate) => candidate.id === ids.issueId),
+      `Issue query did not find state ${phase}`);
+    assert(ids.bOnlyIssueId, 'B-only Issue identifier was not retained');
+    if (phase === 'A') {
+      const missing = await client.callTool({
+        name: 'issues', arguments: { action: 'issue.get', input: { issue: ids.bOnlyIssueId } },
+      });
+      const envelope = record(missing.structuredContent, 'missing B-only Issue envelope');
+      assert(envelope.ok === false, 'A recovery did not remove the B-only Issue');
+    } else {
+      const bOnly = await callModule(client, 'issues', {
+        action: 'issue.get', input: { issue: ids.bOnlyIssueId },
+      });
+      assert(JSON.stringify(bOnly).includes(tokenB), 'B recovery did not restore the B-only Issue');
+    }
+  });
 }
 
 async function verifySqlState(
@@ -448,6 +666,28 @@ async function verifySqlState(
     const present = phase === 'A' ? tokenA : tokenB;
     const absent = phase === 'A' ? tokenB : tokenA;
     assert(row != null && JSON.stringify(row).includes(present), `SQL did not expose state ${phase}`);
+    const issueState = await client.query<{
+      dependency_id: string;
+      issue_link_archived_at: string | null;
+      issue_title: string;
+      parent_issue_id: string;
+    }>(`
+      SELECT issue.title AS issue_title,
+             child.parent_issue_id::text,
+             dependency.id::text AS dependency_id,
+             issue_link.archived_at::text AS issue_link_archived_at
+      FROM issues issue
+      JOIN issues child ON child.id = $2
+      JOIN issue_dependencies dependency ON dependency.id = $3
+      JOIN record_links issue_link ON issue_link.id = $4
+      WHERE issue.id = $1
+    `, [ids.issueId, ids.childIssueId, ids.dependencyId, ids.issueLinkId]);
+    const recoveredIssue = issueState.rows[0];
+    assert(recoveredIssue?.issue_title.includes(present), `SQL Issue does not expose state ${phase}`);
+    assert(recoveredIssue?.parent_issue_id === ids.issueId, 'SQL did not recover the subtask relationship');
+    assert(recoveredIssue?.dependency_id === ids.dependencyId, 'SQL did not recover the Issue dependency');
+    assert((recoveredIssue?.issue_link_archived_at == null) === (phase === 'A'),
+      `SQL Page-Issue link archive state does not match ${phase}`);
     assert(!JSON.stringify(row).includes(absent), `SQL exposed stale ${absent}`);
     const invariant = await client.query<{ left_value: number; owner: string; right_value: number }>(
       `SELECT i.left_value, i.right_value, pg_catalog.pg_get_userbyid(c.relowner) AS owner
@@ -513,6 +753,14 @@ async function portOpen(port: number): Promise<boolean> {
   });
 }
 
+async function waitForPortOpen(port: number): Promise<boolean> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (await portOpen(port)) return true;
+    await sleep(50);
+  }
+  return false;
+}
+
 async function observeRecovery(path: string): Promise<{
   result: CommandResult;
   sawUnavailable: boolean;
@@ -539,7 +787,10 @@ async function observeRecovery(path: string): Promise<{
     await sleep(50);
   }
   const result = { code: await exit, stderr: await stderr, stdout: await stdout };
-  assert(await portOpen(config.database_port), 'recovery did not restore published PostgreSQL');
+  assert(
+    await waitForPortOpen(config.database_port),
+    `recovery did not restore published PostgreSQL\n${result.stderr}`
+  );
   return { result, sawUnavailable };
 }
 
@@ -728,7 +979,18 @@ async function assertManagedDockerResourcesRemoved(composeProject: string): Prom
 
 async function main(): Promise<void> {
   assert((await lstat(launcher)).isFile(), 'packed launcher is missing');
-  await runCli(['setup']);
+  await runCli(['setup', '--non-interactive', '--modules', 'knowledge', '--skills', 'none']);
+  await withModuleMcp(async () => undefined, ['knowledge']);
+  await runCli(['setup', '--non-interactive', '--modules', 'issues', '--skills', 'none']);
+  await withModuleMcp(async () => undefined, ['issues']);
+  await runCli(['setup', '--non-interactive', '--modules', 'both', '--skills', 'none']);
+  await withModuleMcp(async () => undefined);
+  const projectConfigText = await readFile(projectConfigPath, 'utf8');
+  const projectConfig = record(JSON.parse(projectConfigText), 'project configuration');
+  assert(JSON.stringify(projectConfig.modules) === JSON.stringify(['knowledge', 'issues']),
+    'non-interactive packaged setup did not select both modules');
+  assert(!projectConfigText.includes('password') && !projectConfigText.includes('database_url'),
+    'project configuration contains runtime credentials');
   let config = await runtimeConfig();
   const ids = await createStateA();
   const stopWriter = await prepareConcurrentInvariant(config);
@@ -844,11 +1106,13 @@ async function main(): Promise<void> {
       derived_index_rebuilt_from_canonical: true,
       lifecycle_lock_refusal: true,
       packed_public_cli: true,
+      packaged_selected_module_mcp: true,
       postgres_owner_normalization: true,
       recovery_port_isolation: true,
       reset_survival: true,
       safety_backup_round_trip: true,
       signal_safe_backup_and_recovery: true,
+      issues_and_cross_domain_links: true,
       transactional_restore_failure_preserves_state: true,
       zero_leaked_docker_resources: true,
     },

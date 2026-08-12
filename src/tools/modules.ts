@@ -19,6 +19,7 @@ import {
   createIssueDependency,
   getIssue,
   listIssueComments,
+  listIssueDependencies,
   queryIssues,
   releaseIssue,
   restoreIssue,
@@ -113,6 +114,7 @@ const IssueAction = z.enum([
   'issue.create', 'issue.get', 'issue.query', 'issue.update', 'issue.claim', 'issue.release', 'issue.archive', 'issue.restore',
   'comment.add', 'comment.list',
   'dependency.create', 'dependency.archive',
+  'dependency.list',
   'link.create', 'link.list', 'link.archive', 'link.restore', 'link.traverse',
 ]);
 const IssuesSchema = z.object({
@@ -147,6 +149,7 @@ const issueInputs: Record<z.infer<typeof IssueAction>, z.ZodTypeAny> = {
   'comment.list': z.object({ issue: IssueId }).strict(),
   'dependency.create': z.object({ blocking_issue: IssueId, blocked_issue: IssueId }).strict(),
   'dependency.archive': z.object({ dependency_id: Id, revision: Revision }).strict(),
+  'dependency.list': z.object({ issue: IssueId }).strict(),
   'link.create': z.object({ workspace_id: Id.optional(), from_type: z.enum(LINK_ITEM_TYPES), from_id: Id, to_type: z.enum(LINK_ITEM_TYPES), to_id: Id, link_type: z.string().optional() }).strict(),
   'link.list': z.object({ workspace_id: Id.optional(), item_type: z.enum(LINK_ITEM_TYPES).optional(), item_id: Id.optional(), link_type: z.string().optional(), direction: z.enum(['from', 'to', 'both']).optional(), include_archived: z.boolean().optional(), limit: Limit, offset: Offset }).strict(),
   'link.archive': z.object({ link_id: Id, revision: Revision }).strict(),
@@ -179,6 +182,8 @@ async function executeIssueAction(action: z.infer<typeof IssueAction>, input: Re
       const issue = await requireIssue(params.issue, params.include_archived);
       return {
         issue,
+        dependencies: await listIssueDependencies(issue.id),
+        subtasks: await queryIssues({ parent_issue_id: issue.id, limit: 50 }),
         ...(params.include_comments ? { comments: await listIssueComments(issue.id) } : {}),
         ...(params.include_links ? { links: await listLinks({ item_type: 'issue', item_id: issue.id }) } : {}),
       };
@@ -198,6 +203,7 @@ async function executeIssueAction(action: z.infer<typeof IssueAction>, input: Re
     case 'comment.list': return listIssueComments((await requireIssue(params.issue)).id);
     case 'dependency.create': return createIssueDependency((await requireIssue(params.blocking_issue)).id, (await requireIssue(params.blocked_issue)).id);
     case 'dependency.archive': return archiveIssueDependency(params.dependency_id, params.revision);
+    case 'dependency.list': return listIssueDependencies((await requireIssue(params.issue)).id);
     case 'link.create': return createLink(params);
     case 'link.list': return listLinks(params);
     case 'link.archive': return archiveLink(params.link_id, params.revision);

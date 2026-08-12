@@ -1,6 +1,6 @@
 # Backup and Runtime Recovery
 
-HorizonLayer Backup protects the Canonical Knowledge stored in the saved Docker-managed PostgreSQL 17 runtime. It does not manage an external `DATABASE_URL`, copy Docker volumes, or include Qdrant. Qdrant is a Derived Search Index and is cleared, then rebuilt lazily from recovered PostgreSQL data.
+HorizonLayer Backup protects canonical Knowledge and Issue data stored in the saved Docker-managed PostgreSQL 17 runtime. It does not manage an external `DATABASE_URL`, copy Docker volumes, or include Qdrant. Qdrant is a Derived Search Index and is cleared, then rebuilt lazily from recovered PostgreSQL data.
 
 ## Create and verify a Backup
 
@@ -12,7 +12,7 @@ horizonlayer backup /secure/path/team-knowledge.hlbackup
 
 The default destination is the private `backups/` directory beside `runtime.json`; it survives `horizonlayer reset --yes`. An explicit parent directory must already exist. HorizonLayer writes a PostgreSQL custom-format payload to a private temporary file, validates it with the managed container's PostgreSQL 17 tools, adds a versioned manifest and SHA-256 checksum, and atomically publishes a mode-`0600` `.hlbackup`. Existing destinations are never replaced.
 
-Treat the artifact as sensitive: it contains all workspaces, pages and blocks, typed databases and rows, links, sessions, runs, checkpoints, tags, importance values, revisions, and archived records. Store it with the same controls as the original knowledge. Do not recover an artifact from an untrusted source because PostgreSQL archives can contain executable database definitions.
+Treat the artifact as sensitive: it contains all workspaces, pages and blocks, typed databases and rows, Issue Projects, Issues, comments, subtasks, dependencies, cross-domain links, sessions, runs, checkpoints, tags, importance values, revisions, and archived records. Store it with the same controls as the original data. Do not recover an artifact from an untrusted source because PostgreSQL archives can contain executable database definitions.
 
 The receipt's snapshot interval bounds when PostgreSQL selected its consistent point-in-time view. Ordinary writes may continue during Backup, but commits made after the snapshot began are not guaranteed to be present.
 
@@ -36,7 +36,7 @@ After restore, HorizonLayer runs `ANALYZE`, checks every canonical table, clears
 
 ## Failure outcomes and troubleshooting
 
-- **Preflight failure:** invalid, corrupt, incompatible, or changing input is rejected before published services stop. Current knowledge remains unchanged.
+- **Preflight failure:** invalid, corrupt, incompatible, or changing input is rejected before published services stop. Current canonical data remains unchanged.
 - **Failure before commit:** the single restore transaction does not commit; HorizonLayer validates the preserved database and restarts the managed runtime.
 - **Failure after commit but before canonical/Qdrant validation:** HorizonLayer restores the retained safety Backup, clears Qdrant, and restarts. Both artifact paths remain in the error.
 - **Failure after canonical and Qdrant validation:** valid recovered data is retained. HorizonLayer does not overwrite it merely because the final service restart failed; run `horizonlayer doctor`, then `horizonlayer setup`.

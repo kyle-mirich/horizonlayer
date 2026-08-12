@@ -44,9 +44,14 @@ const EXPECTED_CANONICAL_TABLES = [
   'database_row_values',
   'database_rows',
   'databases',
-  'links',
+  'issue_comments',
+  'issue_dependencies',
+  'issue_projects',
+  'issues',
   'pages',
+  'record_links',
   'run_checkpoints',
+  'schema_migrations',
   'sessions',
   'workspace_search_changes',
   'workspaces',
@@ -221,7 +226,7 @@ async function stageArchive(
     inspection = await inspectBackupArtifact(artifactPath);
   } catch (error) {
     throw new LocalRecoveryError(
-      'Backup validation failed; current Canonical Knowledge was not changed. '
+      'Backup validation failed; current canonical data was not changed. '
       + 'Use an intact, compatible Backup from a trusted source.',
       errorMessage(error)
     );
@@ -452,7 +457,7 @@ async function validateCanonicalKnowledge(
     }, runner);
     if (result.stderr.trim()) {
       throw new LocalRecoveryError(
-        'PostgreSQL reported warnings while validating recovered Canonical Knowledge.',
+        'PostgreSQL reported warnings while validating recovered canonical data.',
         result.stderr.trim()
       );
     }
@@ -738,7 +743,7 @@ async function executeRecovery(
       );
       if (resumeFailure) {
         throw new LocalRecoveryError(
-          'Runtime Recovery failed before commit, so existing Canonical Knowledge was preserved, '
+          'Runtime Recovery failed before commit, so existing canonical data was preserved, '
           + 'but the managed runtime could not be restarted automatically. '
           + 'Run `horizonlayer doctor`, then `horizonlayer setup` after checking that no recovery container remains. '
           + `Requested Backup: ${context.artifactPath}. Safety Backup: ${safetyBackup.path}.`,
@@ -747,7 +752,7 @@ async function executeRecovery(
       }
       checkInterruption();
       throw new LocalRecoveryError(
-        'Runtime Recovery failed before commit; existing Canonical Knowledge was preserved and the '
+        'Runtime Recovery failed before commit; existing canonical data was preserved and the '
         + `managed runtime was restarted. Requested Backup: ${context.artifactPath}. `
         + `Safety Backup retained: ${safetyBackup.path}.${safeRecoveryCause(recoveryFailure)} `
         + 'Correct the reported cause before retrying.',
@@ -859,7 +864,7 @@ export async function recoverManagedRuntime(
         operationFailure = error instanceof LocalRecoveryError
           ? error
           : new LocalRecoveryError(
-            'Runtime Recovery stopped before current Canonical Knowledge was changed. '
+            'Runtime Recovery stopped before current canonical data was changed. '
             + 'Correct the reported Backup, Docker, or managed-runtime problem and retry.',
             errorMessage(error)
           );
@@ -916,7 +921,7 @@ export function formatManagedRecoveryPreview(preview: ManagedRecoveryPreview): s
     `Compatibility: artifact v${preview.manifest.artifact_version}; scope ${preview.manifest.scope}; schema ${preview.manifest.horizonlayer_schema_version}; HorizonLayer ${preview.manifest.horizonlayer_version}; PostgreSQL ${preview.manifest.postgresql.server_version}`,
     `Target configuration: ${preview.configurationPath}`,
     `Target Compose project: ${preview.composeProject}`,
-    'Canonical Knowledge: PostgreSQL included.',
+    'Canonical data: Knowledge and Issues in PostgreSQL included.',
     'Derived Search Index: excluded; successful recovery clears it for lazy rebuild.',
     'Safety: confirmed recovery retains an automatic Backup and stops published services during replacement.',
     'Trust warning: this sensitive Backup contains executable database definitions; recover only an artifact from a trusted source.',
@@ -932,7 +937,7 @@ export function formatManagedRecoveryReceipt(result: ManagedRecoveryResult): str
     `Safety Backup retained: ${result.safetyBackupPath}`,
     `Safety SHA-256: ${result.safetyBackupChecksum}`,
     `Completed: ${result.completedAt}`,
-    'Derived Search Index: cleared; semantic search rebuilds it lazily from Canonical Knowledge.',
+    'Derived Search Index: cleared; semantic search rebuilds it lazily from canonical PostgreSQL data.',
     `Service health: PostgreSQL ready; Qdrant ready. Configuration: ${result.configurationPath}`,
   ].join('\n');
 }

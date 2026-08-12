@@ -327,6 +327,17 @@ export async function listIssueComments(issueId: string): Promise<IssueComment[]
   return rows;
 }
 
+export async function listIssueDependencies(issueId: string): Promise<IssueDependency[]> {
+  const { rows } = await getPool().query<IssueDependency>(
+    `SELECT id, blocking_issue_id, blocked_issue_id, revision, archived_at, created_at, updated_at
+     FROM issue_dependencies
+     WHERE (blocking_issue_id = $1 OR blocked_issue_id = $1) AND archived_at IS NULL
+     ORDER BY created_at, id`,
+    [issueId]
+  );
+  return rows;
+}
+
 export async function createIssueDependency(
   blockingIssueId: string,
   blockedIssueId: string
