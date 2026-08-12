@@ -1,6 +1,6 @@
 # HorizonLayer
 
-HorizonLayer is a local-first PostgreSQL MCP server for durable coding-agent knowledge. It keeps workspace-scoped pages, typed databases and rows, relationships, searches, and resumable run checkpoints on your machine.
+HorizonLayer is a local-first PostgreSQL MCP server for durable coding-agent knowledge and issue tracking. It keeps workspace-scoped pages, typed databases, Jira-style Issue Projects, assignments, dependencies, comments, links, search, and resumable run checkpoints on your machine.
 
 PostgreSQL is the canonical store. Qdrant is a local, derived index used for optional semantic retrieval; it is not a second source of truth. HorizonLayer does not configure hosted, multi-user, or remote deployment services.
 
@@ -22,7 +22,15 @@ This is the shortest supported path: Docker-managed PostgreSQL and Qdrant, then 
 npx -y horizonlayer@2.0.0 setup
 ```
 
-`setup` starts Docker when supported, chooses unused loopback ports, persists a local runtime configuration, starts PostgreSQL and Qdrant with Docker volumes, initializes [`schema.sql`](schema.sql), and verifies the local embedding model and vector collection.
+`setup` asks whether this project uses Knowledge, Issues, or Both, then asks whether to install the matching bundled skills for Codex, Claude Code, both, or neither. It starts the local services, creates or reuses the shared `Default` Knowledge Workspace and a Jira-style Issue Project named after the current directory, and writes a credential-free `.horizonlayer.json` that can be committed with the project. Rerunning setup is idempotent.
+
+For scripts or CI, provide every choice without prompts:
+
+```bash
+npx -y horizonlayer@2.0.0 setup --non-interactive --modules both --skills none
+```
+
+Supported module values are `knowledge`, `issues`, and `both`; skill targets are `none`, `codex`, `claude`, and `all`. Runtime credentials remain only in the private local `runtime.json`, never in project configuration.
 
 ### 2. Verify health
 
@@ -40,7 +48,7 @@ For Codex, install the bundled plugin and restart Codex:
 npx -y horizonlayer@2.0.0 install codex
 ```
 
-The installer copies the Codex plugin into `~/plugins/horizonlayer`, registers its local marketplace entry under `~/.agents/plugins/marketplace.json`, and asks the Codex CLI to add it. To install only the Claude Code integration instead, run `npx -y horizonlayer@2.0.0 install claude`. It stages a durable local marketplace at `~/.claude/horizonlayer-marketplace`, registers it with Claude Code, and installs `horizonlayer@horizonlayer` at user scope. Restart the relevant agent client after installation.
+The custom installer copies the plugin and only the skills selected for this project's enabled modules. For Codex it registers the local marketplace under `~/.agents/plugins/marketplace.json`; for Claude Code it stages a durable marketplace at `~/.claude/horizonlayer-marketplace`. The standalone `install codex`, `install claude`, or `install all` commands remain available and install the complete bundle. Restart the relevant agent client after installation.
 
 ### 4. Create and query your first typed record
 

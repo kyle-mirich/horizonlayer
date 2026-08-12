@@ -9,8 +9,8 @@ Use databases for repeated entities that benefit from validation, filtering, and
 
 ## Inspect before changing
 
-1. Resolve the workspace with `workspace` `list`.
-2. Call `database` `list`, then `database` `get` for the closest existing database.
+1. Resolve the workspace with `knowledge` operation `workspace` and `input.action: "list"`.
+2. Use `knowledge` operation `database` with `list`, then `get` for the closest existing database.
 3. Reuse its schema when it represents the same entity type. Do not create a new database per task or agent.
 4. Keep database, property, and row revisions separately; each mutation needs the revision of the entity it changes.
 
@@ -33,7 +33,7 @@ Use databases for repeated entities that benefit from validation, filtering, and
 
 ## Query precisely
 
-- Use `row` `query` for deterministic filtering and sorting; use `search` `records` when the user describes a record in natural language.
+- Use `knowledge` operation `row` with `input.action: "query"` for deterministic filtering; use operation `search` with records mode for natural-language retrieval.
 - All query filters are combined with AND.
 - `contains` is case-insensitive substring matching for textual fields and exact membership for multi-select.
 - Use `gt` and `lt` only for number or date properties. `is_empty` takes no value.

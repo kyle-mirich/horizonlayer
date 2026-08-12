@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { cp, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,7 @@ export interface InstallOptions {
   marketplaceSource?: string;
   pluginSource?: string;
   runCommand?: CommandRunner;
+  skills?: string[];
 }
 
 export interface InstallResult {
@@ -107,7 +108,26 @@ async function managedClaudeMarketplace(path: string, transaction?: string): Pro
   }
 }
 
-async function stageClaudeMarketplace(source: string, target: string): Promise<StagedClaudeMarketplace> {
+async function filterBundledSkills(pluginPath: string, skills: string[] | undefined): Promise<void> {
+  if (!skills) return;
+  const skillsPath = join(pluginPath, 'skills');
+  const selected = new Set(skills);
+  const entries = await readdir(skillsPath, { withFileTypes: true });
+  const available = new Set(entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name));
+  const missing = [...selected].filter((name) => !available.has(name));
+  if (missing.length > 0) {
+    throw new Error(`Bundled HorizonLayer skills are missing: ${missing.join(', ')}`);
+  }
+  await Promise.all(entries
+    .filter((entry) => entry.isDirectory() && !selected.has(entry.name))
+    .map((entry) => rm(join(skillsPath, entry.name), { force: true, recursive: true })));
+}
+
+async function stageClaudeMarketplace(
+  source: string,
+  target: string,
+  skills?: string[]
+): Promise<StagedClaudeMarketplace> {
   if (!await claudeMarketplaceExists(source)) {
     throw new Error(`Bundled HorizonLayer Claude marketplace is missing from ${source}`);
   }
@@ -132,6 +152,7 @@ async function stageClaudeMarketplace(source: string, target: string): Promise<S
       cp(join(source, '.claude-plugin'), join(staging, '.claude-plugin'), { recursive: true }),
       cp(join(source, 'plugins'), join(staging, 'plugins'), { recursive: true }),
     ]);
+    await filterBundledSkills(join(staging, 'plugins', PLUGIN_NAME), skills);
     await writeFile(join(staging, CLAUDE_MARKETPLACE_MARKER), JSON.stringify({
       installer: PLUGIN_NAME,
       kind: 'claude-marketplace',
@@ -200,7 +221,11 @@ async function managedCodexPlugin(path: string, transaction?: string): Promise<b
   }
 }
 
-async function stageCodexPlugin(source: string, target: string): Promise<StagedCodexPlugin> {
+async function stageCodexPlugin(
+  source: string,
+  target: string,
+  skills?: string[]
+): Promise<StagedCodexPlugin> {
   if (!await pathExists(source)) {
     throw new Error(`Bundled HorizonLayer plugin is missing from ${source}`);
   }
@@ -221,6 +246,7 @@ async function stageCodexPlugin(source: string, target: string): Promise<StagedC
 
   try {
     await cp(source, staging, { recursive: true });
+    await filterBundledSkills(staging, skills);
     await writeFile(join(staging, CODEX_PLUGIN_MARKER), JSON.stringify({
       installer: PLUGIN_NAME,
       kind: 'codex-plugin',
@@ -353,7 +379,8 @@ async function installClaude(
   source: string,
   marketplaceSource: string,
   home: string,
-  runCommand: CommandRunner
+  runCommand: CommandRunner,
+  skills?: string[]
 ): Promise<InstallResult> {
   if (!await pathExists(source)) {
     throw new Error(`Bundled HorizonLayer plugin is missing from ${source}`);
@@ -363,7 +390,7 @@ async function installClaude(
   }
 
   const target = join(home, '.claude', 'horizonlayer-marketplace');
-  const staged = await stageClaudeMarketplace(marketplaceSource, target);
+  const staged = await stageClaudeMarketplace(marketplaceSource, target, skills);
   try {
     runCommand('claude', ['plugin', 'marketplace', 'add', target]);
     runCommand('claude', [
@@ -388,12 +415,13 @@ async function installClaude(
 async function installCodex(
   source: string,
   home: string,
-  runCommand: CommandRunner
+  runCommand: CommandRunner,
+  skills?: string[]
 ): Promise<InstallResult> {
   const target = join(home, 'plugins', PLUGIN_NAME);
   const marketplacePath = join(home, '.agents', 'plugins', 'marketplace.json');
   validateCodexMarketplace(await readMarketplace(marketplacePath), marketplacePath);
-  const staged = await stageCodexPlugin(source, target);
+  const staged = await stageCodexPlugin(source, target, skills);
   try {
     const marketplaceName = await updateCodexMarketplace(marketplacePath);
     runCommand('codex', ['plugin', 'add', `${PLUGIN_NAME}@${marketplaceName}`]);
@@ -418,10 +446,10 @@ export async function installAgentPlugins(
   const results: InstallResult[] = [];
 
   if (target === 'all' || target === 'claude') {
-    results.push(await installClaude(source, marketplaceSource, home, runCommand));
+    results.push(await installClaude(source, marketplaceSource, home, runCommand, options.skills));
   }
   if (target === 'all' || target === 'codex') {
-    results.push(await installCodex(source, home, runCommand));
+    results.push(await installCodex(source, home, runCommand, options.skills));
   }
   return results;
 }

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "modules": [
+    "knowledge",
+    "issues"
+  ],
+  "knowledge": {
+    "workspace_name": "Default"
+  },
+  "issues": {
+    "project_key": "HORIZONLAYER",
+    "project_name": "horizonlayer"
+  }
+}

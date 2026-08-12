@@ -9,10 +9,10 @@ Sessions group related knowledge and attempts. A run journals one execution atte
 
 ## Resume before starting over
 
-1. Resolve the existing workspace with `workspace` `list`.
-2. Call `session` `list` for active sessions that match the work.
+1. Resolve the existing workspace with `knowledge` operation `workspace` and `input.action: "list"`.
+2. Use `knowledge` operation `session` with `input.action: "list"` for active sessions.
 3. Resume the closest session to retrieve its recent knowledge and execution context.
-4. Inspect relevant active runs with `run` `list` and `run` `get` before creating another attempt.
+4. Inspect active runs through the `knowledge` `run` operation with `list` and `get` before creating another attempt.
 
 Create a session only when the work needs continuity. Start a new run when beginning a distinct attempt with an identifiable agent, not for every tool call.
 

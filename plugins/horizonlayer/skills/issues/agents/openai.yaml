@@ -1,0 +1,11 @@
+interface:
+  display_name: "HorizonLayer Issues"
+  short_description: "Coordinate searchable agent work safely"
+  default_prompt: "Use $issues to find, claim, and update the next ready HorizonLayer Issue."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "horizonlayer"
+      description: "Jira-style projects, Issues, dependencies, and knowledge links"
+policy:
+  allow_implicit_invocation: true

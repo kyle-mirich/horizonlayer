@@ -9,18 +9,18 @@ Use the HorizonLayer MCP tools as a shared source of truth, not as a transcript 
 
 ## Orient first
 
-1. Call `workspace` with `action: "list"` and reuse the closest active workspace.
+1. Call `knowledge` with `operation: "workspace"` and `input: {"action":"list"}`; reuse the closest active workspace.
 2. Create a workspace only when no existing scope represents the project or subject.
 3. Keep the returned IDs and revisions. Mutations of existing entities require the latest revision.
 4. Start a `session` when the work should be resumable across turns or agents. Skip it for a one-off lookup.
 
 ## Retrieve before writing
 
-- Use `search` with `mode: "records"` first when the goal is to find a real page or row to inspect, update, or link. Its compact response is the default and avoids broad list crawls.
-- Use `search` with `mode: "rag"` only when semantic evidence across stored content is needed. Treat its chunks as citation-ready evidence, then follow canonical IDs when an entity must be changed.
+- Use `knowledge` with `operation: "search"` and `input.mode: "records"` first when the goal is to find a real page or row to inspect, update, or link.
+- Use `knowledge` search with `input.mode: "rag"` only when semantic evidence across stored content is needed. Treat chunks as citation-ready evidence, then follow canonical IDs when an entity must be changed.
 - Reuse compact typed references such as `p_…`, `r_…`, and `d_…` directly in later tool calls; they are lossless substitutes for UUIDs. Request `format: "full"` only when exact metadata is needed.
 - Always provide a search `scope`. Prefer workspace scope unless a known session or database is narrower.
-- Fetch the canonical entity with `page`, `row`, or `database` before mutating it. This prevents duplicate knowledge and stale revisions.
+- Fetch the canonical entity through the matching `knowledge` operation (`page`, `row`, or `database`) before mutating it.
 - Follow pagination while `page.has_more` is true and `page.next_offset` is not null.
 
 ## Store useful knowledge
@@ -29,7 +29,7 @@ Use the HorizonLayer MCP tools as a shared source of truth, not as a transcript 
 - Split a page into ordered, meaningful blocks. Prefer a few coherent blocks over one block per sentence.
 - Update an existing page when it already owns the subject; do not create date-stamped duplicates by default.
 - Use concise tags for stable retrieval dimensions and importance from `0` to `1` only when it changes retrieval priority.
-- Use `link` for explicit relationships that an agent should traverse later. Both endpoints must belong to the same workspace.
+- Use the `link` operation for explicit relationships. Use `navigate` for bounded reference-only traversal; request depth 1 first and never exceed 3.
 - Never store credentials, access tokens, private keys, or noisy raw logs.
 
 ## Mutate safely
