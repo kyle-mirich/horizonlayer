@@ -98,7 +98,7 @@ export async function startDashboard(): Promise<DashboardRuntime> {
 
   try {
     await initializeDatabase();
-    const appServer = createAppServer();
+    const appServer = createAppServer({ catalogMode: 'legacy' });
     httpServer = createDashboardHttpServer({
       appServer,
       databaseHealth: async () => {

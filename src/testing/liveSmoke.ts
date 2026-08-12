@@ -325,7 +325,10 @@ async function main(): Promise<void> {
     'DATABASE_URL is required so the live smoke can delete its isolated test workspace'
   );
   const suffix = randomUUID().slice(0, 8);
-  const { args, client, command, transport } = createStdioClient('horizonlayer-live-smoke');
+  const { args, client, command, transport } = createStdioClient(
+    'horizonlayer-live-smoke',
+    ['legacy-mcp']
+  );
   const cleanupState = {
     sessionClosed: false,
     sessionId: null as string | null,

@@ -26,6 +26,7 @@ describe('launcher commands', () => {
   it('keeps stdio MCP as the zero-argument default and accepts an explicit mode', () => {
     expect(parseLauncherMode([])).toBe('mcp');
     expect(parseLauncherMode(['mcp'])).toBe('mcp');
+    expect(parseLauncherMode(['legacy-mcp'])).toBe('legacy-mcp');
     expect(parseLauncherMode(['dashboard'])).toBe('dashboard');
     expect(parseLauncherMode(['setup'])).toBe('setup');
     expect(parseLauncherMode(['backup'])).toBe('backup');
@@ -98,6 +99,7 @@ describe('launcher commands', () => {
 
   it('restores saved managed services for MCP and dashboard starts after stop', () => {
     expect(shouldStartSavedRuntime('mcp')).toBe(true);
+    expect(shouldStartSavedRuntime('legacy-mcp')).toBe(true);
     expect(shouldStartSavedRuntime('dashboard')).toBe(true);
     expect(shouldStartSavedRuntime('mcp', true)).toBe(false);
     expect(shouldStartSavedRuntime('dashboard', true)).toBe(false);

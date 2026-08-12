@@ -1,9 +1,9 @@
 import { initializeDatabase } from './db/initialize.js';
 import { closePool } from './db/client.js';
-import { createAppServer } from './server.js';
+import { createAppServer, type CreateAppServerOptions } from './server.js';
 import { disposeEmbeddingProvider } from './search/embedder.js';
 
-export async function runServer(): Promise<void> {
+export async function runServer(options: CreateAppServerOptions = {}): Promise<void> {
   let server: ReturnType<typeof createAppServer> | null = null;
   let shutdownPromise: Promise<void> | null = null;
 
@@ -43,7 +43,7 @@ export async function runServer(): Promise<void> {
   try {
     await initializeDatabase();
 
-    server = createAppServer();
+    server = createAppServer(options);
     await server.start({
       transportType: 'stdio',
     });

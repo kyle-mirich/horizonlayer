@@ -128,9 +128,12 @@ integrationDescribe('Issue Module canonical persistence', () => {
     });
     await expect(issues.queryIssues({ project_id: project.id, ready: true }))
       .resolves.toContainEqual(expect.objectContaining({ id: ready.id }));
+    const prioritized = await issues.updateIssue(ready.id, { priority: 'highest', revision: ready.revision });
+    await expect(issues.queryIssues({ project_key: project.project_key, priority: ['highest'] }))
+      .resolves.toContainEqual(expect.objectContaining({ id: ready.id }));
     const claims = await Promise.allSettled([
-      issues.claimIssue(ready.id, 'agent-a', ready.revision),
-      issues.claimIssue(ready.id, 'agent-b', ready.revision),
+      issues.claimIssue(ready.id, 'agent-a', prioritized!.revision),
+      issues.claimIssue(ready.id, 'agent-b', prioritized!.revision),
     ]);
     expect(claims.filter((claim) => claim.status === 'fulfilled')).toHaveLength(1);
     expect(claims.filter((claim) => claim.status === 'rejected')).toHaveLength(1);
@@ -154,6 +157,21 @@ integrationDescribe('Issue Module canonical persistence', () => {
     expect(link.workspace_id).toBe(workspaceId);
     await expect(links.listLinks({ item_id: issue.id, item_type: 'issue' }))
       .resolves.toEqual([expect.objectContaining({ id: link.id })]);
+    const secondIssue = await issues.createIssue({
+      created_by: 'test', project_id: project.id, title: 'Second linked work',
+    });
+    await links.createLink({
+      from_id: issue.id,
+      from_type: 'issue',
+      to_id: secondIssue.id,
+      to_type: 'issue',
+      link_type: 'follows',
+    });
+    await expect(links.traverseLinks({ item_id: pageId, item_type: 'page', depth: 2 }))
+      .resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({ depth: 1, id: issue.id, type: 'issue' }),
+        expect.objectContaining({ depth: 2, id: secondIssue.id, type: 'issue' }),
+      ]));
   });
 });
 

@@ -120,6 +120,8 @@ export async function getIssue(idOrKey: string, includeArchived = false): Promis
 
 export async function queryIssues(params: {
   project_id?: string;
+  project_key?: string;
+  priority?: IssuePriority[];
   status?: IssueStatus[];
   assignee?: string | null;
   tags?: string[];
@@ -136,9 +138,20 @@ export async function queryIssues(params: {
     values.push(params.project_id);
     conditions.push(`candidate.project_id = $${values.length}`);
   }
+  if (params.project_key) {
+    values.push(params.project_key.trim().toUpperCase());
+    conditions.push(`EXISTS (
+      SELECT 1 FROM issue_projects project
+      WHERE project.id = candidate.project_id AND project.project_key = $${values.length}
+    )`);
+  }
   if (params.status?.length) {
     values.push(params.status);
     conditions.push(`candidate.status = ANY($${values.length}::text[])`);
+  }
+  if (params.priority?.length) {
+    values.push(params.priority);
+    conditions.push(`candidate.priority = ANY($${values.length}::text[])`);
   }
   if (params.assignee !== undefined) {
     values.push(params.assignee);

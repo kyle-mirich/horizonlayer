@@ -221,7 +221,7 @@ async function main(): Promise<void> {
 
   try {
     await initializeDatabase();
-    const appServer = createAppServer();
+    const appServer = createAppServer({ catalogMode: 'legacy' });
     httpServer = createDashboardHttpServer({
       appServer,
       databaseHealth: async () => {

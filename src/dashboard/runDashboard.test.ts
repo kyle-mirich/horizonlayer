@@ -102,6 +102,7 @@ describe('dashboard runtime', () => {
 
     expect(mocks.initializeDatabase).toHaveBeenCalledTimes(1);
     expect(mocks.createAppServer).toHaveBeenCalledTimes(1);
+    expect(mocks.createAppServer).toHaveBeenCalledWith({ catalogMode: 'legacy' });
     expect(mocks.createDashboardHttpServer).toHaveBeenCalledWith({
       appServer,
       databaseHealth: expect.any(Function),

@@ -36,6 +36,16 @@ export interface Link {
   updated_at: string;
 }
 
+export interface LinkTraversalItem {
+  depth: number;
+  from_id: string;
+  from_type: LinkItemType;
+  id: string;
+  link_id: string;
+  link_type: string;
+  type: LinkItemType;
+}
+
 function pagination(name: 'limit' | 'offset', value: number | undefined, fallback: number): number {
   const resolved = value ?? fallback;
   const max = name === 'limit' ? 101 : 1_000_000;
@@ -171,6 +181,61 @@ export async function listLinks(params: {
     values
   );
   return rows;
+}
+
+/** Traverse explicit links without expanding record content. */
+export async function traverseLinks(params: {
+  item_type: LinkItemType | string;
+  item_id: string;
+  depth?: number;
+  limit?: number;
+}): Promise<LinkTraversalItem[]> {
+  const startType = itemType(params.item_type);
+  const depth = params.depth ?? 1;
+  const limit = params.limit ?? 50;
+  if (!Number.isInteger(depth) || depth < 1 || depth > 3) {
+    throw new Error('depth must be an integer between 1 and 3');
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('limit must be an integer between 1 and 100');
+  }
+
+  const visited = new Set([`${startType}:${params.item_id}`]);
+  let frontier: LinkEndpoint[] = [{ id: params.item_id, type: startType }];
+  const results: LinkTraversalItem[] = [];
+
+  for (let currentDepth = 1; currentDepth <= depth && frontier.length > 0; currentDepth += 1) {
+    const next: LinkEndpoint[] = [];
+    for (const endpoint of frontier) {
+      const links = await listLinks({
+        direction: 'both',
+        item_id: endpoint.id,
+        item_type: endpoint.type,
+        limit: Math.min(101, limit + 1),
+      });
+      for (const link of links) {
+        const target = link.from_type === endpoint.type && link.from_id === endpoint.id
+          ? { id: link.to_id, type: link.to_type }
+          : { id: link.from_id, type: link.from_type };
+        const key = `${target.type}:${target.id}`;
+        if (visited.has(key)) continue;
+        visited.add(key);
+        results.push({
+          depth: currentDepth,
+          from_id: endpoint.id,
+          from_type: endpoint.type,
+          id: target.id,
+          link_id: link.id,
+          link_type: link.link_type,
+          type: target.type,
+        });
+        next.push(target);
+        if (results.length >= limit) return results;
+      }
+    }
+    frontier = next;
+  }
+  return results;
 }
 
 async function archiveStoredLink(id: string, revision: number): Promise<Link | null> {

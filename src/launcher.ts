@@ -24,7 +24,7 @@ import { isDependencyUnavailableCode } from './tools/common.js';
 
 const { Client } = pg;
 
-export type LauncherMode = 'backup' | 'dashboard' | 'doctor' | 'help' | 'install' | 'mcp' | 'recover' | 'reset' | 'setup' | 'stop';
+export type LauncherMode = 'backup' | 'dashboard' | 'doctor' | 'help' | 'install' | 'legacy-mcp' | 'mcp' | 'recover' | 'reset' | 'setup' | 'stop';
 
 export interface LauncherCommand {
   backupPath?: string;
@@ -42,11 +42,14 @@ class FriendlyBootstrapError extends Error {
   }
 }
 
-const USAGE = 'Usage: horizonlayer [mcp|setup|backup [FILE]|recover FILE [--yes]|dashboard [--open]|doctor|stop|reset --yes|install [all|codex|claude]]';
+const USAGE = 'Usage: horizonlayer [mcp|legacy-mcp|setup|backup [FILE]|recover FILE [--yes]|dashboard [--open]|doctor|stop|reset --yes|install [all|codex|claude]]';
 
 export function parseLauncherCommand(args: string[]): LauncherCommand {
   if (args.length === 0 || (args.length === 1 && args[0] === 'mcp')) {
     return { confirmReset: false, mode: 'mcp', openDashboard: false };
+  }
+  if (args.length === 1 && args[0] === 'legacy-mcp') {
+    return { confirmReset: false, mode: 'legacy-mcp', openDashboard: false };
   }
   if (args[0] === 'dashboard'
     && (args.length === 1 || (args.length === 2 && args[1] === '--open'))) {
@@ -97,7 +100,7 @@ export function shouldStartSavedRuntime(
   mode: LauncherMode,
   hasExplicitDatabaseUrl = false
 ): boolean {
-  return !hasExplicitDatabaseUrl && (mode === 'dashboard' || mode === 'mcp');
+  return !hasExplicitDatabaseUrl && (mode === 'dashboard' || mode === 'mcp' || mode === 'legacy-mcp');
 }
 
 export function shouldProvisionManagedRuntime(
@@ -488,7 +491,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
 
   const { runServer } = await import('./runServer.js');
   try {
-    await runServer();
+    await runServer({ catalogMode: mode === 'legacy-mcp' ? 'legacy' : 'modules' });
   } catch (error) {
     if (process.env.DATABASE_URL && isDatabaseUnavailable(error)) {
       throw new FriendlyBootstrapError(databaseUnavailableGuidance(process.env.DATABASE_URL),
