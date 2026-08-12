@@ -111,11 +111,11 @@ describe('link persistence contracts', () => {
     })).resolves.toHaveLength(1);
 
     const [sql, values] = mocks.poolQuery.mock.calls[0] ?? [];
-    expect(String(sql)).toContain('workspace_id = $1');
+    expect(String(sql)).toContain('workspace_id = $2');
     expect(String(sql)).toContain('from_type');
     expect(String(sql)).toContain('to_type');
     expect(String(sql)).toContain('LIMIT $6 OFFSET $7');
-    expect(values).toEqual(['ws-1', false, 'supports', 'row', 'row-1', 101, 30]);
+    expect(values).toEqual([false, 'ws-1', 'supports', 'row', 'row-1', 101, 30]);
     expect(mocks.requireActiveWorkspace).toHaveBeenCalledOnce();
   });
 

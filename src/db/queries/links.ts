@@ -24,7 +24,7 @@ const LINK_COLUMNS = `
 
 export interface Link {
   id: string;
-  workspace_id: string;
+  workspace_id: string | null;
   from_type: LinkItemType;
   from_id: string;
   to_type: LinkItemType;
@@ -63,12 +63,12 @@ interface LinkEndpoint {
 
 async function lockLinkEndpoints(
   client: PoolClient,
-  workspaceId: string,
+  workspaceId: string | null | undefined,
   endpoints: LinkEndpoint[]
 ): Promise<void> {
   const scopes = await lockActiveLinkedItemsForWrite(endpoints, client);
   for (const scope of scopes) {
-    if (scope.workspace_id !== workspaceId) {
+    if (workspaceId && scope.workspace_id && scope.workspace_id !== workspaceId) {
       throw new Error(
         `${scope.type} ${scope.id} belongs to workspace ${scope.workspace_id}, not ${workspaceId}`
       );
@@ -77,7 +77,7 @@ async function lockLinkEndpoints(
 }
 
 export async function createLink(params: {
-  workspace_id: string;
+  workspace_id?: string;
   from_type: LinkItemType | string;
   from_id: string;
   to_type: LinkItemType | string;
@@ -89,7 +89,7 @@ export async function createLink(params: {
   const linkType = (params.link_type ?? 'related').trim();
   if (!linkType) throw new Error('link_type cannot be empty');
 
-  await requireActiveWorkspace(params.workspace_id);
+  if (params.workspace_id) await requireActiveWorkspace(params.workspace_id);
   return withTransaction(async (client) => {
     await lockLinkEndpoints(client, params.workspace_id, [
       { id: params.from_id, type: fromType },
@@ -100,14 +100,14 @@ export async function createLink(params: {
          (workspace_id, from_type, from_id, to_type, to_id, link_type)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING ${LINK_COLUMNS}`,
-      [params.workspace_id, fromType, params.from_id, toType, params.to_id, linkType]
+      [params.workspace_id ?? null, fromType, params.from_id, toType, params.to_id, linkType]
     );
     return rows[0];
   });
 }
 
 export async function listLinks(params: {
-  workspace_id: string;
+  workspace_id?: string;
   item_type?: LinkItemType | string;
   item_id?: string;
   link_type?: string;
@@ -131,9 +131,14 @@ export async function listLinks(params: {
   const limit = pagination('limit', params.limit, 50);
   const offset = pagination('offset', params.offset, 0);
 
-  await requireActiveWorkspace(params.workspace_id);
-  const conditions = ['workspace_id = $1', '($2::boolean OR archived_at IS NULL)'];
-  const values: unknown[] = [params.workspace_id, params.include_archived ?? false];
+  if (params.workspace_id) await requireActiveWorkspace(params.workspace_id);
+  const conditions = ['($1::boolean OR archived_at IS NULL)'];
+  const values: unknown[] = [params.include_archived ?? false];
+
+  if (params.workspace_id) {
+    values.push(params.workspace_id);
+    conditions.push(`workspace_id = $${values.length}`);
+  }
 
   if (linkType) {
     values.push(linkType);
@@ -176,7 +181,7 @@ async function archiveStoredLink(id: string, revision: number): Promise<Link | n
      SET archived_at = NOW(),
          revision = revision + 1,
          updated_at = NOW()
-     WHERE id = $1 AND workspace_id = $2
+     WHERE id = $1 AND workspace_id IS NOT DISTINCT FROM $2
        AND revision = $3
        AND archived_at IS NULL
      RETURNING ${LINK_COLUMNS}`,
