@@ -12,6 +12,7 @@ import {
   createIssueDependency,
   getIssue,
   listIssueComments,
+  listIssueDependencies,
   queryIssues,
   releaseIssue,
   restoreIssue,
@@ -165,10 +166,13 @@ describe('Issue persistence', () => {
       id: 'dependency-1', blocking_issue_id: 'a', blocked_issue_id: 'b', revision: 1,
       archived_at: null, created_at: 'now', updated_at: 'now',
     };
-    mocks.query.mockResolvedValueOnce({ rows: [dependency] }).mockResolvedValueOnce({
+    mocks.query.mockResolvedValueOnce({ rows: [dependency] })
+      .mockResolvedValueOnce({ rows: [dependency] })
+      .mockResolvedValueOnce({
       rows: [{ ...dependency, archived_at: 'now', revision: 2 }],
     });
     await expect(createIssueDependency('a', 'b')).resolves.toEqual(dependency);
+    await expect(listIssueDependencies('a')).resolves.toEqual([dependency]);
     await expect(archiveIssueDependency('dependency-1', 1))
       .resolves.toMatchObject({ archived_at: 'now' });
   });

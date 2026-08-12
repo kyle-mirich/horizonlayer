@@ -208,7 +208,7 @@ describe('managed Runtime Recovery orchestration', () => {
         order.push('validate-archive:failed');
         throw new Error('invalid archive');
       },
-    }))).rejects.toThrow('stopped before current Canonical Knowledge was changed');
+    }))).rejects.toThrow('stopped before current canonical data was changed');
     expect(order).toEqual([
       'lock', 'config', 'workspace', 'stage:incoming.hlbackup', 'docker', 'start', 'wait',
       'validate-archive:failed', 'remove-workspace',
@@ -268,7 +268,7 @@ describe('managed Runtime Recovery orchestration', () => {
         artifact: '/requested/incoming.hlbackup',
         environment: { HORIZONLAYER_HOME: '/runtime' },
       }, dependencies(order, testCase.overrides(order))))
-        .rejects.toThrow('before current Canonical Knowledge was changed');
+        .rejects.toThrow('before current canonical data was changed');
       expect(order, testCase.name).not.toContain('stop');
       expect(order, testCase.name).not.toContain('clear-index');
       expect(order.at(-1), testCase.name).toBe('remove-workspace');
@@ -287,7 +287,7 @@ describe('managed Runtime Recovery orchestration', () => {
     expect(order).toEqual(['lock:busy']);
   });
 
-  it('keeps existing Canonical Knowledge and restarts services after a transactional restore failure', async () => {
+  it('keeps existing canonical data and restarts services after a transactional restore failure', async () => {
     const order: string[] = [];
     await expect(recoverManagedRuntime({
       artifact: '/requested/incoming.hlbackup',
@@ -297,7 +297,7 @@ describe('managed Runtime Recovery orchestration', () => {
         order.push(`restore:${containerName}:${basename(archive.payloadPath)}`);
         throw new Error('restore transaction rolled back');
       },
-    }))).rejects.toThrow('failed before commit; existing Canonical Knowledge was preserved');
+    }))).rejects.toThrow('failed before commit; existing canonical data was preserved');
     expect(order.slice(-5)).toEqual([
       'validate-canonical:horizonlayer-recovery-targetid',
       'remove:horizonlayer-recovery-targetid',
@@ -507,7 +507,7 @@ describe('managed Runtime Recovery orchestration', () => {
         if (startCount === 2) throw new Error('restart failed');
       },
     }))).rejects.toThrow(
-      'existing Canonical Knowledge was preserved, but the managed runtime could not be restarted automatically'
+      'existing canonical data was preserved, but the managed runtime could not be restarted automatically'
     );
     await expect(recoverManagedRuntime({
       artifact: '/requested/incoming.hlbackup',
@@ -714,7 +714,14 @@ describe('Runtime Recovery artifacts and process adapter', () => {
     expect(calls).toContainEqual(expect.objectContaining({
       args: expect.arrayContaining(['--command', 'ANALYZE;']),
     }));
-    expect(localRecoveryInternals.canonicalValidationSql()).toContain('workspace_search_changes');
+    const validationSql = localRecoveryInternals.canonicalValidationSql();
+    for (const table of [
+      'issue_projects', 'issues', 'issue_comments', 'issue_dependencies', 'record_links',
+    ]) {
+      expect(validationSql).toContain(`'${table}'`);
+    }
+    expect(validationSql).toContain('workspace_search_changes');
+    expect(validationSql).not.toContain("'links'");
     expect(calls).toContainEqual(expect.objectContaining({
       args: expect.arrayContaining(['up', '-d', '--no-deps', 'qdrant']),
     }));

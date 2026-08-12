@@ -87,7 +87,7 @@ Stop the managed services while keeping configuration and data:
 npx -y horizonlayer@2.0.0 stop
 ```
 
-### Back up and recover Canonical Knowledge
+### Back up and recover canonical data
 
 Create a private, point-in-time Backup of the saved managed runtime:
 
@@ -96,7 +96,7 @@ npx -y horizonlayer@2.0.0 backup
 npx -y horizonlayer@2.0.0 backup /path/to/knowledge.hlbackup
 ```
 
-Without `FILE`, HorizonLayer writes a collision-safe `.hlbackup` file under the runtime's `backups/` directory. The receipt reports its absolute path, snapshot interval, size, checksum, and compatibility versions. A Backup contains the complete PostgreSQL Canonical Knowledge store and must be handled as sensitive data. It excludes Qdrant because the Derived Search Index is rebuilt from PostgreSQL after recovery.
+Without `FILE`, HorizonLayer writes a collision-safe `.hlbackup` file under the runtime's `backups/` directory. The receipt reports its absolute path, snapshot interval, size, checksum, and compatibility versions. A Backup contains the complete PostgreSQL Knowledge and Issue store and must be handled as sensitive data. It excludes Qdrant because the Derived Search Index is rebuilt from PostgreSQL after recovery.
 
 Recovery is deliberately two-step. First preview the exact managed target; preview makes no changes and exits nonzero so it cannot be mistaken for completion:
 
@@ -117,7 +117,7 @@ npx -y horizonlayer@2.0.0 doctor
 npx -y horizonlayer@2.0.0 reset --yes
 ```
 
-The command uses the saved Compose project, so it removes only that managed runtime. It never targets an external `DATABASE_URL`. Run `setup` again, then recover the retained Backup to return its Canonical Knowledge to the fresh runtime.
+The command uses the saved Compose project, so it removes only that managed runtime. It never targets an external `DATABASE_URL`. Run `setup` again, then recover the retained Backup to return its canonical data to the fresh runtime.
 
 ## Advanced: use an existing PostgreSQL instance
 

@@ -4,7 +4,7 @@ import { z } from 'zod';
 const mocks = vi.hoisted(() => ({
   archiveIssue: vi.fn(), archiveIssueDependency: vi.fn(), archiveIssueProject: vi.fn(), archiveLink: vi.fn(),
   claimIssue: vi.fn(), createIssue: vi.fn(), createIssueDependency: vi.fn(), createIssueProject: vi.fn(), createLink: vi.fn(),
-  getIssue: vi.fn(), getIssueProject: vi.fn(), listIssueComments: vi.fn(), listIssueProjects: vi.fn(), listLinks: vi.fn(),
+  getIssue: vi.fn(), getIssueProject: vi.fn(), listIssueComments: vi.fn(), listIssueDependencies: vi.fn(), listIssueProjects: vi.fn(), listLinks: vi.fn(),
   queryIssues: vi.fn(), releaseIssue: vi.fn(), restoreIssue: vi.fn(), restoreIssueProject: vi.fn(), restoreLink: vi.fn(),
   traverseLinks: vi.fn(), updateIssue: vi.fn(), updateIssueProject: vi.fn(), addIssueComment: vi.fn(),
   coreExecute: vi.fn(),
@@ -29,6 +29,7 @@ vi.mock('../db/queries/issues.js', () => ({
   createIssueDependency: mocks.createIssueDependency,
   getIssue: mocks.getIssue,
   listIssueComments: mocks.listIssueComments,
+  listIssueDependencies: mocks.listIssueDependencies,
   queryIssues: mocks.queryIssues,
   releaseIssue: mocks.releaseIssue,
   restoreIssue: mocks.restoreIssue,
@@ -67,6 +68,7 @@ describe('compact module handlers', () => {
     for (const mock of Object.values(mocks)) mock.mockResolvedValue({ id });
     mocks.getIssue.mockResolvedValue({ id, issue_key: 'HL-1' });
     mocks.listIssueComments.mockResolvedValue([]);
+    mocks.listIssueDependencies.mockResolvedValue([]);
     mocks.listLinks.mockResolvedValue([]);
   });
 
@@ -132,6 +134,7 @@ describe('compact module handlers', () => {
     ['comment.list', { issue: 'HL-1' }],
     ['dependency.create', { blocking_issue: 'HL-1', blocked_issue: 'HL-2' }],
     ['dependency.archive', { dependency_id: id, revision: 1 }],
+    ['dependency.list', { issue: 'HL-1' }],
     ['link.create', { from_type: 'page', from_id: id, to_type: 'issue', to_id: id2 }],
     ['link.list', { item_type: 'issue', item_id: id }],
     ['link.archive', { link_id: id, revision: 1 }],
