@@ -5,6 +5,7 @@ const schema = readFileSync(new URL('../../schema.sql', import.meta.url), 'utf8'
 
 describe('clean schema contract', () => {
   it('defines the canonical knowledge tables directly', () => {
+    expect(schema).not.toContain('schema_migrations');
     expect(schema).toContain('CREATE TABLE IF NOT EXISTS workspaces');
     expect(schema).toContain('CREATE TABLE IF NOT EXISTS pages');
     expect(schema).toContain('CREATE TABLE IF NOT EXISTS databases');

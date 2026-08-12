@@ -7,7 +7,7 @@ HorizonLayer Backup protects canonical Knowledge and Issue data stored in the sa
 ```bash
 horizonlayer doctor
 horizonlayer backup
-horizonlayer backup /secure/path/team-knowledge.hlbackup
+horizonlayer backup /secure/path/horizonlayer-data.hlbackup
 ```
 
 The default destination is the private `backups/` directory beside `runtime.json`; it survives `horizonlayer reset --yes`. An explicit parent directory must already exist. HorizonLayer writes a PostgreSQL custom-format payload to a private temporary file, validates it with the managed container's PostgreSQL 17 tools, adds a versioned manifest and SHA-256 checksum, and atomically publishes a mode-`0600` `.hlbackup`. Existing destinations are never replaced.
@@ -19,7 +19,7 @@ The receipt's snapshot interval bounds when PostgreSQL selected its consistent p
 ## Preview before confirmation
 
 ```bash
-horizonlayer recover /secure/path/team-knowledge.hlbackup
+horizonlayer recover /secure/path/horizonlayer-data.hlbackup
 ```
 
 Preview fully validates framing, compatibility, length, and checksum without starting or stopping services. It prints the absolute artifact, saved `runtime.json`, target Compose project, snapshot interval, scope and versions, Derived Search Index policy, and exact confirmation command. Its exit status is `1` by design.
@@ -27,7 +27,7 @@ Preview fully validates framing, compatibility, length, and checksum without sta
 Confirm only after verifying all displayed paths and the source:
 
 ```bash
-horizonlayer recover /secure/path/team-knowledge.hlbackup --yes
+horizonlayer recover /secure/path/horizonlayer-data.hlbackup --yes
 ```
 
 Confirmed recovery acquires the lifecycle lock and rejects `DATABASE_URL`, `QDRANT_URL`, or `RAG_ENABLED` overrides. It starts and health-checks the saved runtime, validates both the requested archive and an automatic safety Backup, then stops the normal PostgreSQL and Qdrant services. A uniquely named PostgreSQL container mounts the existing managed volume without publishing its normal host port. `pg_restore` uses `--clean --if-exists --no-owner --no-acl --single-transaction --exit-on-error`, so an SQL failure before commit leaves the old database intact.

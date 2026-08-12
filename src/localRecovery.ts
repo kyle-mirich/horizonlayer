@@ -51,7 +51,6 @@ const EXPECTED_CANONICAL_TABLES = [
   'pages',
   'record_links',
   'run_checkpoints',
-  'schema_migrations',
   'sessions',
   'workspace_search_changes',
   'workspaces',
