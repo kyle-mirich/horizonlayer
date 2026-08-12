@@ -1,9 +1,14 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from './config.js';
+import { config, loadConfig, reloadConfig } from './config.js';
 
 describe('environment configuration', () => {
+  it('refreshes the live binding after the launcher applies runtime values', () => {
+    reloadConfig({ DATABASE_URL: 'postgres://local/runtime' });
+    expect(config.database.url).toBe('postgres://local/runtime');
+    reloadConfig({});
+  });
   it('uses local-first defaults without reading a config file', () => {
     expect(loadConfig({})).toEqual({
       dashboard: {

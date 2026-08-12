@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -192,6 +192,17 @@ describe('plugin installer', () => {
     );
     await expect(readFile(join(target, '.horizonlayer-managed-plugin.json'), 'utf8'))
       .resolves.toContain('"kind":"codex-plugin"');
+  });
+
+  it('installs only the bundled skills selected for the project modules', async () => {
+    const home = await temporaryHome();
+    await installAgentPlugins('codex', {
+      homeDirectory: home,
+      pluginSource,
+      runCommand: vi.fn(),
+      skills: ['issues'],
+    });
+    await expect(readdir(join(codexPluginTarget(home), 'skills'))).resolves.toEqual(['issues']);
   });
 
   it('does not overwrite an unmanaged Codex plugin target', async () => {

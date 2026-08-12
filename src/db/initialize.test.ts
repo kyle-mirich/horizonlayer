@@ -30,7 +30,7 @@ describe('database initializer', () => {
 
   it('applies schema.sql under one transaction-scoped advisory lock for a fresh database', async () => {
     mocks.clientQuery.mockImplementation(async (sql: string) => {
-      if (sql.includes("to_regclass('schema_migrations')")) {
+      if (sql.includes('schema_migrations')) {
         return { rows: [{ migrations: null, workspaces: null }] };
       }
       return { rowCount: 0, rows: [] };
@@ -49,7 +49,7 @@ describe('database initializer', () => {
       ['BEGIN'],
       ['SELECT pg_advisory_xact_lock($1)', [7_243_612_901]],
       ['SET LOCAL search_path = public, pg_catalog'],
-      [expect.stringContaining("to_regclass('schema_migrations')")],
+      [expect.stringContaining("format('%I.schema_migrations', current_schema())")],
       ['-- canonical schema'],
       ['COMMIT'],
     ]);
@@ -58,7 +58,7 @@ describe('database initializer', () => {
 
   it('migrates an existing unversioned database before applying the v3 schema', async () => {
     mocks.clientQuery.mockImplementation(async (sql: string) => {
-      if (sql.includes("to_regclass('schema_migrations')")) {
+      if (sql.includes('schema_migrations')) {
         return { rows: [{ migrations: null, workspaces: 'workspaces' }] };
       }
       return { rowCount: 0, rows: [] };
@@ -71,7 +71,7 @@ describe('database initializer', () => {
       'BEGIN',
       'SELECT pg_advisory_xact_lock($1)',
       'SET LOCAL search_path = public, pg_catalog',
-      expect.stringContaining("to_regclass('schema_migrations')"),
+      expect.stringContaining("format('%I.schema_migrations', current_schema())"),
       '-- v3 migration',
       '-- canonical schema',
       'COMMIT',
@@ -82,7 +82,7 @@ describe('database initializer', () => {
     const schemaError = new Error('schema failed');
     mocks.clientQuery.mockImplementation(async (sql: string) => {
       if (sql === '-- canonical schema') throw schemaError;
-      if (sql.includes("to_regclass('schema_migrations')")) {
+      if (sql.includes('schema_migrations')) {
         return { rows: [{ migrations: null, workspaces: null }] };
       }
       return { rowCount: 0, rows: [] };
@@ -98,7 +98,7 @@ describe('database initializer', () => {
   it('rolls back a failed v2-to-v3 migration before the canonical schema is applied', async () => {
     const migrationError = new Error('migration failed');
     mocks.clientQuery.mockImplementation(async (sql: string) => {
-      if (sql.includes("to_regclass('schema_migrations')")) {
+      if (sql.includes('schema_migrations')) {
         return { rows: [{ migrations: null, workspaces: 'workspaces' }] };
       }
       if (sql === '-- v3 migration') throw migrationError;

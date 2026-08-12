@@ -18,8 +18,8 @@ export async function initializeDatabase(): Promise<void> {
       migrations: string | null;
       workspaces: string | null;
     }>(
-      `SELECT to_regclass('schema_migrations')::text AS migrations,
-              to_regclass('workspaces')::text AS workspaces`
+      `SELECT to_regclass(format('%I.schema_migrations', current_schema()))::text AS migrations,
+              to_regclass(format('%I.workspaces', current_schema()))::text AS workspaces`
     );
     if (rows[0]?.workspaces && !rows[0].migrations) {
       await client.query(migration);

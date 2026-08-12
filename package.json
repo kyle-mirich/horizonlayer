@@ -1,7 +1,7 @@
 {
   "name": "horizonlayer",
   "version": "2.0.0",
-  "description": "Local-first MCP server for durable agent knowledge backed by PostgreSQL",
+  "description": "Local-first MCP server for durable agent knowledge and issue tracking backed by PostgreSQL",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -17,6 +17,7 @@
     "postgres",
     "agent-memory",
     "knowledge-base",
+    "issue-tracking",
     "search"
   ],
   "engines": {

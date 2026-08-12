@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 DO $$
 BEGIN
-  IF to_regclass('record_links') IS NULL AND to_regclass('links') IS NOT NULL THEN
+  IF to_regclass(format('%I.record_links', current_schema())) IS NULL
+    AND to_regclass(format('%I.links', current_schema())) IS NOT NULL THEN
     ALTER TABLE links RENAME TO record_links;
   END IF;
 END;

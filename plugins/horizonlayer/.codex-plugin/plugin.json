@@ -1,7 +1,7 @@
 {
   "name": "horizonlayer",
   "version": "2.0.0",
-  "description": "Durable PostgreSQL knowledge, typed records, and resumable work for coding agents.",
+  "description": "Durable PostgreSQL knowledge and agent-friendly issue tracking for coding agents.",
   "author": {
     "name": "Kyle Mirich",
     "url": "https://github.com/kyle-mirich"
@@ -9,13 +9,13 @@
   "homepage": "https://github.com/kyle-mirich/horizonlayer",
   "repository": "https://github.com/kyle-mirich/horizonlayer",
   "license": "MIT",
-  "keywords": ["agent-memory", "knowledge", "mcp", "postgres"],
+  "keywords": ["agent-memory", "issue-tracking", "knowledge", "mcp", "postgres"],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "HorizonLayer",
-    "shortDescription": "Durable local knowledge for coding agents",
-    "longDescription": "Give Codex a local-first PostgreSQL knowledge workspace with pages, typed records, search, relationships, and resumable execution checkpoints through MCP.",
+    "shortDescription": "Durable knowledge and Issues for coding agents",
+    "longDescription": "Give Codex local-first PostgreSQL knowledge workspaces and Jira-style Issue Projects with search, assignment, dependencies, comments, and explicit cross-links through one compact MCP server.",
     "developerName": "Kyle Mirich",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
@@ -23,7 +23,8 @@
     "defaultPrompt": [
       "Find the durable context for this project.",
       "Save this decision for the next agent.",
-      "Resume the latest HorizonLayer session."
+      "Resume the latest HorizonLayer session.",
+      "Find and claim the next ready HorizonLayer Issue."
     ],
     "brandColor": "#2E6256"
   }

@@ -55,8 +55,11 @@ export function parseLauncherCommand(args: string[]): LauncherCommand {
     && (args.length === 1 || (args.length === 2 && args[1] === '--open'))) {
     return { confirmReset: false, mode: 'dashboard', openDashboard: args[1] === '--open' };
   }
-  if (args.length === 1 && ['doctor', 'setup', 'stop'].includes(args[0]!)) {
-    return { confirmReset: false, mode: args[0] as 'doctor' | 'setup' | 'stop', openDashboard: false };
+  if (args[0] === 'setup') {
+    return { confirmReset: false, mode: 'setup', openDashboard: false };
+  }
+  if (args.length === 1 && ['doctor', 'stop'].includes(args[0]!)) {
+    return { confirmReset: false, mode: args[0] as 'doctor' | 'stop', openDashboard: false };
   }
   if (args[0] === 'backup' && args.length <= 2) {
     return {
@@ -261,7 +264,7 @@ async function warmLocalRag(): Promise<void> {
   }
 }
 
-async function runSetup(): Promise<void> {
+async function runSetup(projectOptions: import('./projectSetup.js').ProjectSetupOptions = {}): Promise<void> {
   const configPath = localRuntimeConfigPath();
   await withLocalRuntimeLifecycleLock(async () => {
     await ensureDockerDesktopReady();
@@ -270,6 +273,8 @@ async function runSetup(): Promise<void> {
     // Setup always manages the saved local runtime. Respecting a caller's DATABASE_URL here
     // could initialize an unrelated external database while the launcher starts local containers.
     applyLocalRuntimeEnvironment(config, process.env, true);
+    const { reloadConfig } = await import('./config.js');
+    reloadConfig();
 
     console.error('Starting HorizonLayer PostgreSQL and Qdrant services...');
     runCompose('start', config);
@@ -286,7 +291,19 @@ async function runSetup(): Promise<void> {
       await closePool();
     }
     await warmLocalRag();
+    const { setupProject } = await import('./projectSetup.js');
+    let project: Awaited<ReturnType<typeof setupProject>>;
+    try {
+      project = await setupProject(projectOptions);
+    } finally {
+      await closePool();
+    }
     console.error(`HorizonLayer setup is complete. Configuration: ${configPath}`);
+    console.error(`Project configuration: ${project.configPath}`);
+    console.error(`Enabled modules: ${project.config.modules.join(', ')}`);
+    if (project.installed.length > 0) {
+      console.error(`Installed bundled skills for: ${project.installed.map((item) => item.host).join(', ')}`);
+    }
     console.error('Run `horizonlayer dashboard --open` or start the MCP server with `horizonlayer mcp`.');
   }, configPath);
 }
@@ -388,8 +405,10 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
     console.error([
       USAGE,
       '',
-      '  mcp        Start the stdio MCP server (default)',
-      '  setup      Start Docker Desktop, provision services, initialize the schema, and warm the model',
+      '  mcp        Start the compact module-aware stdio MCP server (default)',
+      '  legacy-mcp Start the former eight-tool MCP catalog for migration',
+      '  setup      Provision services and configure project modules and optional bundled skills',
+      '             Flags: --modules knowledge|issues|both --skills none|codex|claude|all --non-interactive',
       '  backup     Create a point-in-time Backup of all managed Canonical Knowledge',
       '  recover    Preview a managed Runtime Recovery; pass --yes after FILE to perform it',
       '  dashboard  Start the local dashboard; pass --open to open it in a browser',
@@ -413,7 +432,9 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
   }
 
   if (mode === 'setup') {
-    await runSetup();
+    const { parseProjectSetupArgs } = await import('./projectSetup.js');
+    const setupOptions = parseProjectSetupArgs(args.slice(1));
+    await runSetup(setupOptions);
     return;
   }
 
@@ -462,7 +483,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
   const resolvedRuntime = await resolveManagedRuntimeForLaunch(
     await readLocalRuntimeConfig(),
     hasExplicitRuntimeOverride(),
-    runSetup,
+    () => runSetup({ interactive: false }),
     () => readLocalRuntimeConfig()
   );
   let { localRuntime } = resolvedRuntime;
@@ -473,6 +494,8 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
       localRuntime = await startSavedRuntimeForLaunch();
     }
   }
+  const { reloadConfig } = await import('./config.js');
+  reloadConfig();
 
   if (!process.env.DATABASE_URL) {
     throw new FriendlyBootstrapError(
@@ -491,7 +514,13 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
 
   const { runServer } = await import('./runServer.js');
   try {
-    await runServer({ catalogMode: mode === 'legacy-mcp' ? 'legacy' : 'modules' });
+    if (mode === 'legacy-mcp') {
+      await runServer({ catalogMode: 'legacy' });
+    } else {
+      const { readProjectConfig } = await import('./projectSetup.js');
+      const project = process.env.HORIZONLAYER_MODULES ? null : await readProjectConfig();
+      await runServer({ catalogMode: 'modules', modules: project?.modules });
+    }
   } catch (error) {
     if (process.env.DATABASE_URL && isDatabaseUnavailable(error)) {
       throw new FriendlyBootstrapError(databaseUnavailableGuidance(process.env.DATABASE_URL),
