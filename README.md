@@ -47,10 +47,10 @@ The installer copies the Codex plugin into `~/plugins/horizonlayer`, registers i
 After restarting the agent, paste this into its chat. It uses the installed HorizonLayer MCP tools and returns the identifiers and query result in the chat:
 
 ```text
-Use HorizonLayer's MCP tools. Create a workspace named "HorizonLayer Quickstart" unless one already exists with that name. In it, create a typed database named "Decisions" with a title property named "Name" and a select property named "Status" whose allowed value is "accepted". Create a row with Name "HorizonLayer local setup is verified" and Status "accepted". Then query the Decisions rows where Status equals accepted. Show the workspace, database, and row IDs plus the query result.
+Use HorizonLayer's `knowledge` MCP tool. Create a workspace named "HorizonLayer Quickstart" unless one already exists with that name. In it, create a typed database named "Decisions" with a title property named "Name" and a select property named "Status" whose allowed value is "accepted". Create a row with Name "HorizonLayer local setup is verified" and Status "accepted". Then query the Decisions rows where Status equals accepted. Show the workspace, database, and row IDs plus the query result.
 ```
 
-The `database` tool defines the typed properties; the `row` tool creates and queries records. Property names and select choices are exact and case-sensitive.
+The `knowledge` tool selects an operation family (`workspace`, `database`, `row`, and others) and accepts that operation's action in `input`. Property names and select choices are exact and case-sensitive.
 
 ### 5. Inspect it in the local dashboard
 
@@ -151,12 +151,16 @@ Run `npx -y horizonlayer@2.0.0 help` for the complete command list.
 
 ## Data model and behavior
 
-- Every record belongs to an isolated workspace.
+- Knowledge records belong to isolated workspaces. Issues belong to Jira-style Issue Projects; these scopes stay distinct.
 - Pages store block-based narrative knowledge; typed databases define properties and rows store validated records.
 - Existing knowledge mutations use optimistic revisions. Archive and restore are the public lifecycle operations; there is no public hard-delete workflow.
 - PostgreSQL-native record search is available in a workspace scope. The optional local RAG index is derived and rebuildable.
 
-The MCP server exposes `workspace`, `session`, `page`, `database`, `row`, `link`, `search`, and `run`. Search responses use compact, lossless typed references by default; request `format: "full"` when an exact UUID or complete metadata is needed.
+The default MCP catalog exposes only the enabled `knowledge` and `issues` module tools. Set `HORIZONLAYER_MODULES=knowledge` or `HORIZONLAYER_MODULES=issues` to enable one module surface; unset it or use `both` for both. The tools share one PostgreSQL database and can create explicit Page-Issue links without automatically expanding either side. `knowledge` supports bounded `navigate` traversal and `issues` supports `link.traverse`, both capped at depth 3.
+
+Issue queries use a compact, AND-only Jira-style language. Supported filters are `project`, `status`, `priority`, `assignee`, `tag`, `text` (or `summary`), and `ready`; `IN (...)` is supported for status, priority, and tags. For example: `project = HL AND status IN (open, blocked) AND assignee IS EMPTY`.
+
+Existing integrations can temporarily launch `horizonlayer legacy-mcp` to expose the former `workspace`, `session`, `page`, `database`, `row`, `link`, `search`, and `run` catalog. This mode is explicitly opt-in. Search responses there retain compact, lossless typed references by default.
 
 Read [the database guide](docs/database.md) for the typed model and [the flow guide](docs/flows.md) for the startup and MCP journeys.
 

@@ -38,7 +38,7 @@ async function cleanup(
 
 async function main(): Promise<void> {
   const suffix = randomUUID().slice(0, 8);
-  const { client, transport } = createStdioClient('horizonlayer-agent-demo');
+  const { client, transport } = createStdioClient('horizonlayer-agent-demo', ['legacy-mcp']);
   let sessionId: string | null = null;
   let workspaceId: string | null = null;
   let workspaceRevision: number | null = null;

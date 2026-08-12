@@ -149,13 +149,15 @@ function processEnvironment(): Record<string, string> {
   );
 }
 
-export function createStdioClient(name: string): {
+export function createStdioClient(name: string, launcherArgs: string[] = []): {
   args: string[];
   client: Client;
   command: string;
   transport: StdioClientTransport;
 } {
-  const { args, command } = resolveMcpCommand();
+  const resolved = resolveMcpCommand();
+  const command = resolved.command;
+  const args = [...resolved.args, ...launcherArgs];
   const client = new Client({ name, version: '0.0.1' }, { capabilities: {} });
   const transport = new StdioClientTransport({
     args,

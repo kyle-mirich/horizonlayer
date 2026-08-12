@@ -51,6 +51,7 @@ describe('runServer stdio runtime', () => {
 
     expect(initializeDatabaseMock).toHaveBeenCalledTimes(1);
     expect(createAppServerMock).toHaveBeenCalledTimes(1);
+    expect(createAppServerMock).toHaveBeenCalledWith({});
     expect(startMock).toHaveBeenCalledWith({
       transportType: 'stdio',
     });

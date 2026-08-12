@@ -131,6 +131,37 @@ describe('link persistence contracts', () => {
     expect(mocks.poolQuery).not.toHaveBeenCalled();
   });
 
+  it('traverses both link directions, skips cycles, and honors the global limit', async () => {
+    mocks.poolQuery
+      .mockResolvedValueOnce({ rows: [
+        link(),
+        link({ id: 'link-2', from_type: 'issue', from_id: 'issue-0', to_type: 'page', to_id: 'page-1' }),
+      ] })
+      .mockResolvedValueOnce({ rows: [
+        link(),
+        link({ id: 'link-3', from_type: 'row', from_id: 'row-1', to_type: 'issue', to_id: 'issue-1' }),
+      ] });
+    const { traverseLinks } = await import('./links.js');
+
+    await expect(traverseLinks({
+      item_type: 'page', item_id: 'page-1', depth: 3, limit: 3,
+    })).resolves.toEqual([
+      expect.objectContaining({ depth: 1, id: 'row-1', type: 'row' }),
+      expect.objectContaining({ depth: 1, id: 'issue-0', type: 'issue' }),
+      expect.objectContaining({ depth: 2, id: 'issue-1', type: 'issue' }),
+    ]);
+    expect(mocks.poolQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds traversal depth and result size before querying', async () => {
+    const { traverseLinks } = await import('./links.js');
+    await expect(traverseLinks({ item_type: 'page', item_id: 'page-1', depth: 0 }))
+      .rejects.toThrow('depth must be an integer between 1 and 3');
+    await expect(traverseLinks({ item_type: 'page', item_id: 'page-1', limit: 101 }))
+      .rejects.toThrow('limit must be an integer between 1 and 100');
+    expect(mocks.poolQuery).not.toHaveBeenCalled();
+  });
+
   it('archives links with optimistic revisions while keeping relationship fields immutable', async () => {
     mocks.poolQuery.mockResolvedValueOnce({
       rows: [link({ revision: 2, archived_at: '2026-01-02T00:00:00.000Z' })],
