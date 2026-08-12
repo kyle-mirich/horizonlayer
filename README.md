@@ -93,7 +93,7 @@ Create a private, point-in-time Backup of the saved managed runtime:
 
 ```bash
 npx -y horizonlayer@2.0.0 backup
-npx -y horizonlayer@2.0.0 backup /path/to/knowledge.hlbackup
+npx -y horizonlayer@2.0.0 backup /path/to/horizonlayer-data.hlbackup
 ```
 
 Without `FILE`, HorizonLayer writes a collision-safe `.hlbackup` file under the runtime's `backups/` directory. The receipt reports its absolute path, snapshot interval, size, checksum, and compatibility versions. A Backup contains the complete PostgreSQL Knowledge and Issue store and must be handled as sensitive data. It excludes Qdrant because the Derived Search Index is rebuilt from PostgreSQL after recovery.
@@ -101,8 +101,8 @@ Without `FILE`, HorizonLayer writes a collision-safe `.hlbackup` file under the 
 Recovery is deliberately two-step. First preview the exact managed target; preview makes no changes and exits nonzero so it cannot be mistaken for completion:
 
 ```bash
-npx -y horizonlayer@2.0.0 recover /path/to/knowledge.hlbackup
-npx -y horizonlayer@2.0.0 recover /path/to/knowledge.hlbackup --yes
+npx -y horizonlayer@2.0.0 recover /path/to/horizonlayer-data.hlbackup
+npx -y horizonlayer@2.0.0 recover /path/to/horizonlayer-data.hlbackup --yes
 ```
 
 Only use `--yes` after checking the artifact path, saved configuration path, Compose project, compatibility, checksum, and trust warning. Confirmed recovery validates the archive, retains a safety Backup of the current database, stops published services, restores atomically in an isolated PostgreSQL container, validates the canonical schema, clears the derived Qdrant collection, and restarts healthy services. It never targets an explicit `DATABASE_URL` and never deletes Docker volumes. Keep the reported safety Backup until the recovered state has been inspected through MCP or the dashboard. See the [Backup and Runtime Recovery guide](docs/backup-and-recovery.md) for the failure model and troubleshooting workflow.

@@ -32,7 +32,6 @@
     "!dist/**/*.test.*",
     "!dist/testing",
     "docker-compose.yml",
-    "migrations",
     ".claude-plugin/marketplace.json",
     "plugins/horizonlayer",
     "schema.sql",

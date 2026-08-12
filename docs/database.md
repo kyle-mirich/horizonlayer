@@ -2,7 +2,7 @@
 
 ## Canonical storage
 
-HorizonLayer uses PostgreSQL as its canonical local store. The first connection applies the fresh canonical [`schema.sql`](../schema.sql) schema; existing supported schemas receive forward-only compatibility migrations during initialization. Docker-managed setup runs PostgreSQL locally, while the advanced path in the [README](../README.md#advanced-use-an-existing-postgresql-instance) can use a PostgreSQL instance you operate.
+HorizonLayer uses PostgreSQL as its canonical local store. The first connection applies the fresh canonical [`schema.sql`](../schema.sql) schema. There is no migration or compatibility layer because HorizonLayer has no supported legacy installations yet. Docker-managed setup runs PostgreSQL locally, while the advanced path in the [README](../README.md#advanced-use-an-existing-postgresql-instance) can use a PostgreSQL instance you operate.
 
 Qdrant is optional and local by default. It holds a derived, rebuildable semantic index only; PostgreSQL remains authoritative. HorizonLayer does not provide hosted or multi-user database infrastructure.
 

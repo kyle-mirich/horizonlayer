@@ -1,12 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
-CREATE TABLE IF NOT EXISTS schema_migrations (
-  version    INTEGER PRIMARY KEY CHECK (version > 0),
-  name       TEXT NOT NULL CHECK (BTRIM(name) <> ''),
-  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 CREATE OR REPLACE FUNCTION database_row_value_search_text(
   candidate_text TEXT,
   candidate_json JSONB,
@@ -1203,7 +1197,3 @@ CREATE INDEX IF NOT EXISTS agent_runs_agent_status_idx
 
 CREATE INDEX IF NOT EXISTS run_checkpoints_run_created_idx
   ON run_checkpoints(run_id, created_at DESC);
-
-INSERT INTO schema_migrations (version, name)
-VALUES (1, 'canonical-knowledge-v2'), (2, 'issue-modules-v3')
-ON CONFLICT (version) DO NOTHING;

@@ -7,10 +7,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 const integrationDatabaseUrl = process.env.HORIZONLAYER_INTEGRATION_DATABASE_URL;
 const integrationDescribe = integrationDatabaseUrl ? describe.sequential : describe.skip;
 const schemaSql = readFileSync(new URL('../../schema.sql', import.meta.url), 'utf8');
-const migrationSql = readFileSync(
-  new URL('../../migrations/0002_issue_modules_v3.sql', import.meta.url),
-  'utf8'
-);
 
 function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
@@ -172,59 +168,5 @@ integrationDescribe('Issue Module canonical persistence', () => {
         expect.objectContaining({ depth: 1, id: issue.id, type: 'issue' }),
         expect.objectContaining({ depth: 2, id: secondIssue.id, type: 'issue' }),
       ]));
-  });
-});
-
-integrationDescribe('v2 to v3 migration', () => {
-  it('preserves legacy knowledge and link identities transactionally', async () => {
-    const schemaName = `hl_migration_${randomUUID().replaceAll('-', '')}`;
-    const pool = new pg.Pool({ connectionString: integrationDatabaseUrl });
-    await pool.query(`CREATE SCHEMA ${quoteIdentifier(schemaName)}`);
-    const client = await pool.connect();
-    try {
-      await setSearchPath(client, schemaName);
-      await client.query(schemaSql);
-      const workspace = await client.query<{ id: string }>(
-        `INSERT INTO workspaces (name) VALUES ('Legacy') RETURNING id`
-      );
-      const page = await client.query<{ id: string }>(
-        `INSERT INTO pages (workspace_id, title) VALUES ($1, 'Legacy page') RETURNING id`,
-        [workspace.rows[0].id]
-      );
-      const link = await client.query<{ id: string }>(
-        `INSERT INTO links (workspace_id, from_type, from_id, to_type, to_id)
-         VALUES ($1, 'workspace', $1, 'page', $2) RETURNING id`,
-        [workspace.rows[0].id, page.rows[0].id]
-      );
-
-      await client.query('DROP VIEW links');
-      await client.query('ALTER TABLE record_links RENAME TO links');
-      await client.query(
-        'ALTER TABLE links RENAME CONSTRAINT record_links_from_type_check TO links_from_type_check'
-      );
-      await client.query(
-        'ALTER TABLE links RENAME CONSTRAINT record_links_to_type_check TO links_to_type_check'
-      );
-      await client.query('ALTER TABLE links ALTER COLUMN workspace_id SET NOT NULL');
-      await client.query('DROP TABLE schema_migrations');
-
-      await client.query('BEGIN');
-      await client.query(migrationSql);
-      await client.query(schemaSql);
-      await client.query('COMMIT');
-
-      const preserved = await client.query<{ id: string }>('SELECT id FROM links WHERE id = $1', [link.rows[0].id]);
-      expect(preserved.rows).toEqual([{ id: link.rows[0].id }]);
-      await expect(client.query(
-        `INSERT INTO issue_projects (project_key, name) VALUES ('UP', 'Upgraded')`
-      )).resolves.toMatchObject({ rowCount: 1 });
-      await expect(client.query('SELECT version FROM schema_migrations ORDER BY version'))
-        .resolves.toMatchObject({ rows: [{ version: 1 }, { version: 2 }] });
-    } finally {
-      await client.query('ROLLBACK').catch(() => undefined);
-      client.release();
-      await pool.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
-      await pool.end();
-    }
   });
 });
