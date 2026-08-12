@@ -222,7 +222,7 @@ function sortedUnique(values: Iterable<string>): string[] {
 export async function lockActiveLinkedItemsForWrite(
   items: LinkedItemReference[],
   queryable: Queryable
-): Promise<Array<LinkedItemReference & { workspace_id: string }>> {
+): Promise<Array<LinkedItemReference & { workspace_id: string | null }>> {
   const uniqueItems = [...new Map(items.map((item) => [
     `${item.type}:${item.id}`,
     item,
@@ -261,6 +261,12 @@ export async function lockActiveLinkedItemsForWrite(
   ));
   const rowIds = sortedUnique(resolved.filter((item) => item.type === 'row').map((item) => item.id));
   const blockIds = sortedUnique(resolved.filter((item) => item.type === 'block').map((item) => item.id));
+  const projectIds = sortedUnique(
+    resolved.filter((item) => item.type === 'issue_project').map((item) => item.id)
+  );
+  const issueIds = sortedUnique(
+    resolved.filter((item) => item.type === 'issue').map((item) => item.id)
+  );
   const workspaceIds = new Set(
     resolved.filter((item) => item.type === 'workspace').map((item) => item.id)
   );
@@ -325,6 +331,34 @@ export async function lockActiveLinkedItemsForWrite(
     );
   }
 
+  for (const projectId of projectIds) {
+    await selectSingleRow<{ id: string }>(
+      `SELECT id FROM issue_projects
+       WHERE id = $1 AND archived_at IS NULL
+       FOR SHARE`,
+      [projectId],
+      'Issue Project',
+      projectId,
+      queryable
+    );
+  }
+
+  for (const issueId of issueIds) {
+    await selectSingleRow<{ id: string }>(
+      `SELECT candidate.id
+       FROM issues candidate
+       JOIN issue_projects project ON project.id = candidate.project_id
+       WHERE candidate.id = $1
+         AND candidate.archived_at IS NULL
+         AND project.archived_at IS NULL
+       FOR SHARE OF candidate, project`,
+      [issueId],
+      'Issue',
+      issueId,
+      queryable
+    );
+  }
+
   for (const workspaceId of sortedUnique(workspaceIds)) {
     await selectSingleRow<{ id: string }>(
       `SELECT id
@@ -348,18 +382,18 @@ export async function lockActiveLinkedItemsForWrite(
           : item.type === 'database'
             ? databaseWorkspaces.get(item.id)
             : databaseWorkspaces.get(item.database_id!);
-    if (!workspaceId) {
+    if (!workspaceId && item.type !== 'issue' && item.type !== 'issue_project') {
       throw new Error(`Cannot resolve workspace for ${item.type} ${item.id}`);
     }
-    return { id: item.id, type: item.type, workspace_id: workspaceId };
+    return { id: item.id, type: item.type, workspace_id: workspaceId ?? null };
   });
 }
 
 export async function requireLink(
   linkId: string,
   queryable?: Queryable
-): Promise<{ workspace_id: string }> {
-  const row = await selectSingleRow<{ workspace_id: string }>(
+): Promise<{ workspace_id: string | null }> {
+  const row = await selectSingleRow<{ workspace_id: string | null }>(
     `SELECT workspace_id
      FROM links
      WHERE id = $1`,
@@ -368,6 +402,6 @@ export async function requireLink(
     linkId,
     queryable
   );
-  await requireActiveWorkspace(row.workspace_id, queryable);
+  if (row.workspace_id) await requireActiveWorkspace(row.workspace_id, queryable);
   return row;
 }

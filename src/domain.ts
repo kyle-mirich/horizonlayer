@@ -16,7 +16,15 @@ export function isPropertyType(value: string): value is PropertyType {
   return (PROPERTY_TYPES as readonly string[]).includes(value);
 }
 
-export const LINK_ITEM_TYPES = ['workspace', 'page', 'database', 'row', 'block'] as const;
+export const LINK_ITEM_TYPES = [
+  'workspace',
+  'page',
+  'database',
+  'row',
+  'block',
+  'issue_project',
+  'issue',
+] as const;
 export type LinkItemType = typeof LINK_ITEM_TYPES[number];
 
 export function isLinkItemType(value: string): value is LinkItemType {

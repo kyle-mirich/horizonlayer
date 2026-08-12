@@ -1,6 +1,12 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version    INTEGER PRIMARY KEY CHECK (version > 0),
+  name       TEXT NOT NULL CHECK (BTRIM(name) <> ''),
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE OR REPLACE FUNCTION database_row_value_search_text(
   candidate_text TEXT,
   candidate_json JSONB,
@@ -210,22 +216,86 @@ CREATE TABLE IF NOT EXISTS database_row_values (
   )
 );
 
-CREATE TABLE IF NOT EXISTS links (
-  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  from_type   VARCHAR(20) NOT NULL
-              CHECK (from_type IN ('workspace', 'page', 'database', 'row', 'block')),
-  from_id     UUID NOT NULL,
-  to_type     VARCHAR(20) NOT NULL
-              CHECK (to_type IN ('workspace', 'page', 'database', 'row', 'block')),
-  to_id       UUID NOT NULL,
-  link_type   VARCHAR(100) NOT NULL DEFAULT 'related'
-              CHECK (BTRIM(link_type) <> ''),
-  revision    INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
-  archived_at TIMESTAMPTZ,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS issue_projects (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_key       VARCHAR(20) NOT NULL
+                    CHECK (project_key ~ '^[A-Z][A-Z0-9]{1,19}$'),
+  name              VARCHAR(500) NOT NULL CHECK (BTRIM(name) <> ''),
+  description       TEXT,
+  next_issue_number INTEGER NOT NULL DEFAULT 1 CHECK (next_issue_number > 0),
+  revision          INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+  archived_at       TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS issues (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id      UUID NOT NULL REFERENCES issue_projects(id) ON DELETE CASCADE,
+  issue_number    INTEGER NOT NULL CHECK (issue_number > 0),
+  issue_key       VARCHAR(64) NOT NULL CHECK (BTRIM(issue_key) <> ''),
+  parent_issue_id UUID REFERENCES issues(id) ON DELETE SET NULL,
+  title           VARCHAR(500) NOT NULL CHECK (BTRIM(title) <> ''),
+  description     TEXT,
+  status          VARCHAR(32) NOT NULL DEFAULT 'open'
+                  CHECK (status IN ('open', 'in_progress', 'blocked', 'done', 'closed')),
+  priority        VARCHAR(16)
+                  CHECK (priority IS NULL OR priority IN ('lowest', 'low', 'medium', 'high', 'highest')),
+  assignee        VARCHAR(255) CHECK (assignee IS NULL OR BTRIM(assignee) <> ''),
+  created_by      VARCHAR(255) NOT NULL CHECK (BTRIM(created_by) <> ''),
+  tags            TEXT[] NOT NULL DEFAULT '{}' CHECK (array_position(tags, NULL) IS NULL),
+  revision        INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+  archived_at     TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT issues_parent_self_check CHECK (parent_issue_id IS NULL OR parent_issue_id <> id),
+  CONSTRAINT issues_project_number_unique UNIQUE (project_id, issue_number),
+  CONSTRAINT issues_key_unique UNIQUE (issue_key)
+);
+
+CREATE TABLE IF NOT EXISTS issue_comments (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  issue_id   UUID NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  author     VARCHAR(255) NOT NULL CHECK (BTRIM(author) <> ''),
+  body       TEXT NOT NULL CHECK (BTRIM(body) <> ''),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS issue_dependencies (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  blocking_issue_id UUID NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  blocked_issue_id  UUID NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  revision          INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+  archived_at       TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT issue_dependencies_self_check CHECK (blocking_issue_id <> blocked_issue_id)
+);
+
+CREATE TABLE IF NOT EXISTS record_links (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  from_type    VARCHAR(20) NOT NULL CHECK (
+                 from_type IN ('workspace', 'page', 'database', 'row', 'block', 'issue_project', 'issue')
+               ),
+  from_id      UUID NOT NULL,
+  to_type      VARCHAR(20) NOT NULL CHECK (
+                 to_type IN ('workspace', 'page', 'database', 'row', 'block', 'issue_project', 'issue')
+               ),
+  to_id        UUID NOT NULL,
+  link_type    VARCHAR(100) NOT NULL DEFAULT 'related'
+               CHECK (BTRIM(link_type) <> ''),
+  revision     INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+  archived_at  TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- The v2 adapter remains writable while the legacy MCP catalog is supported.
+CREATE OR REPLACE VIEW links AS
+SELECT id, workspace_id, from_type, from_id, to_type, to_id, link_type,
+       revision, archived_at, created_at, updated_at
+FROM record_links;
 
 CREATE TABLE IF NOT EXISTS agent_runs (
   id                         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -503,6 +573,143 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION allocate_issue_identity() RETURNS trigger AS $$
+DECLARE
+  project_record issue_projects%ROWTYPE;
+BEGIN
+  SELECT * INTO project_record
+  FROM issue_projects
+  WHERE id = NEW.project_id AND archived_at IS NULL
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Issue Project % does not exist or is archived', NEW.project_id;
+  END IF;
+
+  IF NEW.issue_number IS NULL THEN
+    NEW.issue_number := project_record.next_issue_number;
+  END IF;
+  NEW.issue_key := project_record.project_key || '-' || NEW.issue_number::text;
+
+  UPDATE issue_projects
+  SET next_issue_number = GREATEST(next_issue_number, NEW.issue_number + 1)
+  WHERE id = NEW.project_id;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION enforce_issue_identity_immutability() RETURNS trigger AS $$
+BEGIN
+  IF NEW.project_id IS DISTINCT FROM OLD.project_id
+     OR NEW.issue_number IS DISTINCT FROM OLD.issue_number
+     OR NEW.issue_key IS DISTINCT FROM OLD.issue_key THEN
+    RAISE EXCEPTION 'Issue project, number, and key are immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION validate_issue_parent() RETURNS trigger AS $$
+DECLARE
+  parent_project UUID;
+BEGIN
+  IF NEW.parent_issue_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT project_id INTO parent_project
+  FROM issues
+  WHERE id = NEW.parent_issue_id AND archived_at IS NULL;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Parent Issue % does not exist or is archived', NEW.parent_issue_id;
+  END IF;
+  IF parent_project IS DISTINCT FROM NEW.project_id THEN
+    RAISE EXCEPTION 'Subtask and parent must belong to the same Issue Project';
+  END IF;
+  IF NEW.id IS NOT NULL AND EXISTS (
+    WITH RECURSIVE ancestors(id, parent_issue_id) AS (
+      SELECT id, parent_issue_id FROM issues WHERE id = NEW.parent_issue_id
+      UNION ALL
+      SELECT candidate.id, candidate.parent_issue_id
+      FROM issues candidate
+      JOIN ancestors current ON candidate.id = current.parent_issue_id
+    )
+    SELECT 1 FROM ancestors WHERE id = NEW.id
+  ) THEN
+    RAISE EXCEPTION 'Issue parent relationship would create a cycle';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION lock_active_issue_project_for_write() RETURNS trigger AS $$
+DECLARE
+  resolved_project UUID;
+BEGIN
+  IF TG_TABLE_NAME = 'issues' THEN
+    resolved_project := NEW.project_id;
+  ELSIF TG_TABLE_NAME = 'issue_comments' THEN
+    SELECT project_id INTO resolved_project FROM issues
+    WHERE id = NEW.issue_id AND archived_at IS NULL;
+  ELSE
+    RAISE EXCEPTION 'Unsupported Issue Project child table %', TG_TABLE_NAME;
+  END IF;
+
+  IF resolved_project IS NULL OR NOT EXISTS (
+    SELECT 1 FROM issue_projects
+    WHERE id = resolved_project AND archived_at IS NULL
+    FOR SHARE
+  ) THEN
+    RAISE EXCEPTION 'Cannot write % under an archived or missing Issue Project', TG_TABLE_NAME;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION prevent_project_archive_with_active_issues() RETURNS trigger AS $$
+BEGIN
+  IF OLD.archived_at IS NULL AND NEW.archived_at IS NOT NULL AND EXISTS (
+    SELECT 1 FROM issues WHERE project_id = NEW.id AND archived_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'Issue Project % still has active Issues', NEW.id;
+  END IF;
+  IF NEW.project_key IS DISTINCT FROM OLD.project_key THEN
+    RAISE EXCEPTION 'Issue Project key is immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION validate_issue_dependency() RETURNS trigger AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM issues
+    WHERE id = NEW.blocking_issue_id AND archived_at IS NULL
+  ) OR NOT EXISTS (
+    SELECT 1 FROM issues
+    WHERE id = NEW.blocked_issue_id AND archived_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'Issue dependency endpoints must be active Issues';
+  END IF;
+
+  IF EXISTS (
+    WITH RECURSIVE downstream(id) AS (
+      SELECT NEW.blocked_issue_id
+      UNION
+      SELECT dependency.blocked_issue_id
+      FROM issue_dependencies dependency
+      JOIN downstream current ON dependency.blocking_issue_id = current.id
+      WHERE dependency.archived_at IS NULL
+        AND dependency.id IS DISTINCT FROM NEW.id
+    )
+    SELECT 1 FROM downstream WHERE id = NEW.blocking_issue_id
+  ) THEN
+    RAISE EXCEPTION 'Issue dependency would create a cycle';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE FUNCTION link_endpoint_workspace(
   endpoint_type TEXT,
   endpoint_id UUID
@@ -541,28 +748,65 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE;
 
+CREATE OR REPLACE FUNCTION link_endpoint_active(
+  endpoint_type TEXT,
+  endpoint_id UUID
+) RETURNS BOOLEAN AS $$
+BEGIN
+  CASE endpoint_type
+    WHEN 'workspace' THEN
+      RETURN EXISTS (SELECT 1 FROM workspaces WHERE id = endpoint_id AND archived_at IS NULL);
+    WHEN 'page' THEN
+      RETURN EXISTS (SELECT 1 FROM pages WHERE id = endpoint_id AND archived_at IS NULL);
+    WHEN 'database' THEN
+      RETURN EXISTS (SELECT 1 FROM databases WHERE id = endpoint_id AND archived_at IS NULL);
+    WHEN 'row' THEN
+      RETURN EXISTS (SELECT 1 FROM database_rows WHERE id = endpoint_id AND archived_at IS NULL);
+    WHEN 'block' THEN
+      RETURN EXISTS (SELECT 1 FROM blocks WHERE id = endpoint_id AND archived_at IS NULL);
+    WHEN 'issue_project' THEN
+      RETURN EXISTS (SELECT 1 FROM issue_projects WHERE id = endpoint_id AND archived_at IS NULL);
+    WHEN 'issue' THEN
+      RETURN EXISTS (
+        SELECT 1 FROM issues candidate
+        JOIN issue_projects project ON project.id = candidate.project_id
+        WHERE candidate.id = endpoint_id
+          AND candidate.archived_at IS NULL
+          AND project.archived_at IS NULL
+      );
+    ELSE
+      RETURN FALSE;
+  END CASE;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
 CREATE OR REPLACE FUNCTION validate_link_targets() RETURNS trigger AS $$
 DECLARE
   from_workspace UUID;
   to_workspace UUID;
 BEGIN
+  IF NOT link_endpoint_active(NEW.from_type, NEW.from_id) THEN
+    RAISE EXCEPTION 'Invalid or archived link source %:%', NEW.from_type, NEW.from_id;
+  END IF;
+  IF NOT link_endpoint_active(NEW.to_type, NEW.to_id) THEN
+    RAISE EXCEPTION 'Invalid or archived link target %:%', NEW.to_type, NEW.to_id;
+  END IF;
+
   from_workspace := link_endpoint_workspace(NEW.from_type, NEW.from_id);
   to_workspace := link_endpoint_workspace(NEW.to_type, NEW.to_id);
 
-  IF from_workspace IS NULL THEN
-    RAISE EXCEPTION 'Invalid link source %:%', NEW.from_type, NEW.from_id;
-  END IF;
-
-  IF to_workspace IS NULL THEN
-    RAISE EXCEPTION 'Invalid link target %:%', NEW.to_type, NEW.to_id;
-  END IF;
-
-  IF from_workspace IS DISTINCT FROM to_workspace THEN
+  IF from_workspace IS NOT NULL AND to_workspace IS NOT NULL
+     AND from_workspace IS DISTINCT FROM to_workspace THEN
     RAISE EXCEPTION 'Link endpoints must belong to the same workspace';
   END IF;
 
-  IF from_workspace IS DISTINCT FROM NEW.workspace_id THEN
-    RAISE EXCEPTION 'Link endpoints must belong to the supplied workspace';
+  IF NEW.workspace_id IS NOT NULL
+     AND COALESCE(from_workspace, to_workspace) IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'Knowledge endpoint must belong to the supplied workspace';
+  END IF;
+
+  IF NEW.workspace_id IS NULL AND COALESCE(from_workspace, to_workspace) IS NOT NULL THEN
+    NEW.workspace_id := COALESCE(from_workspace, to_workspace);
   END IF;
 
   RETURN NEW;
@@ -587,7 +831,7 @@ $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION delete_links_for_endpoint() RETURNS trigger AS $$
 BEGIN
-  DELETE FROM links
+  DELETE FROM record_links
   WHERE (from_type = TG_ARGV[0] AND from_id = OLD.id)
      OR (to_type = TG_ARGV[0] AND to_id = OLD.id);
   RETURN OLD;
@@ -624,9 +868,24 @@ CREATE TRIGGER bump_database_rows_revision_trigger
 BEFORE UPDATE ON database_rows
 FOR EACH ROW EXECUTE FUNCTION bump_knowledge_revision();
 
-DROP TRIGGER IF EXISTS bump_links_revision_trigger ON links;
-CREATE TRIGGER bump_links_revision_trigger
-BEFORE UPDATE ON links
+DROP TRIGGER IF EXISTS bump_issue_projects_revision_trigger ON issue_projects;
+CREATE TRIGGER bump_issue_projects_revision_trigger
+BEFORE UPDATE ON issue_projects
+FOR EACH ROW EXECUTE FUNCTION bump_knowledge_revision();
+
+DROP TRIGGER IF EXISTS bump_issues_revision_trigger ON issues;
+CREATE TRIGGER bump_issues_revision_trigger
+BEFORE UPDATE ON issues
+FOR EACH ROW EXECUTE FUNCTION bump_knowledge_revision();
+
+DROP TRIGGER IF EXISTS bump_issue_dependencies_revision_trigger ON issue_dependencies;
+CREATE TRIGGER bump_issue_dependencies_revision_trigger
+BEFORE UPDATE ON issue_dependencies
+FOR EACH ROW EXECUTE FUNCTION bump_knowledge_revision();
+
+DROP TRIGGER IF EXISTS bump_record_links_revision_trigger ON record_links;
+CREATE TRIGGER bump_record_links_revision_trigger
+BEFORE UPDATE ON record_links
 FOR EACH ROW EXECUTE FUNCTION bump_knowledge_revision();
 
 DROP TRIGGER IF EXISTS record_workspace_search_change_pages_trigger ON pages;
@@ -697,11 +956,6 @@ CREATE TRIGGER lock_active_workspace_database_row_values_trigger
 BEFORE INSERT OR UPDATE ON database_row_values
 FOR EACH ROW EXECUTE FUNCTION lock_active_workspace_for_child_write('row');
 
-DROP TRIGGER IF EXISTS lock_active_workspace_links_trigger ON links;
-CREATE TRIGGER lock_active_workspace_links_trigger
-BEFORE INSERT OR UPDATE ON links
-FOR EACH ROW EXECUTE FUNCTION lock_active_workspace_for_child_write('direct');
-
 DROP TRIGGER IF EXISTS lock_active_workspace_agent_runs_trigger ON agent_runs;
 CREATE TRIGGER lock_active_workspace_agent_runs_trigger
 BEFORE INSERT OR UPDATE ON agent_runs
@@ -732,14 +986,49 @@ CREATE TRIGGER validate_agent_run_scope_trigger
 BEFORE INSERT OR UPDATE OF workspace_id, session_id ON agent_runs
 FOR EACH ROW EXECUTE FUNCTION validate_agent_run_scope();
 
-DROP TRIGGER IF EXISTS validate_link_targets_trigger ON links;
+DROP TRIGGER IF EXISTS allocate_issue_identity_trigger ON issues;
+CREATE TRIGGER allocate_issue_identity_trigger
+BEFORE INSERT ON issues
+FOR EACH ROW EXECUTE FUNCTION allocate_issue_identity();
+
+DROP TRIGGER IF EXISTS enforce_issue_identity_immutability_trigger ON issues;
+CREATE TRIGGER enforce_issue_identity_immutability_trigger
+BEFORE UPDATE ON issues
+FOR EACH ROW EXECUTE FUNCTION enforce_issue_identity_immutability();
+
+DROP TRIGGER IF EXISTS validate_issue_parent_trigger ON issues;
+CREATE TRIGGER validate_issue_parent_trigger
+BEFORE INSERT OR UPDATE OF project_id, parent_issue_id ON issues
+FOR EACH ROW EXECUTE FUNCTION validate_issue_parent();
+
+DROP TRIGGER IF EXISTS lock_active_issue_project_issues_trigger ON issues;
+CREATE TRIGGER lock_active_issue_project_issues_trigger
+BEFORE INSERT OR UPDATE ON issues
+FOR EACH ROW EXECUTE FUNCTION lock_active_issue_project_for_write();
+
+DROP TRIGGER IF EXISTS lock_active_issue_project_comments_trigger ON issue_comments;
+CREATE TRIGGER lock_active_issue_project_comments_trigger
+BEFORE INSERT ON issue_comments
+FOR EACH ROW EXECUTE FUNCTION lock_active_issue_project_for_write();
+
+DROP TRIGGER IF EXISTS prevent_project_archive_with_active_issues_trigger ON issue_projects;
+CREATE TRIGGER prevent_project_archive_with_active_issues_trigger
+BEFORE UPDATE OF archived_at, project_key ON issue_projects
+FOR EACH ROW EXECUTE FUNCTION prevent_project_archive_with_active_issues();
+
+DROP TRIGGER IF EXISTS validate_issue_dependency_trigger ON issue_dependencies;
+CREATE TRIGGER validate_issue_dependency_trigger
+BEFORE INSERT OR UPDATE OF blocking_issue_id, blocked_issue_id, archived_at ON issue_dependencies
+FOR EACH ROW EXECUTE FUNCTION validate_issue_dependency();
+
+DROP TRIGGER IF EXISTS validate_link_targets_trigger ON record_links;
 CREATE TRIGGER validate_link_targets_trigger
-BEFORE INSERT OR UPDATE OF workspace_id, from_type, from_id, to_type, to_id ON links
+BEFORE INSERT OR UPDATE OF workspace_id, from_type, from_id, to_type, to_id ON record_links
 FOR EACH ROW EXECUTE FUNCTION validate_link_targets();
 
-DROP TRIGGER IF EXISTS enforce_link_immutability_trigger ON links;
+DROP TRIGGER IF EXISTS enforce_link_immutability_trigger ON record_links;
 CREATE TRIGGER enforce_link_immutability_trigger
-BEFORE UPDATE ON links
+BEFORE UPDATE ON record_links
 FOR EACH ROW EXECUTE FUNCTION enforce_link_immutability();
 
 DROP TRIGGER IF EXISTS delete_workspace_links_trigger ON workspaces;
@@ -766,6 +1055,16 @@ DROP TRIGGER IF EXISTS delete_block_links_trigger ON blocks;
 CREATE TRIGGER delete_block_links_trigger
 AFTER DELETE ON blocks
 FOR EACH ROW EXECUTE FUNCTION delete_links_for_endpoint('block');
+
+DROP TRIGGER IF EXISTS delete_issue_project_links_trigger ON issue_projects;
+CREATE TRIGGER delete_issue_project_links_trigger
+AFTER DELETE ON issue_projects
+FOR EACH ROW EXECUTE FUNCTION delete_links_for_endpoint('issue_project');
+
+DROP TRIGGER IF EXISTS delete_issue_links_trigger ON issues;
+CREATE TRIGGER delete_issue_links_trigger
+AFTER DELETE ON issues
+FOR EACH ROW EXECUTE FUNCTION delete_links_for_endpoint('issue');
 
 CREATE INDEX IF NOT EXISTS workspaces_created_idx
   ON workspaces(created_at DESC);
@@ -854,15 +1153,45 @@ CREATE INDEX IF NOT EXISTS database_row_values_text_trgm_idx
   ON database_row_values USING GIN(value_text gin_trgm_ops)
   WHERE value_text IS NOT NULL;
 
-CREATE UNIQUE INDEX IF NOT EXISTS links_active_relation_idx
-  ON links(workspace_id, from_type, from_id, to_type, to_id, link_type)
+CREATE UNIQUE INDEX IF NOT EXISTS issue_projects_key_idx
+  ON issue_projects(project_key);
+CREATE UNIQUE INDEX IF NOT EXISTS issue_projects_name_active_idx
+  ON issue_projects(LOWER(BTRIM(name)))
   WHERE archived_at IS NULL;
-CREATE INDEX IF NOT EXISTS links_workspace_created_idx
-  ON links(workspace_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS links_from_idx
-  ON links(workspace_id, from_type, from_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS links_to_idx
-  ON links(workspace_id, to_type, to_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS issues_project_updated_idx
+  ON issues(project_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS issues_project_status_idx
+  ON issues(project_id, status, updated_at DESC)
+  WHERE archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS issues_parent_idx
+  ON issues(parent_issue_id, updated_at DESC)
+  WHERE parent_issue_id IS NOT NULL AND archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS issues_assignee_idx
+  ON issues(assignee, updated_at DESC)
+  WHERE assignee IS NOT NULL AND archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS issues_tags_gin_idx
+  ON issues USING GIN(tags);
+CREATE INDEX IF NOT EXISTS issues_text_fts_idx
+  ON issues USING GIN(to_tsvector('simple', title || ' ' || COALESCE(description, '')));
+CREATE INDEX IF NOT EXISTS issue_comments_issue_created_idx
+  ON issue_comments(issue_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS issue_dependencies_active_idx
+  ON issue_dependencies(blocking_issue_id, blocked_issue_id)
+  WHERE archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS issue_dependencies_blocked_idx
+  ON issue_dependencies(blocked_issue_id, created_at DESC)
+  WHERE archived_at IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS record_links_active_relation_idx
+  ON record_links(from_type, from_id, to_type, to_id, link_type)
+  WHERE archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS record_links_workspace_created_idx
+  ON record_links(workspace_id, created_at DESC)
+  WHERE workspace_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS record_links_from_idx
+  ON record_links(from_type, from_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS record_links_to_idx
+  ON record_links(to_type, to_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS agent_runs_workspace_started_idx
   ON agent_runs(workspace_id, started_at DESC);
@@ -874,3 +1203,7 @@ CREATE INDEX IF NOT EXISTS agent_runs_agent_status_idx
 
 CREATE INDEX IF NOT EXISTS run_checkpoints_run_created_idx
   ON run_checkpoints(run_id, created_at DESC);
+
+INSERT INTO schema_migrations (version, name)
+VALUES (1, 'canonical-knowledge-v2'), (2, 'issue-modules-v3')
+ON CONFLICT (version) DO NOTHING;

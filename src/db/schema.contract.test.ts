@@ -46,23 +46,42 @@ describe('clean schema contract', () => {
     );
   });
 
-  it('restricts block and link discriminants to the exported canonical values', () => {
+  it('restricts block and shared-link discriminants to the exported canonical values', () => {
     expect(schema).toContain("block_type IN ('text', 'heading', 'todo', 'callout', 'code')");
-    expect(schema).toContain("from_type IN ('workspace', 'page', 'database', 'row', 'block')");
-    expect(schema).toContain("to_type IN ('workspace', 'page', 'database', 'row', 'block')");
-    const linksTable = schema.match(/CREATE TABLE IF NOT EXISTS links \([\s\S]*?\n\);/)?.[0] ?? '';
+    expect(schema).toContain(
+      "from_type IN ('workspace', 'page', 'database', 'row', 'block', 'issue_project', 'issue')"
+    );
+    expect(schema).toContain(
+      "to_type IN ('workspace', 'page', 'database', 'row', 'block', 'issue_project', 'issue')"
+    );
+    const linksTable = schema.match(
+      /CREATE TABLE IF NOT EXISTS record_links \([\s\S]*?\n\);/
+    )?.[0] ?? '';
     expect(linksTable).not.toContain("'database_row'");
   });
 
-  it('stores link scope, timestamps, and optimistic revisions', () => {
-    const linksTable = schema.match(/CREATE TABLE IF NOT EXISTS links \([\s\S]*?\n\);/)?.[0] ?? '';
-    expect(linksTable).toContain('workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE');
-    expect(linksTable).toContain('revision    INTEGER NOT NULL DEFAULT 1');
-    expect(linksTable).toContain('updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()');
-    expect(schema).toContain('bump_links_revision_trigger');
-    expect(schema).toContain('Link endpoints must belong to the supplied workspace');
+  it('stores optional knowledge scope, timestamps, and optimistic link revisions', () => {
+    const linksTable = schema.match(
+      /CREATE TABLE IF NOT EXISTS record_links \([\s\S]*?\n\);/
+    )?.[0] ?? '';
+    expect(linksTable).toContain('workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE');
+    expect(linksTable).toContain('revision     INTEGER NOT NULL DEFAULT 1');
+    expect(linksTable).toContain('updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()');
+    expect(schema).toContain('bump_record_links_revision_trigger');
+    expect(schema).toContain('Knowledge endpoint must belong to the supplied workspace');
     expect(schema).toContain('Link endpoints, workspace, and type are immutable');
-    expect(schema).toContain('ON links(workspace_id, created_at DESC)');
+    expect(schema).toContain('ON record_links(workspace_id, created_at DESC)');
+    expect(schema).toContain('CREATE OR REPLACE VIEW links AS');
+  });
+
+  it('defines first-class Issue Projects, Issues, comments, and dependencies', () => {
+    for (const table of ['issue_projects', 'issues', 'issue_comments', 'issue_dependencies']) {
+      expect(schema).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
+    }
+    expect(schema).toContain("status IN ('open', 'in_progress', 'blocked', 'done', 'closed')");
+    expect(schema).toContain('Issue dependency would create a cycle');
+    expect(schema).toContain('Issue parent relationship would create a cycle');
+    expect(schema).toContain('Issue project, number, and key are immutable');
   });
 
   it('journals canonical search changes without mutating workspace records', () => {
@@ -137,7 +156,6 @@ describe('clean schema contract', () => {
       'database_properties',
       'database_rows',
       'database_row_values',
-      'links',
       'agent_runs',
       'run_checkpoints',
     ]) {
