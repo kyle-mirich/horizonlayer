@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "horizonlayer": {
+      "command": "npx",
+      "args": ["-y", "horizonlayer@0.1.0", "mcp"]
+    }
+  }
+}
