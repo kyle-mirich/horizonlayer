@@ -64,7 +64,7 @@ describe('project setup', () => {
       },
     });
     expect(mocks.installAgentPlugins).toHaveBeenCalledWith('codex', {
-      skills: ['knowledge', 'databases', 'runs', 'issues'],
+      skills: ['knowledge', 'issues'],
     });
     const serialized = await readFile(result.configPath, 'utf8');
     expect(serialized).not.toMatch(/password|database_url|token|secret/iu);

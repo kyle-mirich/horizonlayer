@@ -2,7 +2,7 @@
 
 ## Docker-managed local startup
 
-1. Run `npx horizonlayer setup`. In an interactive terminal, choose Knowledge, Issues, or Both and whether to install the matching bundled skills. For automation, use `--non-interactive --modules knowledge|issues|both --skills none|codex|claude|all`.
+1. Run `npx horizonlayer setup`. In an interactive terminal, choose Knowledge, Issues, or Both and whether to install the matching bundled skills. Knowledge also covers typed databases; Issues covers Jira-style work coordination. For automation, use `--non-interactive --modules knowledge|issues|both --skills none|codex|claude|all`.
 2. The launcher creates or reuses local runtime settings, starts PostgreSQL and Qdrant through Docker, initializes the canonical schema, and writes a portable `.horizonlayer.json` containing only the selected modules and default scope names.
 3. Run `npx -y horizonlayer@2.0.0 doctor` to check the saved configuration, Docker, PostgreSQL, and Qdrant.
 4. Run `npx -y horizonlayer@2.0.0 install codex` or `install claude`, then restart that agent client. The Claude path stages a persistent local marketplace and uses Claude Code's native user-scope plugin installation flow.
