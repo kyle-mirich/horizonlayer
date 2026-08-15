@@ -26,6 +26,7 @@ Use the HorizonLayer MCP tools as a shared source of truth, not as a transcript 
 ## Store useful knowledge
 
 - Use pages for decisions, plans, architecture, research, procedures, and other prose.
+- Use `database` and `row` for repeated structured records. Reuse an existing database and schema when it fits; query rows for exact AND-only filters, and read the latest row before updating it.
 - Split a page into ordered, meaningful blocks. Prefer a few coherent blocks over one block per sentence.
 - Update an existing page when it already owns the subject; do not create date-stamped duplicates by default.
 - Use concise tags for stable retrieval dimensions and importance from `0` to `1` only when it changes retrieval priority.

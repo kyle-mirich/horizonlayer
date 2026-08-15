@@ -172,7 +172,7 @@ async function resolveIssueProject(config: ProjectConfig, projectName: string) {
 
 function bundledSkills(modules: HorizonModule[]): string[] {
   return [
-    ...(modules.includes('knowledge') ? ['knowledge', 'databases', 'runs'] : []),
+    ...(modules.includes('knowledge') ? ['knowledge'] : []),
     ...(modules.includes('issues') ? ['issues'] : []),
   ];
 }
