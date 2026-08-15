@@ -24,7 +24,6 @@ function values(value: string): string[] {
   return normalized.split(',').map(unquote).map((item) => item.trim()).filter(Boolean);
 }
 
-/** Parse the intentionally small, AND-only HorizonLayer issue query language. */
 export function parseIssueQuery(query: string): ParsedIssueQuery {
   const source = query.trim();
   if (!source) return {};

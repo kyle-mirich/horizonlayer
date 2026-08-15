@@ -1,14 +1,12 @@
 # HorizonLayer
 
-HorizonLayer is a local-first PostgreSQL MCP server for durable coding-agent knowledge and issue tracking. It keeps workspace-scoped pages, typed databases, Jira-style Issue Projects, assignments, dependencies, comments, links, search, and resumable run checkpoints on your machine.
-
-PostgreSQL is the canonical store. Qdrant is a local, derived index used for optional semantic retrieval; it is not a second source of truth. HorizonLayer does not configure hosted, multi-user, or remote deployment services.
+HorizonLayer is a local PostgreSQL MCP server for coding-agent knowledge and issue tracking. PostgreSQL is canonical; Qdrant is an optional derived index for semantic retrieval.
 
 > **Release line:** `2.0.0` is the fresh-schema major release. The commands below pin `@2.0.0` for reproducibility and to distinguish it from the incompatible legacy 1.x package lineage.
 
 ## Local quickstart
 
-This is the shortest supported path: Docker-managed PostgreSQL and Qdrant, then the bundled Codex plugin. It does not require a global npm installation.
+Use Docker-managed PostgreSQL and Qdrant with the bundled Codex plugin. No global npm installation is required.
 
 ### Prerequisites
 
@@ -22,7 +20,7 @@ This is the shortest supported path: Docker-managed PostgreSQL and Qdrant, then 
 npx -y horizonlayer@2.0.0 setup
 ```
 
-`setup` asks whether this project uses Knowledge, Issues, or Both, then asks whether to install the matching bundled skills for Codex, Claude Code, both, or neither. It starts the local services, creates or reuses the shared `Default` Knowledge Workspace and a Jira-style Issue Project named after the current directory, and writes a credential-free `.horizonlayer.json` that can be committed with the project. Rerunning setup is idempotent.
+`setup` selects Knowledge, Issues, or Both and optionally installs the matching Codex or Claude Code skills. It starts local services, creates or reuses the shared `Default` Knowledge Workspace and an Issue Project named after the current directory, and writes a credential-free `.horizonlayer.json`. Rerunning setup is idempotent.
 
 For scripts or CI, provide every choice without prompts:
 
@@ -58,7 +56,7 @@ After restarting the agent, paste this into its chat. It uses the installed Hori
 Use HorizonLayer's `knowledge` MCP tool. Create a workspace named "HorizonLayer Quickstart" unless one already exists with that name. In it, create a typed database named "Decisions" with a title property named "Name" and a select property named "Status" whose allowed value is "accepted". Create a row with Name "HorizonLayer local setup is verified" and Status "accepted". Then query the Decisions rows where Status equals accepted. Show the workspace, database, and row IDs plus the query result.
 ```
 
-The `knowledge` tool selects an operation family (`workspace`, `database`, `row`, and others) and accepts that operation's action in `input`. Property names and select choices are exact and case-sensitive.
+The `knowledge` tool selects an operation family and accepts that operation's action in `input`. Property names and select choices are exact and case-sensitive.
 
 ### 5. Inspect it in the local dashboard
 
@@ -66,11 +64,11 @@ The `knowledge` tool selects an operation family (`workspace`, `database`, `row`
 npx -y horizonlayer@2.0.0 dashboard --open
 ```
 
-The dashboard listens only on `http://127.0.0.1:4317` by default. This command stays in the foreground; press `Ctrl-C` to stop the dashboard process without deleting data. You can also inspect the row query returned by the agent in the previous step.
+The dashboard listens only on `http://127.0.0.1:4317` by default. This command stays in the foreground; press `Ctrl-C` to stop it without deleting data.
 
 ## Docker-managed local runtime
 
-Use this path for the normal local installation. `setup` is idempotent: it reuses the saved configuration and Docker volumes on later runs. A first `mcp` or `dashboard` launch with neither a saved configuration nor an explicit runtime override provisions this same managed runtime; it never creates a separate fallback database. `setup` always targets its managed local runtime. Once it exists, explicit `DATABASE_URL`, `QDRANT_URL`, and `RAG_ENABLED` values take precedence for `mcp` and `dashboard`. For a first launch with an override, run `setup` first or use the external PostgreSQL path below.
+Use this path for the standard local installation. `setup` reuses the saved configuration and Docker volumes. A first `mcp` or `dashboard` launch without saved configuration or an explicit runtime override provisions the same managed runtime. After setup, explicit `DATABASE_URL`, `QDRANT_URL`, and `RAG_ENABLED` values take precedence. For an override on first launch, run `setup` first or use the external PostgreSQL path below.
 
 | What | Location |
 | --- | --- |
@@ -159,10 +157,10 @@ Run `npx -y horizonlayer@2.0.0 help` for the complete command list.
 
 ## Data model and behavior
 
-- Knowledge records belong to isolated workspaces. Issues belong to Jira-style Issue Projects; these scopes stay distinct.
-- Pages store block-based narrative knowledge; typed databases define properties and rows store validated records.
-- Existing knowledge mutations use optimistic revisions. Archive and restore are the public lifecycle operations; there is no public hard-delete workflow.
-- PostgreSQL-native record search is available in a workspace scope. The optional local RAG index is derived and rebuildable.
+- Knowledge records belong to isolated workspaces. Issues belong to separate Issue Projects.
+- Pages store blocks; typed databases define properties and validated rows.
+- Mutations use optimistic revisions. Archive and restore are the public lifecycle operations; there is no public hard-delete workflow.
+- PostgreSQL record search is available in a workspace scope. The optional RAG index is derived and rebuildable.
 
 The default MCP catalog exposes only the enabled `knowledge` and `issues` module tools. Set `HORIZONLAYER_MODULES=knowledge` or `HORIZONLAYER_MODULES=issues` to enable one module surface; unset it or use `both` for both. The tools share one PostgreSQL database and can create explicit Page-Issue links without automatically expanding either side. `knowledge` supports bounded `navigate` traversal and `issues` supports `link.traverse`, both capped at depth 3.
 
@@ -181,7 +179,7 @@ npm ci
 npm run verify
 npm run test:coverage
 npm run build
-npm run test:integration:postgres
+HORIZONLAYER_INTEGRATION_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/horizonlayer_test' npm run test:integration:postgres
 npm run test:smoke:local
 npm run test:smoke:recovery
 npm pack --dry-run

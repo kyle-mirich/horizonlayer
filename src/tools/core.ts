@@ -110,7 +110,6 @@ function coreTool<Name extends CoreToolName>(
   };
 }
 
-/** The canonical catalog joining each agent-visible tool to its handler. */
 export function coreToolDefinitions() {
   return [
   coreTool('workspace', {

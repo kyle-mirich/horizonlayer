@@ -153,7 +153,6 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config
 
 export let config = loadConfig();
 
-/** Refresh the live configuration after the launcher applies a saved local runtime. */
 export function reloadConfig(environment: NodeJS.ProcessEnv = process.env): Config {
   config = loadConfig(environment);
   return config;

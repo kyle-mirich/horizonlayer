@@ -1,6 +1,6 @@
 # Contributing to HorizonLayer
 
-Thanks for helping improve HorizonLayer. The project is a local-first PostgreSQL MCP server; changes should preserve its workspace isolation, canonical PostgreSQL model, optimistic revisions, archive/restore lifecycle, and local runtime behavior.
+HorizonLayer is a local PostgreSQL MCP server. Changes must preserve workspace isolation, the canonical PostgreSQL model, optimistic revisions, archive/restore lifecycle, and local runtime behavior.
 
 ## Local setup
 

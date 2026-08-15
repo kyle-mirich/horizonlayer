@@ -164,7 +164,6 @@ async function requireIssue(value: string, includeArchived = false) {
 }
 
 async function executeIssueAction(action: z.infer<typeof IssueAction>, input: Record<string, unknown>): Promise<unknown> {
-  // Each action-specific Zod schema has already validated this object.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const params: any = input;
   switch (action) {

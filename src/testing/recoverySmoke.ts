@@ -909,7 +909,7 @@ async function verifyDashboardState(ids: StateIds, phase: 'A' | 'B'): Promise<vo
           if (ready) break;
         }
       } catch {
-        // Wait for the packed dashboard process.
+        // The dashboard may not be listening yet.
       }
       await sleep(100);
     }

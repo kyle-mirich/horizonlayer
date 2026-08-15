@@ -183,7 +183,6 @@ export async function listLinks(params: {
   return rows;
 }
 
-/** Traverse explicit links without expanding record content. */
 export async function traverseLinks(params: {
   item_type: LinkItemType | string;
   item_id: string;
