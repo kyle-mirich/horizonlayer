@@ -77,7 +77,7 @@ describe('plugin installer', () => {
     await expect(readFile(join(target, '.horizonlayer-managed-marketplace.json'), 'utf8'))
       .resolves.toContain('"kind":"claude-marketplace"');
     await expect(readFile(join(target, 'plugins', 'horizonlayer', '.mcp.json'), 'utf8'))
-      .resolves.toContain('horizonlayer@0.1.0');
+      .resolves.toContain('horizonlayer@0.1.1');
   });
 
   it('does not overwrite an unmanaged Claude marketplace target', async () => {
@@ -202,7 +202,29 @@ describe('plugin installer', () => {
       runCommand: vi.fn(),
       skills: ['issues'],
     });
-    await expect(readdir(join(codexPluginTarget(home), 'skills'))).resolves.toEqual(['issues']);
+    const installedSkills = await readdir(join(codexPluginTarget(home), 'skills'));
+    expect(installedSkills).toContain('issues');
+    expect(installedSkills).not.toContain('knowledge');
+    expect(installedSkills).toEqual(expect.arrayContaining([
+      'code-review',
+      'codebase-design',
+      'diagnosing-bugs',
+      'domain-modeling',
+      'grill-me',
+      'grill-with-docs',
+      'grilling',
+      'implement',
+      'improve-codebase-architecture',
+      'prototype',
+      'research',
+      'resolving-merge-conflicts',
+      'tdd',
+      'to-spec',
+      'to-tickets',
+      'triage',
+      'using-horizonlayer',
+      'wayfinder',
+    ]));
   });
 
   it('does not overwrite an unmanaged Codex plugin target', async () => {
@@ -538,7 +560,7 @@ describe('plugin installer', () => {
     const portableConfig = {
       $schema: 'https://example.invalid/mcp.schema.json',
       mcpServers: {
-        horizonlayer: { type: 'stdio', command: 'npx', args: ['-y', 'horizonlayer@0.1.0', 'mcp'] },
+        horizonlayer: { type: 'stdio', command: 'npx', args: ['-y', 'horizonlayer@0.1.1', 'mcp'] },
         other: { type: 'stdio', command: 'node', args: ['server.js'] },
       },
     };
@@ -548,7 +570,7 @@ describe('plugin installer', () => {
       const servers = adapted.mcpServers as Record<string, Record<string, unknown>>;
 
       expect(servers.horizonlayer.command).toBe('cmd');
-      expect(servers.horizonlayer.args).toEqual(['/c', 'npx', '-y', 'horizonlayer@0.1.0', 'mcp']);
+      expect(servers.horizonlayer.args).toEqual(['/c', 'npx', '-y', 'horizonlayer@0.1.1', 'mcp']);
       expect(servers.horizonlayer.type).toBe('stdio');
       expect(servers.other).toEqual(portableConfig.mcpServers.other);
       expect(adapted.$schema).toBe(portableConfig.$schema);
@@ -587,7 +609,7 @@ describe('plugin installer', () => {
       platform: 'win32',
       runCommand: vi.fn(),
     });
-    const expectedArgs = ['/c', 'npx', '-y', 'horizonlayer@0.1.0', 'mcp'];
+    const expectedArgs = ['/c', 'npx', '-y', 'horizonlayer@0.1.1', 'mcp'];
 
     for (const stagedPath of [
       join(codexPluginTarget(home), '.mcp.json'),

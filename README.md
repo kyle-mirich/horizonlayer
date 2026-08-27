@@ -98,7 +98,7 @@ Install the bundled plugin for your agent and restart it:
 npx -y horizonlayer@latest install all
 ```
 
-`install all` installs the complete bundle; `install codex` and `install claude` target one host. The installer copies the plugin and only the skills selected for this project's enabled modules. It never edits project files outside its managed directories.
+`install all` installs the complete bundle; `install codex` and `install claude` target one host. The installer copies the plugin, keeps the Knowledge and Issues skills selected for this project's enabled modules, and always includes the engineering workflow: `using-horizonlayer`, Wayfinder, specification and ticket planning, Implement, TDD, research, architecture, diagnosis, and review. It never edits project files outside its managed directories. See the bundled [third-party notice](plugins/horizonlayer/THIRD_PARTY_NOTICES.md) for the workflow skill attribution.
 
 | Agent | What the installer does |
 | --- | --- |

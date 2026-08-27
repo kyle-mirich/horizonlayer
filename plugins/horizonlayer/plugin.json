@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "horizonlayer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Durable PostgreSQL knowledge and agent-friendly issue tracking for coding agents.",
   "author": {
     "name": "Kyle Mirich",

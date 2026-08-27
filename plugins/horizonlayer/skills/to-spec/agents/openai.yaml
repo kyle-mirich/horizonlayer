@@ -1,0 +1,10 @@
+interface:
+  display_name: "To Spec"
+  short_description: "Turn a conversation into a spec"
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "horizonlayer"
+      description: "HorizonLayer Issues and Knowledge context"
+policy:
+  allow_implicit_invocation: false

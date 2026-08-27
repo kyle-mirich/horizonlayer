@@ -10,7 +10,7 @@
       "name": "horizonlayer",
       "source": "./plugins/horizonlayer",
       "description": "Durable PostgreSQL knowledge and agent-friendly issue tracking for coding agents.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Kyle Mirich"
       },

@@ -25,6 +25,10 @@ Use strict TypeScript, ES modules, two-space indentation, single quotes, and sem
 
 Vitest is the test runner; dashboard tests use Testing Library and jsdom. Add tests beside changed behavior. Ordinary unit and coverage runs must not require Docker or external services. PostgreSQL integration tests require a disposable `HORIZONLAYER_INTEGRATION_DATABASE_URL`; never target valuable data. Preserve workspace isolation, optimistic revisions, and archive/restore behavior.
 
+## Agent skills
+
+The HorizonLayer plugin bundles the engineering workflow skills for this repository, including `using-horizonlayer`, Wayfinder, specification and ticket planning, Implement, TDD, research, architecture, and code review. They use the HorizonLayer MCP for Knowledge and Issues; see `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, and `docs/agents/domain.md` before publishing workflow state.
+
 ## Commit & Pull Request Guidelines
 
 Follow the repository’s concise, imperative commit style with prefixes such as `fix:`, `test:`, `refactor:`, `docs:`, or `release:`. Keep PRs narrowly scoped, link the relevant issue, explain behavioral and configuration changes, and list verification performed. Include screenshots for visible dashboard changes. Update user documentation when commands, configuration, data locations, or recovery behavior changes. Report security issues through `SECURITY.md`, not a public issue.

@@ -1,6 +1,6 @@
 {
   "name": "horizonlayer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Durable PostgreSQL knowledge and agent-friendly issue tracking for coding agents.",
   "author": {
     "name": "Kyle Mirich",
@@ -21,9 +21,11 @@
     "capabilities": ["Read", "Write"],
     "websiteURL": "https://github.com/kyle-mirich/horizonlayer",
     "defaultPrompt": [
+      "Explain what HorizonLayer can do for this task.",
       "Find the durable context for this project.",
       "Save this decision for the next agent.",
       "Resume the latest HorizonLayer session.",
+      "Plan uncertain work with Wayfinder, then hand clear work to Implement.",
       "Find and claim the next ready HorizonLayer Issue."
     ],
     "brandColor": "#2E6256"

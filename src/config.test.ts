@@ -25,10 +25,12 @@ describe('environment configuration', () => {
         ssl_mode: 'disable',
         ssl_reject_unauthorized: true,
         statement_timeout_ms: 30_000,
+        url: undefined,
         user: 'postgres',
       },
       rag: {
         allow_download: true,
+        api_key: undefined,
         cache_dir: join(homedir(), '.cache', 'horizonlayer', 'models'),
         collection: 'horizonlayer_rag',
         embedding_dtype: 'fp32',
@@ -40,7 +42,7 @@ describe('environment configuration', () => {
       },
       server: {
         name: 'Horizon Layer',
-        version: '0.1.0',
+        version: '0.1.1',
       },
     });
   });
@@ -93,7 +95,7 @@ describe('environment configuration', () => {
         qdrant_url: 'https://qdrant.internal:7443',
         timeout_ms: 7500,
       },
-      server: { name: 'Agent Knowledge', version: '0.1.0' },
+      server: { name: 'Agent Knowledge', version: '0.1.1' },
     });
   });
 

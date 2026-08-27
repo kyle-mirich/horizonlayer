@@ -4,7 +4,7 @@ const appServerInstances: Array<{ options: Record<string, unknown> }> = [];
 const configState = vi.hoisted(() => ({
   server: {
     name: 'Horizon Layer',
-    version: '0.1.0',
+    version: '0.1.1',
   },
 }));
 const registerCoreTools = vi.fn();
@@ -50,7 +50,7 @@ describe('createAppServer local runtime', () => {
 
     expect(appServerInstances[0].options).toMatchObject({
       name: 'Horizon Layer',
-      version: '0.1.0',
+      version: '0.1.1',
     });
     expect(appServerInstances[0].options.instructions).toContain('Knowledge workspaces');
     expect(appServerInstances[0].options.instructions).toContain('latest revision');

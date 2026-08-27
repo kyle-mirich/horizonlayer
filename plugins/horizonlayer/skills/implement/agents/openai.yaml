@@ -1,0 +1,10 @@
+interface:
+  display_name: "Implement"
+  short_description: "Build work from a spec or tickets"
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "horizonlayer"
+      description: "HorizonLayer Issues and Knowledge context"
+policy:
+  allow_implicit_invocation: false

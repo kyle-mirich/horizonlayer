@@ -45,6 +45,30 @@ const CLAUDE_MARKETPLACE_NAME = 'horizonlayer';
 const CLAUDE_MARKETPLACE_MARKER = '.horizonlayer-managed-marketplace.json';
 const CODEX_PLUGIN_MARKER = '.horizonlayer-managed-plugin.json';
 
+// Product skills are filtered by the project's selected modules. The engineering
+// workflow and its HorizonLayer orientation are part of every installed plugin,
+// so an Issues-only or Knowledge-only project can still plan and implement work.
+const ALWAYS_INCLUDED_SKILLS = [
+  'code-review',
+  'codebase-design',
+  'diagnosing-bugs',
+  'domain-modeling',
+  'grill-me',
+  'grill-with-docs',
+  'grilling',
+  'implement',
+  'improve-codebase-architecture',
+  'prototype',
+  'research',
+  'resolving-merge-conflicts',
+  'tdd',
+  'to-spec',
+  'to-tickets',
+  'triage',
+  'using-horizonlayer',
+  'wayfinder',
+] as const;
+
 export function parseInstallTarget(value: string | undefined): InstallTarget {
   if (value == null) return 'all';
   if (value === 'all' || value === 'claude' || value === 'codex') return value;
@@ -112,7 +136,7 @@ async function managedClaudeMarketplace(path: string, transaction?: string): Pro
 async function filterBundledSkills(pluginPath: string, skills: string[] | undefined): Promise<void> {
   if (!skills) return;
   const skillsPath = join(pluginPath, 'skills');
-  const selected = new Set(skills);
+  const selected = new Set([...ALWAYS_INCLUDED_SKILLS, ...skills]);
   const entries = await readdir(skillsPath, { withFileTypes: true });
   const available = new Set(entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name));
   const missing = [...selected].filter((name) => !available.has(name));

@@ -103,7 +103,7 @@ const status: DashboardStatus = {
   mcp: { available: true, command: 'horizonlayer' },
   rag: { enabled: true },
   tools: ['workspace', 'page', 'database', 'row', 'search'],
-  version: '0.1.0',
+  version: '0.1.1',
 };
 
 const pageInfo = {

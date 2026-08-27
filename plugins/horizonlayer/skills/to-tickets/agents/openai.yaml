@@ -1,0 +1,10 @@
+interface:
+  display_name: "To Tickets"
+  short_description: "Split a plan into tracer-bullet tickets"
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "horizonlayer"
+      description: "HorizonLayer Issues and Knowledge context"
+policy:
+  allow_implicit_invocation: false

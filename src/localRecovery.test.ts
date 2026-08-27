@@ -47,7 +47,7 @@ const manifest: BackupManifest = {
     derived_search_index_included: false,
   },
   horizonlayer_schema_version: 1,
-  horizonlayer_version: '0.1.0',
+  horizonlayer_version: '0.1.1',
   payload: {
     bytes: 19,
     format: 'postgresql-custom',

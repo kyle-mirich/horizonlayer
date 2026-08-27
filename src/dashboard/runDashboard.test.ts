@@ -15,7 +15,7 @@ vi.mock('../config.js', () => ({
   config: {
     dashboard: { port: 7_788 },
     rag: { enabled: true },
-    server: { version: '0.1.0' },
+    server: { version: '0.1.1' },
   },
 }));
 
@@ -107,7 +107,7 @@ describe('dashboard runtime', () => {
       appServer,
       databaseHealth: expect.any(Function),
       ragEnabled: true,
-      version: '0.1.0',
+      version: '0.1.1',
     });
     expect(httpServer.listen).toHaveBeenCalledWith({
       host: '127.0.0.1',

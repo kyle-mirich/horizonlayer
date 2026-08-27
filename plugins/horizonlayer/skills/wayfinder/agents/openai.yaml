@@ -1,0 +1,10 @@
+interface:
+  display_name: "Wayfinder"
+  short_description: "Map a large effort as decision tickets"
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "horizonlayer"
+      description: "HorizonLayer Issues and Knowledge MCP tools"
+policy:
+  allow_implicit_invocation: false

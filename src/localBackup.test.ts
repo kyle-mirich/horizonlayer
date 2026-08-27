@@ -124,7 +124,7 @@ describe('managed runtime Backup', () => {
       configurationPath: join(home, 'runtime.json'),
       manifest: {
         completed_at: '2026-08-10T20:00:01.000Z',
-        horizonlayer_version: '0.1.0',
+        horizonlayer_version: '0.1.1',
         postgresql: {
           pg_dump_version: 'pg_dump (PostgreSQL) 17.6',
           server_major: 17,

@@ -42,7 +42,7 @@ function manifest(overrides: Partial<BackupManifestInput> = {}): BackupManifestI
       derived_search_index_included: false,
     },
     horizonlayer_schema_version: 1,
-    horizonlayer_version: '0.1.0',
+    horizonlayer_version: '0.1.1',
     postgresql: {
       pg_dump_version: 'pg_dump (PostgreSQL) 17.6',
       server_major: 17,

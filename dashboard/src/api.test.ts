@@ -28,14 +28,14 @@ describe('DashboardApiClient', () => {
       mcp: { available: true, command: 'horizonlayer' },
       rag: { enabled: true },
       tools: ['workspace', 'page', 'database', 'row', 'search'],
-      version: '0.1.0',
+      version: '0.1.1',
     })) as DashboardFetch;
     const client = new DashboardApiClient({
       baseUrl: 'http://127.0.0.1:4317/',
       fetch: fetcher,
     });
 
-    await expect(client.status()).resolves.toMatchObject({ version: '0.1.0' });
+    await expect(client.status()).resolves.toMatchObject({ version: '0.1.1' });
     expect(fetcher).toHaveBeenCalledWith(
       'http://127.0.0.1:4317/api/status',
       expect.objectContaining({ method: 'GET' }),
@@ -48,7 +48,7 @@ describe('DashboardApiClient', () => {
       mcp: { available: true, command: 'horizonlayer' },
       rag: { enabled: false },
       tools: ['workspace', 'page', 'database', 'row', 'search'],
-      version: '0.1.0',
+      version: '0.1.1',
     })) as DashboardFetch;
 
     await expect(new DashboardApiClient({ fetch: fetcher }).status())

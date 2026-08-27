@@ -4,6 +4,12 @@ All notable changes to HorizonLayer are documented here.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-26
+
+### Added
+
+- HorizonLayer-oriented engineering workflow skills in the bundled plugin: capability orientation, Wayfinder planning, specification and ticket planning, Implement, TDD, research, architecture, diagnosis, and review, with Matt Pocock attribution.
+
 ## [0.1.0] - 2026-08-26
 
 ### Added
@@ -18,5 +24,6 @@ All notable changes to HorizonLayer are documented here.
 - Engineering notes ([docs/engineering-notes.md](docs/engineering-notes.md)) and project glossary ([docs/glossary.md](docs/glossary.md)).
 - Verification gates: 657 unit tests, 90% coverage thresholds, PostgreSQL integration suites, and Docker-backed smoke journeys for the packed CLI.
 
-[Unreleased]: https://github.com/kyle-mirich/horizonlayer/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/kyle-mirich/horizonlayer/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/kyle-mirich/horizonlayer/releases/tag/v0.1.1
 [0.1.0]: https://github.com/kyle-mirich/horizonlayer/releases/tag/v0.1.0

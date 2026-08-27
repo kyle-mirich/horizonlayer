@@ -1,0 +1,11 @@
+interface:
+  display_name: "Using HorizonLayer"
+  short_description: "Explain HorizonLayer capabilities and workflows"
+  default_prompt: "Use $using-horizonlayer to choose and explain the right HorizonLayer workflow for this task."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "horizonlayer"
+      description: "HorizonLayer Knowledge and Issues MCP tools"
+policy:
+  allow_implicit_invocation: true

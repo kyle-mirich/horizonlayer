@@ -1,6 +1,6 @@
 {
   "name": "horizonlayer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local-first MCP server for durable agent knowledge and issue tracking backed by PostgreSQL",
   "license": "MIT",
   "repository": {

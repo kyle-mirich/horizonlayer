@@ -44,7 +44,7 @@ The whole journey — A→B→A recovery, safety-backup return to B, corruption 
 
 ## Skills bundled beside the tools
 
-The installer stages per-module skill libraries (`plugins/horizonlayer/skills/{knowledge,issues}`) into Codex and Claude Code alongside the MCP registration. Skills teach the query language, the claim/release protocol, pagination caps, and the conflict-retry pattern — the parts of the contract agents otherwise learn by failed experimentation. Staging filters skills to the project's enabled modules and adapts Windows launches (`cmd /c npx …`) while leaving the portable Agent Plugins 1.0 manifest untouched.
+The installer stages per-module skill libraries (`plugins/horizonlayer/skills/{knowledge,issues}`) into Codex and Claude Code alongside the MCP registration. It also stages the adapted Matt Pocock engineering workflow and `using-horizonlayer` orientation skill for every installation; module filtering trims only the product skills. Skills teach the query language, the claim/release protocol, pagination caps, the conflict-retry pattern, and the Wayfinder-to-Implement handoff — the parts of the contract agents otherwise learn by failed experimentation. Staging adapts Windows launches (`cmd /c npx …`) while leaving the portable Agent Plugins 1.0 manifest untouched. Attribution is retained in `plugins/horizonlayer/THIRD_PARTY_NOTICES.md`.
 
 ## Verification as an evaluation harness
 

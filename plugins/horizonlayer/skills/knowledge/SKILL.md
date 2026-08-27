@@ -18,7 +18,7 @@ Use the HorizonLayer MCP tools as a shared source of truth, not as a transcript 
 
 - Use `knowledge` with `operation: "search"` and `input.mode: "records"` first when the goal is to find a real page or row to inspect, update, or link.
 - Use `knowledge` search with `input.mode: "rag"` only when semantic evidence across stored content is needed. Treat chunks as citation-ready evidence, then follow canonical IDs when an entity must be changed.
-- Reuse compact typed references such as `p_…`, `r_…`, and `d_…` directly in later HorizonLayer calls, including the `issues` tool; they are lossless substitutes for UUIDs. Request `format: "full"` only when exact metadata is needed.
+- Reuse compact typed references such as `p_…`, `r_…`, and `d_…` directly in later Knowledge and link calls; use an Issue UUID or readable Issue key such as `HL-12` for Issue operations. Request `format: "full"` only when exact metadata is needed.
 - Always provide a search `scope`. Prefer workspace scope unless a known session or database is narrower.
 - Fetch the canonical entity through the matching `knowledge` operation (`page`, `row`, or `database`) before mutating it.
 - Follow pagination while `page.has_more` is true and `page.next_offset` is not null.
