@@ -71,6 +71,7 @@ export interface RagChunk {
 export interface RagSearchResult {
   chunks: RagChunk[];
   truncated: boolean;
+  stale?: boolean;
 }
 
 interface PageSourceRow {
@@ -741,11 +742,13 @@ async function reconcileCorpus(
 interface RagIndexManifest {
   generation: string;
   point_count: number;
+  corpus_fingerprint: string | null;
 }
 
 function readCurrentManifest(
   stored: { payload: Record<string, unknown> } | null,
-  generation: string
+  generation: string,
+  expectedCorpusFingerprint?: string
 ): RagIndexManifest | null {
   const payload = stored?.payload;
   if (!payload
@@ -757,7 +760,18 @@ function readCurrentManifest(
       || (payload.point_count as number) < 0) {
     return null;
   }
-  return { generation, point_count: payload.point_count as number };
+  const corpusFingerprint = payload.corpus_fingerprint;
+  if (expectedCorpusFingerprint !== undefined) {
+    if (corpusFingerprint !== expectedCorpusFingerprint) return null;
+  } else if (corpusFingerprint !== undefined
+    && (typeof corpusFingerprint !== 'string' || corpusFingerprint.length === 0)) {
+    return null;
+  }
+  return {
+    generation,
+    point_count: payload.point_count as number,
+    corpus_fingerprint: typeof corpusFingerprint === 'string' ? corpusFingerprint : null,
+  };
 }
 
 function manifestVectorPoint(
@@ -894,12 +908,15 @@ async function refreshRagIndex(
     const observedGeneration = await dependencies.loadGeneration(workspaceId);
     const storedManifest = await dependencies.vectorStore.getWorkspaceManifest(workspaceId);
     const current = readCurrentManifest(storedManifest, observedGeneration);
-    if (!force && current && await dependencies.vectorStore.countWorkspace(
+    const corpus = await dependencies.loadCorpus(workspaceId);
+    const fingerprintMismatch = current !== null
+      && current.corpus_fingerprint !== null
+      && current.corpus_fingerprint !== corpus.fingerprint;
+    if (!force && !fingerprintMismatch && current && await dependencies.vectorStore.countWorkspace(
       workspaceId,
       current.generation
     ) === current.point_count) return current;
 
-    const corpus = await dependencies.loadCorpus(workspaceId);
     await reconcileCorpus(
       workspaceId,
       corpus,
@@ -934,7 +951,11 @@ async function refreshRagIndex(
       );
     }
     if (await dependencies.loadGeneration(workspaceId) !== corpus.generation) return null;
-    return { generation: corpus.generation, point_count: corpus.points.length };
+    return {
+      generation: corpus.generation,
+      point_count: corpus.points.length,
+      corpus_fingerprint: corpus.fingerprint,
+    };
   });
 }
 
@@ -980,6 +1001,7 @@ export async function searchRagWithDependencies(
     return embedded;
   };
 
+  let staleFallback: RagSearchResult | null = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const observedGeneration = await dependencies.loadGeneration(params.scope.workspace_id);
     const storedManifest = await dependencies.vectorStore.getWorkspaceManifest(
@@ -1040,12 +1062,16 @@ export async function searchRagWithDependencies(
       limit
     );
     if (hydrated.invalid) {
+      if (hydrated.result.chunks.length > 0) {
+        staleFallback = { ...hydrated.result, stale: true };
+      }
       await refreshRagIndex(params.scope.workspace_id, dependencies, true);
       continue;
     }
     return hydrated.result;
   }
 
+  if (staleFallback) return staleFallback;
   throw new DependencyUnavailableError(
     'rag',
     'RAG index could not reach a stable snapshot because workspace content kept changing',
@@ -1083,6 +1109,7 @@ export const ragInternals = {
   deterministicPointId,
   embeddingFingerprint,
   normalizeText,
+  readCurrentManifest,
   runWithRagWorkspaceLock,
   splitText,
   stableJson,

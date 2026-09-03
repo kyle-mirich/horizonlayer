@@ -121,5 +121,6 @@ export function formatRagSearch(result: RagSearchResult, format: SearchFormat) {
     sources,
     chunks,
     truncated: result.truncated,
+    ...(result.stale !== undefined ? { stale: result.stale } : {}),
   };
 }

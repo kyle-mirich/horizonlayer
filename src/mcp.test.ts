@@ -182,8 +182,8 @@ describe('AppServer official SDK adapter', () => {
       expect(searchResultBranches?.map((branch) => Object.keys(branch.properties ?? {}))).toEqual([
         ['mode', 'format', 'records', 'truncated'],
         ['mode', 'format', 'records', 'truncated'],
-        ['mode', 'format', 'sources', 'chunks', 'truncated'],
-        ['mode', 'format', 'chunks', 'truncated'],
+        ['mode', 'format', 'sources', 'chunks', 'truncated', 'stale'],
+        ['mode', 'format', 'chunks', 'truncated', 'stale'],
       ]);
       const errorEnums = JSON.stringify(searchOutput.properties?.error);
       expect(errorEnums).toContain('DEPENDENCY_UNAVAILABLE');

@@ -970,13 +970,15 @@ const SearchResultOutput = {
       }),
       chunks: arraySchema(CompactRagChunkOutput),
       truncated: booleanSchema,
-    }),
+      stale: booleanSchema,
+    }, ['mode', 'format', 'sources', 'chunks', 'truncated']),
     objectSchema({
       mode: { const: 'rag' },
       format: { const: 'full' },
       chunks: arraySchema(RagChunkOutput),
       truncated: booleanSchema,
-    }),
+      stale: booleanSchema,
+    }, ['mode', 'format', 'chunks', 'truncated']),
   ],
 };
 

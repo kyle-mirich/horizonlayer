@@ -315,6 +315,171 @@ describe('RAG search orchestration', () => {
       retryable: false,
     });
   });
+
+  it('returns the valid subset flagged stale when concurrent writes prevent a stable snapshot', async () => {
+    const point = canonicalPoint();
+    const corpus = { generation: '13', fingerprint: 'fresh', points: [point] };
+    const validHit = {
+      id: point.id,
+      score: 0.91,
+      payload: { ...point.payload, index_generation: '13' },
+    };
+    const setup = dependencies({
+      corpus,
+      manifest: {
+        id: 'manifest',
+        payload: {
+          record_type: 'manifest',
+          payload_version: 1,
+          embedding_fingerprint: ragInternals.embeddingFingerprint(),
+          index_generation: '13',
+          corpus_fingerprint: 'fresh',
+          point_count: 1,
+        },
+      },
+      hits: [validHit, { id: 'forged', score: 0.99, payload: { source_id: 'not-a-uuid' } }],
+    });
+
+    await expect(searchRagWithDependencies({ query: 'durable memory', scope }, setup.dependencies))
+      .resolves.toEqual({
+        chunks: [{
+          rank: 1,
+          score: 0.91,
+          text: point.text,
+          citation: point.citation,
+        }],
+        truncated: false,
+        stale: true,
+      });
+    expect(setup.store.query).toHaveBeenCalledTimes(3);
+    expect(setup.dependencies.loadCorpus).toHaveBeenCalledTimes(3);
+  });
+
+  it('still fails when no valid hits survive concurrent writes', async () => {
+    const point = canonicalPoint();
+    const corpus = { generation: '14', fingerprint: 'fresh', points: [point] };
+    const setup = dependencies({
+      corpus,
+      manifest: {
+        id: 'manifest',
+        payload: {
+          record_type: 'manifest',
+          payload_version: 1,
+          embedding_fingerprint: ragInternals.embeddingFingerprint(),
+          index_generation: '14',
+          corpus_fingerprint: 'fresh',
+          point_count: 1,
+        },
+      },
+      hits: [{ id: 'forged', score: 0.99, payload: { source_id: 'not-a-uuid' } }],
+    });
+
+    await expect(searchRagWithDependencies({ query: 'durable memory', scope }, setup.dependencies))
+      .rejects.toMatchObject({ code: 'DEPENDENCY_UNAVAILABLE', retryable: true });
+    expect(setup.store.query).toHaveBeenCalledTimes(3);
+  });
+
+  it('forces a refresh when the stored manifest fingerprint is malformed', async () => {
+    const point = canonicalPoint();
+    const corpus = { generation: '15', fingerprint: 'fresh', points: [point] };
+    const setup = dependencies({
+      corpus,
+      manifest: {
+        id: 'manifest',
+        payload: {
+          record_type: 'manifest',
+          payload_version: 1,
+          embedding_fingerprint: ragInternals.embeddingFingerprint(),
+          index_generation: '15',
+          corpus_fingerprint: 123,
+          point_count: 1,
+        },
+      },
+      hits: [{
+        id: point.id,
+        score: 0.77,
+        payload: { ...point.payload, index_generation: '15' },
+      }],
+    });
+
+    const result = await searchRagWithDependencies({ query: 'durable memory', scope }, setup.dependencies);
+    expect(result).toMatchObject({ chunks: [{ text: point.text }], truncated: false });
+    expect(result).not.toHaveProperty('stale');
+    expect(setup.dependencies.loadCorpus).toHaveBeenCalled();
+  });
+
+  it('rebuilds instead of trusting a manifest whose fingerprint mismatches the canonical corpus', async () => {
+    const point = canonicalPoint();
+    const corpus = { generation: '16', fingerprint: 'fresh', points: [point] };
+    const setup = dependencies({
+      corpus,
+      hits: [{
+        id: point.id,
+        score: 0.83,
+        payload: { ...point.payload, index_generation: '16' },
+      }],
+    });
+    vi.mocked(setup.store.getWorkspaceManifest)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({
+        id: 'manifest',
+        payload: {
+          record_type: 'manifest',
+          payload_version: 1,
+          embedding_fingerprint: ragInternals.embeddingFingerprint(),
+          index_generation: '16',
+          corpus_fingerprint: 'stale-fingerprint',
+          point_count: 1,
+        },
+      });
+
+    const result = await searchRagWithDependencies({ query: 'durable memory', scope }, setup.dependencies);
+    expect(result).toMatchObject({ chunks: [{ text: point.text }], truncated: false });
+    expect(setup.dependencies.loadCorpus).toHaveBeenCalled();
+    expect(setup.store.upsert).toHaveBeenCalledWith([{
+      id: point.id,
+      vector: [0.5, 0.5],
+      payload: point.payload,
+    }]);
+  });
+});
+
+describe('RAG manifest fingerprint verification', () => {
+  function manifestPayload(overrides: Record<string, unknown> = {}) {
+    return {
+      record_type: 'manifest',
+      payload_version: 1,
+      embedding_fingerprint: ragInternals.embeddingFingerprint(),
+      index_generation: '9',
+      point_count: 1,
+      ...overrides,
+    };
+  }
+
+  it('accepts manifests without a fingerprint for backward compatibility', () => {
+    expect(ragInternals.readCurrentManifest({ payload: manifestPayload() }, '9'))
+      .toEqual({ generation: '9', point_count: 1, corpus_fingerprint: null });
+  });
+
+  it('rejects malformed fingerprints and forces a refresh', () => {
+    expect(ragInternals.readCurrentManifest({ payload: manifestPayload({ corpus_fingerprint: 123 }) }, '9'))
+      .toBeNull();
+    expect(ragInternals.readCurrentManifest({ payload: manifestPayload({ corpus_fingerprint: '' }) }, '9'))
+      .toBeNull();
+  });
+
+  it('rejects fingerprints that mismatch the expected corpus and accepts matches', () => {
+    expect(ragInternals.readCurrentManifest(
+      { payload: manifestPayload({ corpus_fingerprint: 'old' }) },
+      '9',
+      'new'
+    )).toBeNull();
+    expect(ragInternals.readCurrentManifest(
+      { payload: manifestPayload({ corpus_fingerprint: 'old' }) },
+      '9',
+      'old'
+    )).toEqual({ generation: '9', point_count: 1, corpus_fingerprint: 'old' });
+  });
 });
 
 describe('splitText whitespace boundaries', () => {
