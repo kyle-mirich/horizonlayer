@@ -118,6 +118,7 @@ const Tags = z.array(z.string().trim().min(1).max(100)).max(50);
 const NavigateSchema = z.object({
   item_type: z.enum(LINK_ITEM_TYPES),
   item_id: Id,
+  workspace_id: Id.optional(),
   depth: z.number().int().min(1).max(3).optional(),
   limit: z.number().int().min(1).max(100).optional(),
 }).strict();

@@ -85,6 +85,13 @@ describe('compact module handlers', () => {
     });
     expect(navigateResult.structuredContent).toMatchObject({ action: 'navigate', ok: true });
     expect(mocks.traverseLinks).toHaveBeenCalled();
+
+    await knowledge.execute({
+      operation: 'navigate', input: { item_type: 'page', item_id: id, workspace_id: id },
+    });
+    expect(mocks.traverseLinks).toHaveBeenCalledWith(
+      expect.objectContaining({ workspace_id: id })
+    );
   });
 
   it('returns compact validation errors without invoking persistence', async () => {
