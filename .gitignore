@@ -4,3 +4,6 @@ dist/
 *.tgz
 .agents/
 .DS_Store
+.opencode/
+.stryker-tmp/
+reports/

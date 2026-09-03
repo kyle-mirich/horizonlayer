@@ -18,6 +18,10 @@ npm pack --dry-run
 
 `npm run verify` runs linting, type checks, and unit tests. `npm test` and `npm run test:coverage` explicitly exclude `*.integration.test.ts`, so these ordinary local checks stay fast and never require Docker, PostgreSQL, Qdrant, or another external service. Vitest also turns React “not wrapped in act(...)” warnings into test failures without hiding the original warning. Coverage enforces the repository's configured branch, function, line, and statement thresholds. Run the focused test suite that covers a change, then run the full verification and coverage gates before opening a pull request. Changes to launcher, installer, runtime configuration, or package contents also need a clean-environment and packed-artifact check.
 
+### Mutation testing
+
+`npm run test:mutation` runs StrykerJS with the Vitest runner over a focused, local-only scope (`src/references.ts`, `src/tools/common.ts`, `src/tools/issueQuery.ts`, `src/tools/searchFormat.ts`; see `stryker.config.mjs`). It needs no Docker, PostgreSQL, Qdrant, or external service. The HTML report lands in `reports/mutation/` (gitignored). Thresholds are advisory (`high: 80, low: 60, break: null`): a low score never fails local runs or CI — treat surviving mutants as test-gap signals, strengthen the co-located `*.test.ts`, and re-run the focused scope. The initial baseline is 83.80% overall (`common.ts` 87.56, `issueQuery.ts` 79.19, `searchFormat.ts` 90.12, `references.ts` 78.08). Widen `mutate` only after the baseline is green, keeping new entries to fast pure modules so the suite stays practical.
+
 ### PostgreSQL integration tests
 
 The concurrency, issue-blocker, issue-model, search-generation, and canonical RAG suites require a disposable PostgreSQL database. Point the dedicated integration variable at that database and run the explicit integration command:

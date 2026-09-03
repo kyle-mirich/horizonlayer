@@ -10,7 +10,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['scripts/**/*.mjs', 'plugins/**/*.mjs'],
+    files: ['scripts/**/*.mjs', 'plugins/**/*.mjs', 'stryker.config.mjs'],
     languageOptions: {
       ecmaVersion: 'latest',
       globals: {
