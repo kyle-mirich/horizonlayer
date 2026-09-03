@@ -19,7 +19,7 @@ function listen(server: Server, port: number): Promise<void> {
   return new Promise((resolve, reject) => {
     const onError = (error: Error): void => {
       server.off('listening', onListening);
-      reject(error);
+      reject(mapListenError(error, port));
     };
     const onListening = (): void => {
       server.off('error', onError);
@@ -57,6 +57,28 @@ function closeHttpServer(server: Server | null): Promise<void> {
       finish(error instanceof Error ? error : new Error(String(error)));
     }
   });
+}
+
+export function dashboardPortConflictGuidance(port: number): string {
+  return `HorizonLayer dashboard port ${port} is already in use. `
+    + 'Stop the process using that port, set DASHBOARD_PORT to a free port, '
+    + 'or start the dashboard with `horizonlayer dashboard --port <port>`.';
+}
+
+export function isPortConflict(error: unknown): boolean {
+  const code = error != null && typeof error === 'object'
+    ? (error as { code?: unknown }).code
+    : undefined;
+  if (typeof code === 'string' && code === 'EADDRINUSE') return true;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.includes('EADDRINUSE');
+}
+
+function mapListenError(error: Error, port: number): Error {
+  if (!isPortConflict(error)) return error;
+  const conflict = new Error(dashboardPortConflictGuidance(port));
+  (conflict as { cause?: unknown }).cause = error;
+  return conflict;
 }
 
 function errorMessage(error: unknown): string {

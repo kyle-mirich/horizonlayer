@@ -12,6 +12,7 @@ import {
   createLocalRuntimeConfig,
   dockerDesktopLaunchCommand,
   ensureDockerDesktopReady,
+  hasExplicitRuntimeOverride,
   isDockerDaemonReady,
   localRuntimeConfigPath,
   localRuntimeDirectory,
@@ -255,6 +256,17 @@ describe('local runtime configuration', () => {
     await expect(chooseLocalPort([55_432, 55_433], async () => false)).rejects.toThrow(
       'Stop the process using one of those loopback ports'
     );
+  });
+});
+
+describe('explicit runtime overrides', () => {
+  it('treats only DATABASE_URL as a user-managed runtime marker', () => {
+    expect(hasExplicitRuntimeOverride({ DATABASE_URL: 'postgres://external/db' })).toBe(true);
+    expect(hasExplicitRuntimeOverride({ DATABASE_URL: '' })).toBe(false);
+    expect(hasExplicitRuntimeOverride({ QDRANT_URL: 'http://127.0.0.1:6333' })).toBe(false);
+    expect(hasExplicitRuntimeOverride({ RAG_ENABLED: 'true' })).toBe(false);
+    expect(hasExplicitRuntimeOverride({ RAG_ENABLED: 'false' })).toBe(false);
+    expect(hasExplicitRuntimeOverride({})).toBe(false);
   });
 });
 

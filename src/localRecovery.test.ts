@@ -548,13 +548,16 @@ describe('managed Runtime Recovery orchestration', () => {
     for (const [name, value] of [
       ['DATABASE_URL', 'postgres://example.invalid/db'],
       ['QDRANT_URL', 'http://example.invalid'],
-      ['RAG_ENABLED', 'false'],
     ]) {
       await expect(recoverManagedRuntime({
         artifact: '/requested/incoming.hlbackup',
         environment: { HORIZONLAYER_HOME: '/runtime', [name]: value },
       }, dependencies([]))).rejects.toThrow('cannot run with');
     }
+    await expect(recoverManagedRuntime({
+      artifact: '/requested/incoming.hlbackup',
+      environment: { HORIZONLAYER_HOME: '/runtime', RAG_ENABLED: 'false' },
+    }, dependencies([], { readConfig: async () => null }))).rejects.toThrow('setup');
     const order: string[] = [];
     await expect(recoverManagedRuntime({
       artifact: '/requested/incoming.hlbackup',
@@ -568,7 +571,10 @@ describe('managed Runtime Recovery orchestration', () => {
     }, {
       inspectArtifact: async (path) => inspection(path),
       readConfig: async () => config,
-    })).rejects.toThrow('cannot run with');
+    })).resolves.toMatchObject({
+      composeProject: config.compose_project,
+      path: '/requested/incoming.hlbackup',
+    });
     await expect(previewManagedRuntimeRecovery({
       artifact: '/requested/incoming.hlbackup',
       environment: { HORIZONLAYER_HOME: '/runtime' },

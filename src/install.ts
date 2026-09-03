@@ -509,6 +509,17 @@ async function installCodex(
   return { host: 'Codex', path: target };
 }
 
+export interface InstallFailure {
+  error: unknown;
+  host: 'Claude Code' | 'Codex';
+  target: InstallTarget;
+}
+
+function installFailureMessage(failure: InstallFailure): string {
+  const reason = failure.error instanceof Error ? failure.error.message : String(failure.error);
+  return `${failure.host}: ${reason}`;
+}
+
 export async function installAgentPlugins(
   target: InstallTarget = 'all',
   options: InstallOptions = {}
@@ -517,20 +528,47 @@ export async function installAgentPlugins(
   const source = options.pluginSource ?? bundledPluginSource();
   const marketplaceSource = options.marketplaceSource ?? bundledClaudeMarketplaceSource();
   const runCommand = options.runCommand ?? defaultCommandRunner;
+  const requested: InstallTarget[] = target === 'all' ? ['claude', 'codex'] : [target];
   const results: InstallResult[] = [];
+  const failures: InstallFailure[] = [];
 
-  if (target === 'all' || target === 'claude') {
-    results.push(await installClaude(
-      source,
-      marketplaceSource,
-      home,
-      runCommand,
-      options.skills,
-      options.platform
-    ));
+  // Install best-effort per host so one missing CLI never blocks the other.
+  for (const current of requested) {
+    try {
+      if (current === 'claude') {
+        results.push(await installClaude(
+          source,
+          marketplaceSource,
+          home,
+          runCommand,
+          options.skills,
+          options.platform
+        ));
+      } else {
+        results.push(await installCodex(source, home, runCommand, options.skills, options.platform));
+      }
+    } catch (error) {
+      failures.push({
+        error,
+        host: current === 'claude' ? 'Claude Code' : 'Codex',
+        target: current,
+      });
+    }
   }
-  if (target === 'all' || target === 'codex') {
-    results.push(await installCodex(source, home, runCommand, options.skills, options.platform));
+
+  if (results.length === 0) {
+    const detail = failures.map(installFailureMessage).join('; ');
+    const hosts = failures.map((failure) => failure.host).join(' and ');
+    throw new Error(
+      `HorizonLayer plugin installation failed for ${hosts}. ${detail} `
+      + 'Fix the failure for each host you use, then run this command again.'
+    );
+  }
+  for (const failure of failures) {
+    console.error(
+      `Warning: installed HorizonLayer for ${results.map((result) => result.host).join(' and ')}, `
+      + `but skipped ${installFailureMessage(failure)}`
+    );
   }
   return results;
 }

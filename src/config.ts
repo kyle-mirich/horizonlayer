@@ -3,7 +3,6 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { DEFAULT_QDRANT_COLLECTION } from './search/constants.js';
-
 const packageMetadata = z.object({
   version: z.string().regex(/^\d+\.\d+\.\d+$/),
 }).parse(createRequire(import.meta.url)('../package.json'));
@@ -100,8 +99,52 @@ function defaultEmbeddingCacheDir(environment: NodeJS.ProcessEnv): string {
   return join(cacheRoot, 'horizonlayer', 'models');
 }
 
+const CONFIG_PATH_TO_ENV_VAR: Record<string, string> = {
+  'dashboard.port': 'DASHBOARD_PORT',
+  'database.connection_timeout_ms': 'DB_CONNECTION_TIMEOUT_MS',
+  'database.database': 'DB_NAME',
+  'database.host': 'DB_HOST',
+  'database.idle_timeout_ms': 'DB_IDLE_TIMEOUT_MS',
+  'database.password': 'DB_PASSWORD',
+  'database.pool_max': 'DB_POOL_MAX',
+  'database.port': 'DB_PORT',
+  'database.ssl_mode': 'DB_SSL_MODE',
+  'database.ssl_reject_unauthorized': 'DB_SSL_REJECT_UNAUTHORIZED',
+  'database.statement_timeout_ms': 'DB_STATEMENT_TIMEOUT_MS',
+  'database.url': 'DATABASE_URL',
+  'database.user': 'DB_USER',
+  'rag.allow_download': 'EMBEDDING_ALLOW_DOWNLOAD',
+  'rag.api_key': 'QDRANT_API_KEY',
+  'rag.cache_dir': 'EMBEDDING_CACHE_DIR',
+  'rag.collection': 'QDRANT_COLLECTION',
+  'rag.embedding_dtype': 'EMBEDDING_DTYPE',
+  'rag.embedding_model': 'EMBEDDING_MODEL',
+  'rag.embedding_revision': 'EMBEDDING_REVISION',
+  'rag.enabled': 'RAG_ENABLED',
+  'rag.qdrant_url': 'QDRANT_URL',
+  'rag.timeout_ms': 'QDRANT_TIMEOUT_MS',
+  'server.name': 'APP_NAME',
+};
+
+export function configIssueToEnvVar(path: Array<string | number>): string | null {
+  const key = path.map(String).join('.');
+  return CONFIG_PATH_TO_ENV_VAR[key] ?? null;
+}
+
+export function formatConfigError(error: unknown): string {
+  if (error instanceof z.ZodError) {
+    const lines = error.issues.map((issue) => {
+      const variable = configIssueToEnvVar(issue.path.map(String)) ?? issue.path.map(String).join('.');
+      return `${variable}: ${issue.message}`;
+    });
+    return `Invalid configuration:\n${lines.map((line) => `  - ${line}`).join('\n')}`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config {
-  return ConfigSchema.parse({
+  try {
+    return ConfigSchema.parse({
     dashboard: {
       port: parseNumber('DASHBOARD_PORT', environment.DASHBOARD_PORT),
     },
@@ -148,7 +191,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config
       name: optional(environment.APP_NAME),
       version: packageMetadata.version,
     },
-  });
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) throw new Error(formatConfigError(error));
+    throw error;
+  }
 }
 
 export let config = loadConfig();

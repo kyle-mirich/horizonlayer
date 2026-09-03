@@ -51,10 +51,20 @@ export type ComposeAction = 'reset' | 'start' | 'stop';
 export function hasExplicitRuntimeOverride(
   environment: NodeJS.ProcessEnv = process.env
 ): boolean {
-  return ['DATABASE_URL', 'QDRANT_URL', 'RAG_ENABLED'].some((name) => {
-    const value = environment[name];
-    return value != null && value !== '';
-  });
+  // Only DATABASE_URL marks a user-managed runtime. RAG_ENABLED and QDRANT_URL
+  // never suppress provisioning: they refine the managed runtime instead of
+  // replacing its PostgreSQL connection.
+  const value = environment.DATABASE_URL;
+  return value != null && value !== '';
+}
+
+export function hasExternalVectorUrl(
+  environment: NodeJS.ProcessEnv = process.env
+): boolean {
+  // Recovery clears the derived search index, so an external Qdrant must refuse
+  // even though it never suppresses provisioning on its own.
+  const value = environment.QDRANT_URL;
+  return value != null && value !== '';
 }
 
 function runCommand(

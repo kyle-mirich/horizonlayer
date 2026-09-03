@@ -66,7 +66,12 @@ function parseSkills(value: string): SkillInstallTarget {
   throw new Error('Skills must be none, codex, claude, or all');
 }
 
+export const SETUP_USAGE = 'Usage: horizonlayer setup [--modules knowledge|issues|both] [--skills none|codex|claude|all] [--non-interactive]';
+
 export function parseProjectSetupArgs(args: string[]): ProjectSetupCliOptions {
+  if (args.some((argument) => argument === '--help' || argument === '-h' || argument === 'help')) {
+    throw new Error(SETUP_USAGE);
+  }
   const result: ProjectSetupCliOptions = {};
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]!;

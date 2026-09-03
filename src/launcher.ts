@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import pg from 'pg';
@@ -24,12 +25,13 @@ import { isDependencyUnavailableCode } from './tools/common.js';
 
 const { Client } = pg;
 
-export type LauncherMode = 'backup' | 'dashboard' | 'doctor' | 'help' | 'install' | 'legacy-mcp' | 'mcp' | 'recover' | 'reset' | 'setup' | 'stop';
+export type LauncherMode = 'backup' | 'dashboard' | 'doctor' | 'help' | 'install' | 'legacy-mcp' | 'mcp' | 'recover' | 'reset' | 'setup' | 'stop' | 'version';
 
 export interface LauncherCommand {
   backupPath?: string;
   confirmRecovery?: boolean;
   confirmReset: boolean;
+  dashboardPort?: number;
   mode: LauncherMode;
   openDashboard: boolean;
   recoveryPath?: string;
@@ -42,18 +44,77 @@ class FriendlyBootstrapError extends Error {
   }
 }
 
-const USAGE = 'Usage: horizonlayer [mcp|legacy-mcp|setup|backup [FILE]|recover FILE [--yes]|dashboard [--open]|doctor|stop|reset --yes|install [all|codex|claude]]';
+const USAGE = 'Usage: horizonlayer [mcp|legacy-mcp|setup|backup [FILE]|recover FILE [--yes]|dashboard [--open] [--port PORT]|doctor|stop|reset --yes|install [all|codex|claude]|--help|--version]';
+
+const packageVersion: string = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
+
+export function launcherVersion(): string {
+  return packageVersion;
+}
+
+export function isHelpFlag(value: string): boolean {
+  return value === '--help' || value === '-h' || value === 'help';
+}
+
+export function parseDashboardPortValue(value: string): number {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new FriendlyBootstrapError(
+      `Invalid dashboard port: ${value}. Use --port 1-65535 or set DASHBOARD_PORT to a free port (1-65535).`
+    );
+  }
+  return port;
+}
+
+export function parseDashboardPort(args: string[]): number | undefined {
+  let port: number | undefined;
+  const rest = args.slice(1);
+  for (let index = 0; index < rest.length; index += 1) {
+    const argument = rest[index]!;
+    if (argument === '--open') continue;
+    if (argument === '--port') {
+      const value = rest[index + 1];
+      if (value == null || value.startsWith('--')) {
+        throw new FriendlyBootstrapError(
+          'dashboard --port requires a value. Use --port 1-65535 or set DASHBOARD_PORT to a free port.\n'
+          + USAGE
+        );
+      }
+      port = parseDashboardPortValue(value);
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith('--port=')) {
+      port = parseDashboardPortValue(argument.slice('--port='.length));
+      continue;
+    }
+    throw new FriendlyBootstrapError(`Unknown dashboard option: ${argument}\n` + USAGE);
+  }
+  return port;
+}
 
 export function parseLauncherCommand(args: string[]): LauncherCommand {
+  if (args.length === 1 && (args[0] === '--version' || args[0] === '-v')) {
+    return { confirmReset: false, mode: 'version', openDashboard: false };
+  }
+  // --help works per subcommand: `setup --help` explains setup instead of
+  // falling through to option parsing and failing there.
+  if (args.length > 0 && args.some(isHelpFlag)) {
+    return { confirmReset: false, mode: 'help', openDashboard: false };
+  }
   if (args.length === 0 || (args.length === 1 && args[0] === 'mcp')) {
     return { confirmReset: false, mode: 'mcp', openDashboard: false };
   }
   if (args.length === 1 && args[0] === 'legacy-mcp') {
     return { confirmReset: false, mode: 'legacy-mcp', openDashboard: false };
   }
-  if (args[0] === 'dashboard'
-    && (args.length === 1 || (args.length === 2 && args[1] === '--open'))) {
-    return { confirmReset: false, mode: 'dashboard', openDashboard: args[1] === '--open' };
+  if (args[0] === 'dashboard') {
+    return {
+      confirmReset: false,
+      dashboardPort: parseDashboardPort(args),
+      mode: 'dashboard',
+      openDashboard: args.includes('--open'),
+    };
   }
   if (args[0] === 'setup') {
     return { confirmReset: false, mode: 'setup', openDashboard: false };
@@ -176,6 +237,18 @@ export function databaseUnavailableGuidance(url: string): string {
     + 'to restore the managed local runtime.';
 }
 
+export async function runWithDatabaseGuidance(operation: () => Promise<void>): Promise<void> {
+  try {
+    await operation();
+  } catch (error) {
+    if (process.env.DATABASE_URL && isDatabaseUnavailable(error)) {
+      throw new FriendlyBootstrapError(databaseUnavailableGuidance(process.env.DATABASE_URL),
+        error instanceof Error ? error.message : String(error));
+    }
+    throw error;
+  }
+}
+
 export function localRuntimeRecoveryGuidance(health: LocalRuntimeHealth): string[] {
   const guidance: string[] = [];
   if (!health.dockerReady) {
@@ -264,6 +337,30 @@ async function warmLocalRag(): Promise<void> {
   }
 }
 
+export async function warmLocalRagBestEffort(
+  warm: () => Promise<void> = warmLocalRag
+): Promise<boolean> {
+  try {
+    await warm();
+    return true;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(
+      `Warning: the local embedding model could not be loaded (${reason}). `
+      + 'Continuing with RAG disabled for this setup; run `horizonlayer setup` again to retry the embedding warm-up.'
+    );
+    process.env.RAG_ENABLED = 'false';
+    const { reloadConfig } = await import('./config.js');
+    try {
+      reloadConfig();
+    } catch {
+      // The configuration was valid before disabling RAG; keep the degraded
+      // setup going even if a later reload cannot validate unrelated values.
+    }
+    return false;
+  }
+}
+
 async function runSetup(projectOptions: import('./projectSetup.js').ProjectSetupOptions = {}): Promise<void> {
   const configPath = localRuntimeConfigPath();
   await withLocalRuntimeLifecycleLock(async () => {
@@ -290,7 +387,6 @@ async function runSetup(projectOptions: import('./projectSetup.js').ProjectSetup
     } finally {
       await closePool();
     }
-    await warmLocalRag();
     const { setupProject } = await import('./projectSetup.js');
     let project: Awaited<ReturnType<typeof setupProject>>;
     try {
@@ -298,6 +394,9 @@ async function runSetup(projectOptions: import('./projectSetup.js').ProjectSetup
     } finally {
       await closePool();
     }
+    // The project configuration is durable before the optional embedding
+    // warm-up, so a model download failure never loses the configured modules.
+    await warmLocalRagBestEffort();
     console.error(`HorizonLayer setup is complete. Configuration: ${configPath}`);
     console.error(`Project configuration: ${project.configPath}`);
     console.error(`Enabled modules: ${project.config.modules.join(', ')}`);
@@ -367,6 +466,17 @@ async function runDoctor(): Promise<void> {
     return;
   }
   applyLocalRuntimeEnvironment(config);
+  const { reloadConfig } = await import('./config.js');
+  try {
+    reloadConfig();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Configuration: invalid (${configPath})`);
+    console.error(message);
+    console.error('Fix the named variable values, then run `horizonlayer doctor` again.');
+    process.exitCode = 1;
+    return;
+  }
   const environment = runtimeEnvironment(config);
 
   const dockerReady = isDockerDaemonReady();
@@ -402,7 +512,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
   const command = parseLauncherCommand(args);
   const { mode } = command;
   if (mode === 'help') {
-    console.error([
+    console.log([
       USAGE,
       '',
       '  mcp        Start the compact module-aware stdio MCP server (default)',
@@ -411,12 +521,18 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
       '             Flags: --modules knowledge|issues|both --skills none|codex|claude|all --non-interactive',
       '  backup     Create a point-in-time Backup of all managed canonical data',
       '  recover    Preview a managed Runtime Recovery; pass --yes after FILE to perform it',
-      '  dashboard  Start the local dashboard; pass --open to open it in a browser',
+      '  dashboard  Start the local dashboard; pass --open to open it in a browser, --port PORT to override DASHBOARD_PORT',
       '  doctor     Check configuration, Docker, PostgreSQL, and Qdrant',
       '  stop       Stop the managed PostgreSQL and Qdrant services',
       '  reset      Permanently remove the managed services and local data; pass --yes to confirm',
       '  install    Install the HorizonLayer plugin for Codex and Claude Code',
+      '  --version  Print the HorizonLayer version and exit (-v)',
     ].join('\n'));
+    return;
+  }
+
+  if (mode === 'version') {
+    console.log(`horizonlayer ${launcherVersion()}`);
     return;
   }
 
@@ -505,35 +621,54 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
 
   if (!process.env.DATABASE_URL) {
     throw new FriendlyBootstrapError(
-      'No PostgreSQL connection is configured. Run `horizonlayer setup` or set DATABASE_URL to an existing PostgreSQL instance.'
+      'No PostgreSQL connection is configured. Run `horizonlayer setup` or set DATABASE_URL to an existing PostgreSQL instance. '
+      + 'When DATABASE_URL is set, HorizonLayer uses that database instead of provisioning the managed local runtime.'
     );
   }
 
   if (mode === 'dashboard') {
-    const { runDashboard } = await import('./dashboard/runDashboard.js');
-    const runtime = await runDashboard();
-    if (command.openDashboard && !openDashboardUrl(runtime.url)) {
-      console.error(`Open the HorizonLayer dashboard at ${runtime.url}`);
+    if (command.dashboardPort != null) {
+      process.env.DASHBOARD_PORT = String(command.dashboardPort);
+      reloadConfig();
     }
+    const { runDashboard } = await import('./dashboard/runDashboard.js');
+    await runWithDatabaseGuidance(async () => {
+      const runtime = await runDashboard();
+      if (command.openDashboard && !openDashboardUrl(runtime.url)) {
+        console.error(`Open the HorizonLayer dashboard at ${runtime.url}`);
+      }
+    });
     return;
   }
 
-  const { runServer } = await import('./runServer.js');
-  try {
+  const bareInvocation = args.length === 0;
+  await runWithDatabaseGuidance(async () => {
+    const { runServer } = await import('./runServer.js');
     if (mode === 'legacy-mcp') {
+      const { projectConfigPath } = await import('./projectSetup.js');
+      console.error(`Project configuration: ${projectConfigPath()}`);
+      console.error('Enabled modules: knowledge, issues (legacy catalog)');
       await runServer({ catalogMode: 'legacy' });
     } else {
-      const { readProjectConfig } = await import('./projectSetup.js');
+      const { readProjectConfig, projectConfigPath } = await import('./projectSetup.js');
+      const configPath = projectConfigPath();
       const project = process.env.HORIZONLAYER_MODULES ? null : await readProjectConfig();
+      if (process.env.HORIZONLAYER_MODULES) {
+        console.error(`Project configuration: ${configPath} (overridden by HORIZONLAYER_MODULES)`);
+        console.error(`Enabled modules: ${process.env.HORIZONLAYER_MODULES}`);
+      } else if (project) {
+        console.error(`Project configuration: ${configPath}`);
+        console.error(`Enabled modules: ${project.modules.join(', ')}`);
+      } else {
+        console.error(`Project configuration: ${configPath} (missing, using defaults)`);
+        console.error('Enabled modules: knowledge, issues');
+      }
       await runServer({ catalogMode: 'modules', modules: project?.modules });
     }
-  } catch (error) {
-    if (process.env.DATABASE_URL && isDatabaseUnavailable(error)) {
-      throw new FriendlyBootstrapError(databaseUnavailableGuidance(process.env.DATABASE_URL),
-        error instanceof Error ? error.message : String(error));
+    if (bareInvocation) {
+      console.error('HorizonLayer MCP server is ready and listening on stdio.');
     }
-    throw error;
-  }
+  });
 }
 
 function isMainModule(): boolean {

@@ -218,6 +218,36 @@ describe('dashboard runtime', () => {
     );
   });
 
+  it('names the port and remedy when the dashboard port is occupied', async () => {
+    httpServer.listenError = Object.assign(
+      new Error('listen EADDRINUSE: address already in use 127.0.0.1:7788'),
+      { code: 'EADDRINUSE' }
+    );
+    const { startDashboard } = await import('./runDashboard.js');
+
+    const failure = await startDashboard().then(
+      () => { throw new Error('expected startDashboard to reject'); },
+      (error: unknown) => error as Error
+    );
+    expect(failure.message).toContain('dashboard port 7788 is already in use');
+    expect(failure.message).toContain('DASHBOARD_PORT');
+    expect(failure.message).toContain('--port');
+    expect(mocks.disposeEmbeddingProvider).toHaveBeenCalledTimes(1);
+    expect(mocks.closePool).toHaveBeenCalledTimes(1);
+  });
+
+  it('explains port conflicts and detects them by code or message', async () => {
+    const { dashboardPortConflictGuidance, isPortConflict } = await import('./runDashboard.js');
+
+    expect(dashboardPortConflictGuidance(4317)).toContain('4317');
+    expect(dashboardPortConflictGuidance(4317)).toContain('DASHBOARD_PORT');
+    expect(dashboardPortConflictGuidance(4317)).toContain('--port');
+    expect(isPortConflict(Object.assign(new Error('busy'), { code: 'EADDRINUSE' }))).toBe(true);
+    expect(isPortConflict(new Error('listen EADDRINUSE: address already in use'))).toBe(true);
+    expect(isPortConflict(new Error('address in use'))).toBe(false);
+    expect(isPortConflict(null)).toBe(false);
+  });
+
   it('cleans the pool even when database initialization fails', async () => {
     mocks.initializeDatabase.mockRejectedValueOnce(new Error('database unavailable'));
     const { startDashboard } = await import('./runDashboard.js');

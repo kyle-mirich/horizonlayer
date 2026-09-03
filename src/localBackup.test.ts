@@ -201,13 +201,27 @@ describe('managed runtime Backup', () => {
 
     for (const [name, value] of [
       ['DATABASE_URL', 'postgres://example.invalid/db'],
-      ['QDRANT_URL', 'http://example.invalid'],
-      ['RAG_ENABLED', 'false'],
     ]) {
       await expect(createManagedRuntimeBackup({
         destination: join(directory, `${name}.hlbackup`),
         environment: { HORIZONLAYER_HOME: home, [name]: value },
       }, dependencies([]))).rejects.toThrow('cannot run with');
+    }
+
+    for (const [name, value] of [
+      ['QDRANT_URL', 'http://example.invalid'],
+      ['RAG_ENABLED', 'false'],
+    ]) {
+      const order: string[] = [];
+      const error = await createManagedRuntimeBackup({
+        destination: join(directory, `${name}.hlbackup`),
+        environment: { HORIZONLAYER_HOME: home, [name]: value },
+      }, dependencies(order)).then(
+        () => null,
+        (failure: unknown) => failure as Error,
+      );
+      expect(error?.message ?? '').not.toContain('cannot run with');
+      expect(order).toContain('config');
     }
 
     const order: string[] = [];

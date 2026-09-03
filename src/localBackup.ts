@@ -507,8 +507,8 @@ export async function createManagedRuntimeBackup(
   const environment = options.environment ?? process.env;
   if (hasExplicitRuntimeOverride(environment)) {
     throw new LocalBackupError(
-      'Managed Backup cannot run with DATABASE_URL, QDRANT_URL, or RAG_ENABLED overrides. '
-      + 'Unset them to target the saved Managed Local Runtime.'
+      'Managed Backup cannot run with a DATABASE_URL override. '
+      + 'Unset it to target the saved Managed Local Runtime.'
     );
   }
   const configurationPath = localRuntimeConfigPath(environment);

@@ -17,7 +17,7 @@ vi.mock('./db/queries/issueProjects.js', () => ({
 }));
 vi.mock('./install.js', () => ({ installAgentPlugins: mocks.installAgentPlugins }));
 
-import { bundledSkills, parseProjectSetupArgs, setupProject } from './projectSetup.js';
+import { bundledSkills, parseProjectSetupArgs, SETUP_USAGE, setupProject } from './projectSetup.js';
 
 const directories: string[] = [];
 const workspace = { id: '00000000-0000-4000-8000-000000000001', name: 'Default' };
@@ -127,5 +127,12 @@ describe('project setup', () => {
     });
     expect(() => parseProjectSetupArgs(['--modules'])).toThrow('requires a value');
     expect(() => parseProjectSetupArgs(['--unknown'])).toThrow('Unknown setup option');
+  });
+
+  it('answers setup --help with usage instead of an unknown-option failure', () => {
+    for (const args of [['--help'], ['-h'], ['help'], ['--modules', 'knowledge', '--help']]) {
+      expect(() => parseProjectSetupArgs(args)).toThrow(SETUP_USAGE);
+    }
+    expect(SETUP_USAGE).toContain('horizonlayer setup');
   });
 });

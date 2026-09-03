@@ -524,6 +524,63 @@ describe('plugin installer', () => {
     ]);
   });
 
+  it('installs the surviving host and summarizes when one client fails', async () => {
+    const home = await temporaryHome();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const runCommand = vi.fn((command: string) => {
+        if (command === 'claude') throw new Error('Claude Code CLI was not found');
+      });
+      const results = await installAgentPlugins('all', {
+        homeDirectory: home,
+        marketplaceSource,
+        pluginSource,
+        runCommand,
+      });
+
+      expect(results).toEqual([{ host: 'Codex', path: join(home, 'plugins', 'horizonlayer') }]);
+      expect(runCommand).toHaveBeenCalledWith('codex', expect.any(Array));
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Codex'));
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Claude Code'));
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('installs the surviving host when Codex registration fails', async () => {
+    const home = await temporaryHome();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const runCommand = vi.fn((command: string) => {
+        if (command === 'codex') throw new Error('Codex registration failed');
+      });
+      const results = await installAgentPlugins('all', {
+        homeDirectory: home,
+        marketplaceSource,
+        pluginSource,
+        runCommand,
+      });
+
+      expect(results.map((result) => result.host)).toEqual(['Claude Code']);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Codex registration failed'));
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('fails only when every requested host fails, naming each host', async () => {
+    const home = await temporaryHome();
+    const runCommand = vi.fn((command: string) => {
+      throw new Error(command === 'claude' ? 'Claude Code CLI was not found' : 'Codex CLI was not found');
+    });
+
+    await expect(installAgentPlugins('all', {
+      homeDirectory: home,
+      marketplaceSource,
+      pluginSource,
+      runCommand,
+    })).rejects.toThrow(/Claude Code.*Codex/su);
+  });
   it('keeps package, marketplace, plugin, and MCP versions aligned', async () => {
     const packageJson = await readJson(fileURLToPath(new URL('../package.json', import.meta.url)));
     const codexManifest = await readJson(join(pluginSource, '.codex-plugin', 'plugin.json'));

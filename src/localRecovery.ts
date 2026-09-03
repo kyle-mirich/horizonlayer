@@ -24,6 +24,7 @@ import {
   bundledComposePath,
   ensureDockerDesktopReady,
   hasExplicitRuntimeOverride,
+  hasExternalVectorUrl,
   localRuntimeConfigPath,
   readLocalRuntimeConfig,
   runCompose,
@@ -799,9 +800,9 @@ export async function previewManagedRuntimeRecovery(
   > = {}
 ): Promise<ManagedRecoveryPreview> {
   const environment = options.environment ?? process.env;
-  if (hasExplicitRuntimeOverride(environment)) {
+  if (hasExplicitRuntimeOverride(environment) || hasExternalVectorUrl(environment)) {
     throw new LocalRecoveryError(
-      'Runtime Recovery cannot run with DATABASE_URL, QDRANT_URL, or RAG_ENABLED overrides. '
+      'Runtime Recovery cannot run with DATABASE_URL or QDRANT_URL overrides. '
       + 'Unset them to preview the saved Managed Local Runtime target.'
     );
   }
@@ -836,9 +837,9 @@ export async function recoverManagedRuntime(
   dependencyOverrides: Partial<ManagedRecoveryDependencies> = {}
 ): Promise<ManagedRecoveryResult> {
   const environment = options.environment ?? process.env;
-  if (hasExplicitRuntimeOverride(environment)) {
+  if (hasExplicitRuntimeOverride(environment) || hasExternalVectorUrl(environment)) {
     throw new LocalRecoveryError(
-      'Runtime Recovery cannot run with DATABASE_URL, QDRANT_URL, or RAG_ENABLED overrides. '
+      'Runtime Recovery cannot run with DATABASE_URL or QDRANT_URL overrides. '
       + 'Unset them to target the saved Managed Local Runtime.'
     );
   }

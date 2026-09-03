@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { config, loadConfig, reloadConfig } from './config.js';
+import { config, configIssueToEnvVar, formatConfigError, loadConfig, reloadConfig } from './config.js';
 
 describe('environment configuration', () => {
   it('refreshes the live binding after the launcher applies runtime values', () => {
@@ -158,6 +158,36 @@ describe('environment configuration', () => {
     expect(() => loadConfig({ QDRANT_COLLECTION: '   ' })).toThrow();
     expect(() => loadConfig({ EMBEDDING_CACHE_DIR: '   ' })).toThrow();
     expect(() => loadConfig({ EMBEDDING_DTYPE: 'q8' })).toThrow();
+  });
+
+  it('names the variable and accepted values for invalid configuration', () => {
+    expect(() => loadConfig({ DB_PORT: '70000' })).toThrow('DB_PORT');
+    expect(() => loadConfig({ DASHBOARD_PORT: '0' })).toThrow('DASHBOARD_PORT');
+    expect(() => loadConfig({ EMBEDDING_DTYPE: 'q8' })).toThrow(/EMBEDDING_DTYPE.*fp32/su);
+    expect(() => loadConfig({ DB_SSL_MODE: 'sometimes' })).toThrow(/DB_SSL_MODE.*disable.*require/su);
+    expect(() => loadConfig({ QDRANT_URL: 'ftp://127.0.0.1:6333' })).toThrow('QDRANT_URL');
+    expect(() => loadConfig({ DB_PORT: '70000', DASHBOARD_PORT: '0' })).toThrow(/DASHBOARD_PORT.*DB_PORT/su);
+
+    const message = (() => {
+      try {
+        loadConfig({ EMBEDDING_DTYPE: 'q8' });
+        return '';
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    })();
+    expect(message).toContain('Invalid configuration');
+    expect(message).not.toMatch(/^\s*\{/u);
+  });
+
+  it('maps configuration paths to their environment variables', () => {
+    expect(configIssueToEnvVar(['dashboard', 'port'])).toBe('DASHBOARD_PORT');
+    expect(configIssueToEnvVar(['database', 'port'])).toBe('DB_PORT');
+    expect(configIssueToEnvVar(['rag', 'qdrant_url'])).toBe('QDRANT_URL');
+    expect(configIssueToEnvVar(['rag', 'embedding_dtype'])).toBe('EMBEDDING_DTYPE');
+    expect(configIssueToEnvVar(['server', 'name'])).toBe('APP_NAME');
+    expect(configIssueToEnvVar(['unknown', 'field'])).toBeNull();
+    expect(formatConfigError(new Error('boolean parse failure'))).toBe('boolean parse failure');
   });
 
 });
