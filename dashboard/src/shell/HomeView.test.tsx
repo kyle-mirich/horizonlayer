@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Database, Page, Workspace } from '../types';
-import { HomeView } from './HomeView';
+import { HomeView, searchShortcutLabel } from './HomeView';
 
 const workspace: Workspace = {
   archived_at: null,
@@ -149,5 +149,36 @@ describe('HomeView', () => {
     const { onCreateDatabase } = renderView();
     await user.click(screen.getByRole('button', { name: /New database/ }));
     expect(onCreateDatabase).toHaveBeenCalledTimes(1);
+  });
+
+  it('labels the search shortcut for the current platform', () => {
+    expect(searchShortcutLabel('MacIntel', 'Mozilla/5.0 (Macintosh)')).toBe('⌘ K');
+    expect(searchShortcutLabel('Win32', 'Mozilla/5.0 (Windows NT 10.0)')).toBe('Ctrl K');
+    expect(searchShortcutLabel('', '')).toBe('Ctrl K');
+    renderView();
+    const hint = document.querySelector('.quick-action kbd')?.textContent;
+    expect(hint === '⌘ K' || hint === 'Ctrl K').toBe(true);
+  });
+
+  it('counts only the rendered recent items and excludes archived resources', () => {
+    const manyPages = Array.from({ length: 10 }, (_, index): Page => ({
+      ...page,
+      id: `page-${index}`,
+      title: `Page ${index}`,
+      updated_at: `2026-07-${String(10 + index).padStart(2, '0')}T00:00:00.000Z`,
+    }));
+    const manyDatabases = Array.from({ length: 10 }, (_, index): Database => ({
+      ...database,
+      id: `database-${index}`,
+      name: `Database ${index}`,
+      updated_at: `2026-08-${String(10 + index).padStart(2, '0')}T00:00:00.000Z`,
+    }));
+    const archivedPage = { ...page, archived_at: '2026-07-22T00:00:00.000Z', id: 'page-archived', title: 'Archived page' };
+    renderView({ databases: [...manyDatabases, { ...database, archived_at: '2026-08-22T00:00:00.000Z', id: 'database-archived' }], pages: [...manyPages, archivedPage] });
+
+    const rows = [...document.querySelectorAll('.recent-row')];
+    expect(rows).toHaveLength(12);
+    expect(rows.some((row) => row.textContent?.includes('Archived page'))).toBe(false);
+    expect(screen.getByText('Showing 2 pages · 10 databases')).toBeTruthy();
   });
 });

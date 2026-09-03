@@ -181,7 +181,7 @@ async function assertStatus(baseUrl: string): Promise<void> {
 
   const mcp = asRecord(response.body.mcp, '/api/status omitted MCP status');
   assert(mcp.available === true, '/api/status reported MCP unavailable');
-  assert(mcp.command === 'horizonlayer', '/api/status returned the wrong MCP command');
+  assert(mcp.command === 'npx -y horizonlayer@latest mcp', '/api/status returned the wrong MCP command');
 
   const rag = asRecord(response.body.rag, '/api/status omitted RAG status');
   assert(rag.enabled === config.rag.enabled, '/api/status returned the wrong RAG state');

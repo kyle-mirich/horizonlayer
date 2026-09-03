@@ -100,7 +100,7 @@ vi.mock('./shell/WorkspaceDialog', () => ({
 
 const status: DashboardStatus = {
   database: 'connected',
-  mcp: { available: true, command: 'horizonlayer' },
+  mcp: { available: true, command: 'npx -y horizonlayer@latest mcp' },
   rag: { enabled: true },
   tools: ['workspace', 'page', 'database', 'row', 'search'],
   version: '0.1.1',

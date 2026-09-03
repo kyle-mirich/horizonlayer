@@ -9,7 +9,7 @@ import type { DashboardStatus } from '../types';
 import { StatusDialog } from './StatusDialog';
 
 const status: DashboardStatus = {
-  database: 'connected', mcp: { available: true, command: 'horizonlayer' }, rag: { enabled: true },
+  database: 'connected', mcp: { available: true, command: 'npx -y horizonlayer@latest mcp' }, rag: { enabled: true },
   tools: ['workspace', 'page', 'database', 'row', 'search'], version: '1.2.3',
 };
 
@@ -23,11 +23,11 @@ describe('StatusDialog', () => {
     const user = userEvent.setup();
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-    render(<StatusDialog api={{ status: vi.fn(async () => ({ ...status, mcp: { available: true, command: 'horizonlayer' } })) } as unknown as DashboardApiClient}
+    render(<StatusDialog api={{ status: vi.fn(async () => ({ ...status, mcp: { available: true, command: 'npx -y horizonlayer@latest mcp' } })) } as unknown as DashboardApiClient}
       onClose={vi.fn()} status={{ ...status, rag: { enabled: false } }} />);
     expect(await screen.findByText('Enabled')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Copy' }));
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith('horizonlayer'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('npx -y horizonlayer@latest mcp'));
     expect(screen.getByRole('status').textContent).toContain('Agent command copied.');
     expect(screen.getByText('HorizonLayer 1.2.3')).toBeTruthy();
   });

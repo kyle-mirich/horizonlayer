@@ -37,7 +37,7 @@ Five **state** roles:
 
 Every triaged Issue should carry exactly one category role and one state role. If state roles conflict, flag it and ask the maintainer before doing anything else.
 
-These are canonical role names, stored as HorizonLayer Issue tags. Read `docs/agents/triage-labels.md` for the mapping before writing.
+These are canonical role names, stored as HorizonLayer Issue tags. Read `../../reference/triage-labels.md` for the mapping before writing.
 
 State transitions: an unlabeled issue normally goes to `needs-triage` first; from there it moves to `needs-info`, `ready-for-agent`, `ready-for-human`, or `wontfix`. `needs-info` returns to `needs-triage` once the reporter replies. The maintainer can override at any time — flag transitions that look unusual and ask before proceeding.
 

@@ -168,7 +168,7 @@ describe('dashboard HTTP server', () => {
     expect(response.status).toBe(200);
     expect(JSON.parse(response.body)).toEqual({
       database: 'connected',
-      mcp: { available: true, command: 'horizonlayer' },
+      mcp: { available: true, command: 'npx -y horizonlayer@latest mcp' },
       rag: { enabled: true },
       tools: ['workspace', 'page', 'database', 'row', 'search'],
       version: '0.0.1-test',

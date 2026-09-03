@@ -25,7 +25,7 @@ describe('DashboardApiClient', () => {
   it('loads and validates dashboard status', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       database: 'connected',
-      mcp: { available: true, command: 'horizonlayer' },
+      mcp: { available: true, command: 'npx -y horizonlayer@latest mcp' },
       rag: { enabled: true },
       tools: ['workspace', 'page', 'database', 'row', 'search'],
       version: '0.1.1',
@@ -45,7 +45,7 @@ describe('DashboardApiClient', () => {
   it('accepts an unavailable database health result', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       database: 'unavailable',
-      mcp: { available: true, command: 'horizonlayer' },
+      mcp: { available: true, command: 'npx -y horizonlayer@latest mcp' },
       rag: { enabled: false },
       tools: ['workspace', 'page', 'database', 'row', 'search'],
       version: '0.1.1',
@@ -166,6 +166,27 @@ describe('DashboardApiClient', () => {
     await expect(new DashboardApiClient({ fetch: invalidStatus }).status()).rejects.toMatchObject({
       action: 'status', code: 'INVALID_RESPONSE', status: 200,
     });
+
+    const emptyCommand = vi.fn(async () => jsonResponse({
+      database: 'connected',
+      mcp: { available: true, command: '' },
+      rag: { enabled: true },
+      tools: ['workspace', 'page', 'database', 'row', 'search'],
+      version: '0.1.1',
+    })) as DashboardFetch;
+    await expect(new DashboardApiClient({ fetch: emptyCommand }).status()).rejects.toMatchObject({
+      action: 'status', code: 'INVALID_RESPONSE', status: 200,
+    });
+
+    const runnableCommand = vi.fn(async () => jsonResponse({
+      database: 'connected',
+      mcp: { available: true, command: 'npx -y horizonlayer@latest mcp' },
+      rag: { enabled: true },
+      tools: ['workspace', 'page', 'database', 'row', 'search'],
+      version: '0.1.1',
+    })) as DashboardFetch;
+    await expect(new DashboardApiClient({ fetch: runnableCommand }).status())
+      .resolves.toMatchObject({ mcp: { available: true, command: 'npx -y horizonlayer@latest mcp' } });
 
     const fetcher = vi.fn(async () => jsonResponse({
       action: 'search', error: null, meta: {}, ok: true, result: { mode: 'records', records: [], truncated: false },

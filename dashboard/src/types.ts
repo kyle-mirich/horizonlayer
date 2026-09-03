@@ -255,7 +255,7 @@ export interface DashboardStatus {
   database: 'connected' | 'unavailable';
   mcp: {
     available: true;
-    command: 'horizonlayer';
+    command: string;
   };
   rag: {
     enabled: boolean;

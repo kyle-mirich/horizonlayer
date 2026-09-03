@@ -21,7 +21,7 @@ The map is a single issue, tagged `wayfinder:map` — the canonical artifact. It
 
 The map is an **index**, not a store. It lists the decisions made and points at the tickets that hold their detail; a decision lives in exactly one place — its ticket — so the map never restates it, only gists it and links.
 
-**The tracker is the HorizonLayer MCP** — its `issues` tool holds the map and tickets, its `knowledge` tool holds what they produce. The exact operations are in [Wayfinding operations](#wayfinding-operations-on-horizonlayer) and `docs/agents/issue-tracker.md`. If no HorizonLayer MCP is connected, stop and report the missing connection; keep the tracker choice explicit rather than silently switching to another issue system.
+**The tracker is the HorizonLayer MCP** — its `issues` tool holds the map and tickets, its `knowledge` tool holds what they produce. The exact operations are in [Wayfinding operations](#wayfinding-operations-on-horizonlayer) and `../../reference/issue-tracker.md`. If no HorizonLayer MCP is connected, stop and report the missing connection; keep the tracker choice explicit rather than silently switching to another issue system.
 
 ### The map body
 

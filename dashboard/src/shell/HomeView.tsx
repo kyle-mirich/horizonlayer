@@ -19,6 +19,14 @@ function shortDate(value: string): string {
   }).format(date);
 }
 
+export function searchShortcutLabel(
+  platform = typeof navigator === 'undefined' ? '' : (navigator.platform ?? ''),
+  userAgent = typeof navigator === 'undefined' ? '' : (navigator.userAgent ?? ''),
+): string {
+  const target = `${platform} ${userAgent}`;
+  return /mac/i.test(target) ? '⌘ K' : 'Ctrl K';
+}
+
 export function HomeView({
   creating,
   databases,
@@ -42,15 +50,17 @@ export function HomeView({
   pagesHasMore: boolean;
   workspace: Workspace;
 }) {
+  const activePages = pages.filter((page) => page.archived_at === null);
+  const activeDatabases = databases.filter((database) => database.archived_at === null);
   const recent: RecentItem[] = [
-    ...pages.map((page): RecentItem => ({
+    ...activePages.map((page): RecentItem => ({
       description: page.tags.length > 0 ? page.tags.slice(0, 3).join(' · ') : null,
       id: page.id,
       kind: 'page',
       name: page.title,
       updatedAt: page.updated_at,
     })),
-    ...databases.map((database): RecentItem => ({
+    ...activeDatabases.map((database): RecentItem => ({
       description: database.description,
       id: database.id,
       kind: 'database',
@@ -58,6 +68,8 @@ export function HomeView({
       updatedAt: database.updated_at,
     })),
   ].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 12);
+  const recentPageCount = recent.filter((item) => item.kind === 'page').length;
+  const recentDatabaseCount = recent.filter((item) => item.kind === 'database').length;
 
   return (
     <main className="workspace-canvas home-view" id="main-content">
@@ -94,7 +106,7 @@ export function HomeView({
         <button className="quick-action" onClick={onOpenSearch} type="button">
           <span className="quick-action__icon"><Icon name="search" /></span>
           <span><strong>Search</strong><small>Find records or retrieve passages</small></span>
-          <kbd>⌘ K</kbd>
+          <kbd>{searchShortcutLabel()}</kbd>
         </button>
       </div>
 
@@ -106,7 +118,7 @@ export function HomeView({
           </div>
           {!loading ? (
             <span>
-              Showing {pages.length} pages · {databases.length} databases
+              Showing {recentPageCount} pages · {recentDatabaseCount} databases
               {pagesHasMore || databasesHasMore ? ' · search finds older items' : ''}
             </span>
           ) : null}

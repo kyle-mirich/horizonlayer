@@ -7,7 +7,7 @@ description: Break a plan, spec, or the current conversation into a set of trace
 
 Break a plan, spec, or conversation into a set of **tickets** — tracer-bullet vertical slices, each declaring the tickets that **block** it.
 
-Read `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md` for the HorizonLayer Issue and Knowledge operations before publishing.
+Read `../../reference/issue-tracker.md` and `../../reference/triage-labels.md` for the HorizonLayer Issue and Knowledge operations before publishing.
 
 ## Process
 

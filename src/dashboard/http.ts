@@ -61,7 +61,7 @@ export interface DashboardStatus {
   database: 'connected' | 'unavailable';
   mcp: {
     available: true;
-    command: 'horizonlayer';
+    command: string;
   };
   rag: {
     enabled: boolean;
@@ -284,7 +284,7 @@ async function serveStatic(
 export function createDashboardHttpServer(options: DashboardHttpOptions): Server {
   const assetsDirectory = options.assetsDirectory ?? defaultDashboardAssetsDirectory();
   const status: Omit<DashboardStatus, 'database'> = {
-    mcp: { available: true, command: 'horizonlayer' },
+    mcp: { available: true, command: 'npx -y horizonlayer@latest mcp' },
     rag: { enabled: options.ragEnabled },
     tools: [...DASHBOARD_TOOLS],
     version: options.version,

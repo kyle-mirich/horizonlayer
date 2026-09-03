@@ -127,7 +127,8 @@ function isDashboardStatus(value: unknown): value is DashboardStatus {
   if (!isRecord(value) || !isRecord(value.mcp) || !isRecord(value.rag)) return false;
   return (value.database === 'connected' || value.database === 'unavailable')
     && value.mcp.available === true
-    && value.mcp.command === 'horizonlayer'
+    && typeof value.mcp.command === 'string'
+    && value.mcp.command.length > 0
     && typeof value.rag.enabled === 'boolean'
     && Array.isArray(value.tools)
     && value.tools.every((tool) => typeof tool === 'string' && DASHBOARD_TOOLS.has(tool))

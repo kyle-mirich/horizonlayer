@@ -5,7 +5,7 @@ description: Turn the current conversation into a spec and publish it to the pro
 
 This skill takes the current conversation context and codebase understanding and produces a spec (you may know this document as a PRD). Do NOT interview the user — just synthesize what you already know.
 
-Read `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md` for the HorizonLayer Issue and Knowledge operations before publishing.
+Read `../../reference/issue-tracker.md` and `../../reference/triage-labels.md` for the HorizonLayer Issue and Knowledge operations before publishing.
 
 ## Process
 

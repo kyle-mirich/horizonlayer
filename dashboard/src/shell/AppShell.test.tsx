@@ -8,7 +8,7 @@ import type { DashboardStatus, Workspace } from '../types';
 
 const status: DashboardStatus = {
   database: 'connected',
-  mcp: { available: true, command: 'horizonlayer' },
+  mcp: { available: true, command: 'npx -y horizonlayer@latest mcp' },
   rag: { enabled: false },
   tools: ['workspace', 'page', 'database', 'row', 'search'],
   version: '0.1.1',
@@ -112,7 +112,7 @@ describe('dashboard shell', () => {
     expect(within(dialog).getByText('Available when a local agent launches it')).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Copy' }));
 
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith('horizonlayer'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('npx -y horizonlayer@latest mcp'));
     expect(within(dialog).getByRole('button', { name: /Copied/ })).toBeTruthy();
   });
 
