@@ -317,6 +317,33 @@ describe('RAG search orchestration', () => {
   });
 });
 
+describe('splitText whitespace boundaries', () => {
+  const body = 'word '.repeat(300).trim();
+
+  it('produces the same chunks for trailing-newline content as trimmed content', () => {
+    const trimmed = ragInternals.splitText(body);
+    const trailed = ragInternals.splitText(`${body}\n`);
+    expect(trailed.map((chunk) => chunk.text)).toEqual(trimmed.map((chunk) => chunk.text));
+  });
+
+  it('produces the same chunks for trailing-space content as trimmed content', () => {
+    const trimmed = ragInternals.splitText(body);
+    const trailed = ragInternals.splitText(`${body}   `);
+    expect(trailed.map((chunk) => chunk.text)).toEqual(trimmed.map((chunk) => chunk.text));
+  });
+
+  it('keeps chunk counts bounded for ordinary block sizes', () => {
+    expect(ragInternals.splitText(`${body}\n`).length).toBeLessThan(10);
+  });
+
+  it('emits no empty chunks and preserves character offsets', () => {
+    for (const chunk of ragInternals.splitText(`${body}\n`)) {
+      expect(chunk.text.length).toBeGreaterThan(0);
+      expect(chunk.end).toBeGreaterThan(chunk.start);
+    }
+  });
+});
+
 describe('RAG canonical chunk construction', () => {
   it('indexes a title-only page with an honest title citation', () => {
     const [point] = ragInternals.buildPagePoints([{

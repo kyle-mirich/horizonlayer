@@ -556,4 +556,53 @@ integrationDescribe('database concurrency invariants', () => {
       if (archive) await archive.catch(() => undefined);
     }
   });
+
+  it('treats a revision-only touch as a semantic no-op without invalidating search', async () => {
+    const probe = await adminPool.connect();
+    await setTestSearchPath(probe, schemaName);
+    try {
+      const { rows: workspaces } = await probe.query<{ id: string }>(
+        `INSERT INTO workspaces (name) VALUES ('No-op probe') RETURNING id`
+      );
+      const probeWorkspaceId = workspaces[0]!.id;
+      const { rows: pages } = await probe.query<{ id: string; revision: number }>(
+        `INSERT INTO pages (workspace_id, title)
+         VALUES ($1, 'No-op probe')
+         RETURNING id, revision`,
+        [probeWorkspaceId]
+      );
+      const pageId = pages[0]!.id;
+      const before = pages[0]!.revision;
+      await probe.query(`DELETE FROM workspace_search_changes WHERE workspace_id = $1`, [probeWorkspaceId]);
+
+      await probe.query(
+        `UPDATE pages SET revision = revision + 1, updated_at = NOW() WHERE id = $1`,
+        [pageId]
+      );
+      const { rows: touched } = await probe.query<{ revision: number }>(
+        `SELECT revision FROM pages WHERE id = $1`,
+        [pageId]
+      );
+      expect(touched[0]!.revision).toBe(before);
+      const { rows: quiet } = await probe.query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM workspace_search_changes WHERE workspace_id = $1`,
+        [probeWorkspaceId]
+      );
+      expect(Number.parseInt(quiet[0]!.count, 10)).toBe(0);
+
+      await probe.query(`UPDATE pages SET title = 'Changed' WHERE id = $1`, [pageId]);
+      const { rows: changed } = await probe.query<{ revision: number }>(
+        `SELECT revision FROM pages WHERE id = $1`,
+        [pageId]
+      );
+      expect(changed[0]!.revision).toBe(before + 1);
+      const { rows: journaled } = await probe.query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM workspace_search_changes WHERE workspace_id = $1`,
+        [probeWorkspaceId]
+      );
+      expect(Number.parseInt(journaled[0]!.count, 10)).toBe(1);
+    } finally {
+      probe.release();
+    }
+  });
 });

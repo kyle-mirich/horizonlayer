@@ -204,7 +204,8 @@ function splitText(value: string): TextChunk[] {
   const chunks: TextChunk[] = [];
   let cursor = 0;
   while (cursor < text.length) {
-    let end = Math.min(text.length, cursor + MAX_CHUNK_CHARACTERS);
+    const windowEnd = Math.min(text.length, cursor + MAX_CHUNK_CHARACTERS);
+    let end = windowEnd;
     if (end < text.length) {
       const boundary = text.lastIndexOf(' ', end);
       if (boundary >= cursor + Math.floor(MAX_CHUNK_CHARACTERS / 2)) end = boundary;
@@ -214,7 +215,7 @@ function splitText(value: string): TextChunk[] {
     while (start < end && /\s/u.test(text[start]!)) start += 1;
     while (end > start && /\s/u.test(text[end - 1]!)) end -= 1;
     if (end > start) chunks.push({ text: text.slice(start, end), start, end });
-    if (end >= text.length) break;
+    if (windowEnd >= text.length) break;
 
     const next = Math.max(cursor + 1, end - CHUNK_OVERLAP_CHARACTERS);
     cursor = next;

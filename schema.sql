@@ -338,8 +338,11 @@ BEGIN
   old_payload := to_jsonb(OLD) - ARRAY['revision', 'updated_at'];
   new_payload := to_jsonb(NEW) - ARRAY['revision', 'updated_at'];
 
-  IF new_payload IS DISTINCT FROM old_payload
-     OR NEW.updated_at IS DISTINCT FROM OLD.updated_at THEN
+  -- A semantic no-op (identical payload ignoring revision bookkeeping) keeps
+  -- its revision so it does not invalidate the search index. updated_at is
+  -- deliberately excluded: every mutation sets it, so including it would make
+  -- this branch unreachable.
+  IF new_payload IS DISTINCT FROM old_payload THEN
     NEW.revision := OLD.revision + 1;
     NEW.updated_at := clock_timestamp();
   ELSE
