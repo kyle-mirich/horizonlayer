@@ -124,6 +124,8 @@ describe('page persistence concurrency', () => {
   it('reports stale and already-restored page archive transitions as conflicts', async () => {
     poolQueryMock
       .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ revision: 3 }] });
 
     const { archivePage, restorePage } = await import('./pages.js');

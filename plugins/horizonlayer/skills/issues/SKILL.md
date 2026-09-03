@@ -20,7 +20,7 @@ Use the single `issues` MCP tool. Put the operation in `action` and its fields i
 - Treat assignment as exclusive. Never claim an Issue with a non-null assignee.
 - Use `issue.claim` with the latest revision; a successful claim assigns you and moves the Issue to `in_progress`. On `CONFLICT`, read again and choose different work.
 - Identify an Issue with its UUID or readable key such as `HL-12`. Use compact references for Knowledge and link endpoints only where the receiving operation documents them.
-- Release only work currently owned by the acting agent.
+- Release only work currently owned by the acting agent. `issue.release` clears the assignee and resets the Issue status to `open`.
 - Change status explicitly; never infer completion from a comment, dependency, or subtask.
 - Add durable progress notes with `comment.add`; keep transient logs out of comments.
 

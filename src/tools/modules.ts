@@ -171,9 +171,18 @@ const issueInputs: Record<z.infer<typeof IssueAction>, z.ZodTypeAny> = {
 };
 
 async function requireIssue(value: string, includeArchived = false) {
-  const issue = await getIssue(value, includeArchived);
+  const normalized = normalizeIssueIdentifier(value.trim());
+  const issue = await getIssue(normalized, includeArchived);
   if (!issue) throw new Error(`Issue ${value} not found`);
   return issue;
+}
+
+function normalizeIssueIdentifier(value: string): string {
+  try {
+    return expandReference(value);
+  } catch {
+    return value;
+  }
 }
 
 async function executeIssueAction(action: z.infer<typeof IssueAction>, input: Record<string, unknown>): Promise<unknown> {

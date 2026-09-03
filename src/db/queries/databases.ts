@@ -702,6 +702,21 @@ async function setPropertyArchived(
     if (archived && property.property_type === 'title') {
       throw new Error('The title property cannot be archived');
     }
+    if (archived) {
+      const { rows: valueRows } = await client.query<{ has_values: boolean }>(
+        `SELECT EXISTS (
+          SELECT 1 FROM database_row_values
+          WHERE property_id = $1
+            AND (value_text IS NOT NULL OR value_number IS NOT NULL
+              OR value_date IS NOT NULL OR value_bool IS NOT NULL
+              OR value_json IS NOT NULL)
+        ) AS has_values`,
+        [propertyId]
+      );
+      if (valueRows[0]?.has_values) {
+        throw new Error(`Database property ${propertyId} still has row values and cannot be archived`);
+      }
+    }
 
     if (!archived) {
       const { rows: countRows } = await client.query<{ count: number }>(

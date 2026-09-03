@@ -87,6 +87,20 @@ describe('Issue persistence', () => {
     await expect(queryIssues({ offset: -1 })).rejects.toThrow('between');
   });
 
+  it('treats closed blockers as finished in the ready filter and claim path', async () => {
+    mocks.query.mockResolvedValue({ rows: [issue()] });
+    await queryIssues({ ready: true });
+    const [readySql] = mocks.query.mock.calls[0] ?? [];
+    expect(String(readySql)).toContain("blocker.status NOT IN ('done', 'closed')");
+    expect(String(readySql)).not.toContain("blocker.status <> 'done'");
+
+    mocks.query.mockResolvedValueOnce({ rows: [issue({ assignee: 'agent-a', revision: 2 })] });
+    await claimIssue('issue-1', 'agent-a', 1);
+    const [claimSql] = mocks.query.mock.calls[1] ?? [];
+    expect(String(claimSql)).toContain("blocker.status NOT IN ('done', 'closed')");
+    expect(String(claimSql)).not.toContain("blocker.status <> 'done'");
+  });
+
   it('updates every mutable field and validates empty or stale writes', async () => {
     mocks.query.mockResolvedValueOnce({ rows: [issue({ revision: 2 })] });
     await expect(updateIssue('issue-1', {

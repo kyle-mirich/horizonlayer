@@ -547,6 +547,22 @@ async function setPageArchived(
   await requirePage(id);
 
   const pool = getPool();
+  if (archived) {
+    const { rows: childPages } = await pool.query<{ id: string }>(
+      `SELECT id FROM pages WHERE parent_page_id = $1 AND archived_at IS NULL LIMIT 1`,
+      [id]
+    );
+    if (childPages[0]) {
+      throw new Error(`Page ${id} still has active child pages`);
+    }
+    const { rows: childBlocks } = await pool.query<{ id: string }>(
+      `SELECT id FROM blocks WHERE page_id = $1 AND archived_at IS NULL LIMIT 1`,
+      [id]
+    );
+    if (childBlocks[0]) {
+      throw new Error(`Page ${id} still has active blocks`);
+    }
+  }
   const { rows } = await pool.query<Page>(
     `UPDATE pages
      SET archived_at = ${archived ? 'NOW()' : 'NULL'},

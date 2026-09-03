@@ -131,6 +131,16 @@ describe('compact module handlers', () => {
     expect(mocks.getIssueProject).toHaveBeenCalledTimes(1);
   });
 
+  it('normalizes uppercase issue UUIDs while keeping readable keys intact', async () => {
+    const [issues] = definitions(['issues']);
+    await issues.execute({ action: 'issue.get', input: { issue: id.toUpperCase() } });
+    expect(mocks.getIssue).toHaveBeenCalledWith(id, false);
+
+    vi.clearAllMocks();
+    await issues.execute({ action: 'issue.get', input: { issue: 'HL-12' } });
+    expect(mocks.getIssue).toHaveBeenCalledWith('HL-12', false);
+  });
+
   it.each([
     ['project.create', { project_key: 'HL', name: 'HorizonLayer' }],
     ['project.list', {}],

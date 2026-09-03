@@ -458,8 +458,36 @@ describe('page persistence contract', () => {
     expect(clientQueryMock.mock.calls.filter(([sql]) => sql === 'COMMIT')).toHaveLength(3);
   });
 
+  it('refuses to archive a page with active child pages or blocks', async () => {
+    const pageQueries = await import('./pages.js');
+
+    poolQueryMock
+      .mockResolvedValueOnce({ rows: [{ id: 'child-page' }] });
+    await expect(pageQueries.archivePage('page-1', 1)).rejects.toThrow(
+      'Page page-1 still has active child pages'
+    );
+
+    poolQueryMock.mockReset();
+    poolQueryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 'block-1' }] });
+    await expect(pageQueries.archivePage('page-1', 1)).rejects.toThrow(
+      'Page page-1 still has active blocks'
+    );
+
+    poolQueryMock.mockReset();
+    poolQueryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [page({ revision: 2, archived_at: '2026-01-02T00:00:00.000Z' })] });
+    await expect(pageQueries.archivePage('page-1', 1)).resolves.toMatchObject({ revision: 2 });
+    expect(requirePageMock).toHaveBeenCalledWith('page-1');
+  });
+
   it('archives and restores pages as revision-checked entities with no public hard delete', async () => {
     poolQueryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [page({ revision: 2, archived_at: '2026-01-02T00:00:00.000Z' })] })
       .mockResolvedValueOnce({ rows: [page({ revision: 3, archived_at: null })] });
 
@@ -467,8 +495,10 @@ describe('page persistence contract', () => {
     await expect(pageQueries.archivePage('page-1', 1)).resolves.toMatchObject({ revision: 2 });
     await expect(pageQueries.restorePage('page-1', 2)).resolves.toMatchObject({ revision: 3 });
 
-    expect(String(poolQueryMock.mock.calls[0]?.[0])).toContain('archived_at = NOW()');
-    expect(String(poolQueryMock.mock.calls[1]?.[0])).toContain('archived_at = NULL');
+    expect(String(poolQueryMock.mock.calls[0]?.[0])).toContain('parent_page_id = $1');
+    expect(String(poolQueryMock.mock.calls[1]?.[0])).toContain('FROM blocks WHERE page_id = $1');
+    expect(String(poolQueryMock.mock.calls[2]?.[0])).toContain('archived_at = NOW()');
+    expect(String(poolQueryMock.mock.calls[3]?.[0])).toContain('archived_at = NULL');
     expect(requirePageMock).toHaveBeenCalledTimes(2);
     expect(requirePageMock).toHaveBeenCalledWith('page-1');
     expect(pageQueries).not.toHaveProperty('deletePage');

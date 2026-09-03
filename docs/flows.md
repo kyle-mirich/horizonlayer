@@ -29,7 +29,7 @@ The default MCP catalog exposes one compact `issues` tool when Issues is selecte
 1. Use `project.list` before creating a project. Project keys provide readable Issue identifiers such as `HL-12`.
 2. Use `issue.create` for Issues and optional subtasks (`parent_issue`), then add `comment.add`, tags, and explicit dependencies as needed.
 3. Use `issue.query` with compact AND-only filters such as `project = HL AND status = open AND assignee IS EMPTY`, `tag = backend`, `text ~ "recovery"`, or `ready = true`.
-4. Use `issue.claim` with the latest revision for exclusive assignment. A claimed, assigned, non-open, or dependency-blocked Issue cannot be claimed by another agent.
+4. Use `issue.claim` with the latest revision for exclusive assignment. A claimed, assigned, non-open, or dependency-blocked Issue cannot be claimed by another agent. Use `issue.release` to clear the assignee and reset the Issue status to `open`.
 5. Link an Issue and Knowledge Page only when the relationship matters. `link.list` returns direct metadata; `link.traverse` follows a bounded graph (maximum depth 3) without automatically expanding linked content.
 
 Knowledge and Issues share one canonical PostgreSQL database and Backup artifact, but either module can be selected alone. The legacy eight-tool MCP catalog remains available explicitly through `horizonlayer legacy-mcp` for compatibility.

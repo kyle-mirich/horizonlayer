@@ -182,6 +182,7 @@ describe('database property persistence contracts', () => {
       if (sql.includes('FROM database_properties') && sql.includes('FOR UPDATE')) {
         return { rows: [property()] };
       }
+      if (sql.includes('FROM database_row_values')) return { rows: [{ has_values: false }] };
       if (sql.includes('UPDATE database_properties')) {
         return { rows: [property({ revision: 2, archived_at: 'now' })] };
       }

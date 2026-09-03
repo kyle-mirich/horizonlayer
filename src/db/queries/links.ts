@@ -186,6 +186,7 @@ export async function listLinks(params: {
 export async function traverseLinks(params: {
   item_type: LinkItemType | string;
   item_id: string;
+  workspace_id?: string;
   depth?: number;
   limit?: number;
 }): Promise<LinkTraversalItem[]> {
@@ -198,6 +199,7 @@ export async function traverseLinks(params: {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
     throw new Error('limit must be an integer between 1 and 100');
   }
+  if (params.workspace_id) await requireActiveWorkspace(params.workspace_id);
 
   const visited = new Set([`${startType}:${params.item_id}`]);
   let frontier: LinkEndpoint[] = [{ id: params.item_id, type: startType }];
@@ -211,6 +213,7 @@ export async function traverseLinks(params: {
         item_id: endpoint.id,
         item_type: endpoint.type,
         limit: Math.min(101, limit + 1),
+        workspace_id: params.workspace_id,
       });
       for (const link of links) {
         const target = link.from_type === endpoint.type && link.from_id === endpoint.id

@@ -131,6 +131,21 @@ describe('link persistence contracts', () => {
     expect(mocks.poolQuery).not.toHaveBeenCalled();
   });
 
+  it('validates the workspace before traversing links', async () => {
+    const { traverseLinks } = await import('./links.js');
+
+    mocks.poolQuery.mockResolvedValueOnce({ rows: [link()] });
+    await expect(traverseLinks({
+      item_type: 'page', item_id: 'page-1', workspace_id: 'ws-1',
+    })).resolves.toHaveLength(1);
+    expect(mocks.requireActiveWorkspace).toHaveBeenCalledWith('ws-1');
+
+    mocks.requireActiveWorkspace.mockRejectedValueOnce(new Error('Workspace ws-gone not found'));
+    await expect(traverseLinks({
+      item_type: 'page', item_id: 'page-1', workspace_id: 'ws-gone',
+    })).rejects.toThrow('Workspace ws-gone not found');
+  });
+
   it('traverses both link directions, skips cycles, and honors the global limit', async () => {
     mocks.poolQuery
       .mockResolvedValueOnce({ rows: [

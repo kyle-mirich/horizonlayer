@@ -174,7 +174,7 @@ export async function queryIssues(params: {
       WHERE dependency.blocked_issue_id = candidate.id
         AND dependency.archived_at IS NULL
         AND blocker.archived_at IS NULL
-        AND blocker.status <> 'done'
+        AND blocker.status NOT IN ('done', 'closed')
     )`);
   }
   if (params.text?.trim()) {
@@ -256,11 +256,11 @@ export async function claimIssue(id: string, assignee: string, revision: number)
        AND NOT EXISTS (
          SELECT 1 FROM issue_dependencies dependency
          JOIN issues blocker ON blocker.id = dependency.blocking_issue_id
-         WHERE dependency.blocked_issue_id = candidate.id
-           AND dependency.archived_at IS NULL
-           AND blocker.archived_at IS NULL
-           AND blocker.status <> 'done'
-       )
+          WHERE dependency.blocked_issue_id = candidate.id
+            AND dependency.archived_at IS NULL
+            AND blocker.archived_at IS NULL
+            AND blocker.status NOT IN ('done', 'closed')
+        )
      RETURNING ${ISSUE_COLUMNS}`,
     [id, nonempty(assignee, 'Issue assignee'), revision]
   );

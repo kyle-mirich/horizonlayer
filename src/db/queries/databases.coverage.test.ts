@@ -354,6 +354,34 @@ describe('database query coverage cases', () => {
       .rejects.toThrow('cannot be restored because an active property conflicts');
   });
 
+  it('refuses to archive a property that still holds row values', async () => {
+    setClientHandler(async (sql) => {
+      if (sql === 'BEGIN' || sql === 'ROLLBACK') return { rows: [] };
+      if (sql.includes('FOR UPDATE OF d')) return { rows: [{ id: 'db-1', archived_at: null, workspace_archived_at: null }] };
+      if (sql.includes('WHERE id = $1\n     FOR UPDATE')) return { rows: [property({ property_type: 'text', archived_at: null })] };
+      if (sql.includes('FROM database_row_values')) return { rows: [{ has_values: true }] };
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    await expect(archiveDatabaseProperty('prop-1', 1))
+      .rejects.toThrow('Database property prop-1 still has row values and cannot be archived');
+    expect(mocks.clientQuery).toHaveBeenCalledWith('ROLLBACK');
+
+    mocks.clientQuery.mockReset();
+    setClientHandler(async (sql) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [] };
+      if (sql.includes('FOR UPDATE OF d')) return { rows: [{ id: 'db-1', archived_at: null, workspace_archived_at: null }] };
+      if (sql.includes('WHERE id = $1\n     FOR UPDATE')) return { rows: [property({ property_type: 'text', archived_at: null })] };
+      if (sql.includes('FROM database_row_values')) return { rows: [{ has_values: false }] };
+      if (sql.includes('UPDATE database_properties')) return { rows: [property({ revision: 2, archived_at: '2026-01-02' })] };
+      if (sql.includes('UPDATE databases')) return { rows: [{ revision: 4 }] };
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    await expect(archiveDatabaseProperty('prop-1', 1)).resolves.toMatchObject({
+      database_revision: 4,
+      property: { archived_at: '2026-01-02', revision: 2 },
+    });
+  });
+
   it('returns null for missing archive locks and detects property movement or stale lifecycle revisions', async () => {
     setClientHandler(async (sql) => {
       if (sql === 'BEGIN' || sql === 'ROLLBACK') return { rows: [] };
