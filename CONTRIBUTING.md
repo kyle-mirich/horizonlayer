@@ -20,7 +20,7 @@ npm pack --dry-run
 
 ### PostgreSQL integration tests
 
-The concurrency, issue-model, search-generation, and canonical RAG suites require a disposable PostgreSQL database. Point the dedicated integration variable at that database and run the explicit integration command:
+The concurrency, issue-blocker, issue-model, search-generation, and canonical RAG suites require a disposable PostgreSQL database. Point the dedicated integration variable at that database and run the explicit integration command:
 
 ```bash
 HORIZONLAYER_INTEGRATION_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/horizonlayer_test' \
@@ -29,7 +29,7 @@ HORIZONLAYER_INTEGRATION_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:54
 
 The database role must be able to create and drop schemas and install the `pgcrypto` and `pg_trgm` extensions. The suites create unique schemas, apply the canonical `schema.sql`, run serially, and remove their schemas afterward. The command fails when `HORIZONLAYER_INTEGRATION_DATABASE_URL` is unset so an integration run cannot silently report only skipped tests. Do not point it at a database whose availability or contents matter.
 
-GitHub Actions runs on Node.js 22 in two jobs. The verification job has no service containers and runs linting, typechecking, unit tests, coverage, and the production build. The integration job starts a fresh PostgreSQL 17 service, sets `HORIZONLAYER_INTEGRATION_DATABASE_URL`, and executes all four PostgreSQL suites. CI does not require Qdrant or the Docker-managed local runtime.
+GitHub Actions runs on Node.js 22 in two jobs. The verification job has no service containers and runs linting, typechecking, unit tests, coverage, and the production build. The integration job starts a fresh PostgreSQL 17 service, sets `HORIZONLAYER_INTEGRATION_DATABASE_URL`, and executes all five PostgreSQL suites. CI does not require Qdrant or the Docker-managed local runtime.
 
 ### Managed recovery smoke test
 

@@ -53,7 +53,7 @@
     "test": "npm run test:unit",
     "test:unit": "vitest run --exclude \"**/*.integration.test.ts\"",
     "test:coverage": "vitest run --coverage --exclude \"**/*.integration.test.ts\"",
-    "test:integration:postgres": "node -e \"if (!process.env.HORIZONLAYER_INTEGRATION_DATABASE_URL) throw new Error('HORIZONLAYER_INTEGRATION_DATABASE_URL is required')\" && vitest run --no-file-parallelism src/db/concurrency.integration.test.ts src/db/issueModel.integration.test.ts src/db/searchGeneration.integration.test.ts src/search/rag.integration.test.ts",
+    "test:integration:postgres": "node -e \"if (!process.env.HORIZONLAYER_INTEGRATION_DATABASE_URL) throw new Error('HORIZONLAYER_INTEGRATION_DATABASE_URL is required')\" && vitest run --no-file-parallelism src/db/concurrency.integration.test.ts src/db/issueBlockers.integration.test.ts src/db/issueModel.integration.test.ts src/db/searchGeneration.integration.test.ts src/search/rag.integration.test.ts",
     "test:smoke:dashboard": "tsx src/testing/dashboardLiveSmoke.ts",
     "test:smoke:live": "tsx src/testing/liveSmoke.ts",
     "test:smoke:local": "bash scripts/smoke-local.sh",
