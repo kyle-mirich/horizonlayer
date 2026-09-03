@@ -2,7 +2,7 @@
 
 ## Supported Scope
 
-Horizon Layer is a local-first MCP server intended to run on trusted developer machines or in self-managed infrastructure. The highest-priority reports are issues that could affect:
+HorizonLayer is a local-first MCP server intended to run on trusted developer machines or in self-managed infrastructure. The highest-priority reports are issues that could affect:
 
 - database integrity or unintended data loss
 - privilege or access boundary bypasses inside the local/system runtime model

@@ -4,7 +4,7 @@ Design rationale for HorizonLayer, written for engineers evaluating the codebase
 
 ## One compact tool per module
 
-LLM tool-calling quality degrades as catalogs grow: every additional schema spends prompt tokens on every turn, and near-duplicate tools increase mis-selection. HorizonLayer exposes exactly one tool per enabled module — `knowledge` and `issues` — with an operation family in `action` and that operation's fields in `input` (`src/tools/modules.ts`). The legacy eight-tool catalog remains available behind an explicit `legacy-mcp` command for existing integrations, but new projects get two tools regardless of feature count.
+LLM tool-calling quality degrades as catalogs grow: every additional schema spends prompt tokens on every turn, and near-duplicate tools increase mis-selection. HorizonLayer exposes exactly one tool per enabled module — `knowledge` and `issues` — with an operation family in `operation` for `knowledge` (in `action` for `issues`) and that operation's fields in `input` (`src/tools/modules.ts`). The legacy eight-tool catalog remains available behind an explicit `legacy-mcp` command for existing integrations, but new projects get two tools regardless of feature count.
 
 Module selection happens before registration, not behind runtime branches: `HORIZONLAYER_MODULES=issues` produces a server whose catalog contains only issue operations. Setup writes this choice into `.horizonlayer.json`, so a project that never uses knowledge records never sees knowledge tools.
 
@@ -16,7 +16,7 @@ Issue work adds readable keys (`HL-12`) because humans join agents in triage; th
 
 ## Canonical store, derived index
 
-PostgreSQL is the only authoritative representation. The optional RAG pipeline chunks pages and rows, embeds them locally (the embedding model ships as an npm optional dependency, keeping the default install small and offline-capable), and upserts vectors into Qdrant. Every write enqueues a search-index change in PostgreSQL itself (`workspace_search_changes`), and the indexer drains that queue under a lock file so two processes never race.
+PostgreSQL is the only authoritative representation. The optional RAG pipeline chunks pages and rows, embeds them locally (the embedding model ships as an npm optional dependency, keeping the default install small and offline-capable), and upserts vectors into Qdrant. Every write enqueues a search-index change in PostgreSQL itself (`workspace_search_changes`), and the indexer drains that queue under a PostgreSQL advisory lock so two processes never race.
 
 The consequence is deliberate: Qdrant can be deleted at any time and rebuilt from canonical data with no user-visible loss. Recovery exploits this — restoring a backup restores PostgreSQL, clears the derived collection, and lets the rebuild path repopulate it.
 
@@ -31,14 +31,14 @@ Lifecycle is archive/restore only. Hard deletes are absent from the public surfa
 The issue module encodes coordination rules that matter when most writers are software:
 
 - **Exclusive assignment**: claiming requires the server-side precondition `status = open AND assignee IS NULL`; two agents racing to claim cannot both win.
-- **A computed ready queue**: `ready = true` filters open, unassigned issues whose blocking dependencies are not active, so "what can I pick up next" is one query rather than client-side graph logic.
+- **A computed ready queue**: `ready = true` filters open, unassigned issues whose blocking dependencies are not active — a blocker that is `done` or `closed` no longer blocks — so "what can I pick up next" is one query rather than client-side graph logic.
 - **Cycle prevention in SQL**: dependency insertion checks reachability inside the transaction, so a blocker cycle is rejected atomically rather than detected later.
 - **Same-project subtasks, cross-project dependencies**: subtasks model decomposition inside a team; dependencies model cross-team ordering.
 - **AND-only Jira-style query language** (`src/tools/issueQuery.ts`): a small deterministic parser covering `project`, `status`, `priority`, `assignee`, `tag`, `text`, and `ready`, with `IN (...)` on enumerable fields. Restricting the grammar keeps generated queries valid and reviewable.
 
 ## Backup and recovery as a designed flow
 
-Backups are single-file `.hlbackup` artifacts with magic bytes, a manifest, checksums, and compatibility versions, written collision-safe (never overwrite) via temp-then-rename (`src/backupArtifact.ts`, `src/localBackup.ts`). Recovery is deliberately two-step: a read-only preview prints the exact target and exits nonzero, so an unattended `recover FILE` cannot be mistaken for success. Confirmed recovery validates the artifact, takes a safety backup, stops services, restores in an isolated container, validates the canonical schema table-by-table, clears the derived index, and restarts — preserving the original state if any step fails (`src/localRecovery.ts`).
+Backups are single-file `.hlbackup` artifacts with magic bytes, a manifest, checksums, and compatibility versions, written collision-safe (never overwrite) via a private temp file plus hard-link publish (`src/backupArtifact.ts`, `src/localBackup.ts`). Staging happens beside the destination, so publish is a same-filesystem hard link that fails atomically when the destination already exists. Every MCP and dashboard launch re-applies the canonical `schema.sql` under an advisory lock (`src/db/initialize.ts`), so there is no migration layer. Recovery is deliberately two-step: a read-only preview prints the exact target and exits nonzero, so an unattended `recover FILE` cannot be mistaken for success. Confirmed recovery validates the artifact, takes a safety backup, stops services, restores in an isolated container, validates the canonical schema with a 16-table presence count, clears the derived index, and restarts — preserving the original state if any step fails (`src/localRecovery.ts`).
 
 The whole journey — A→B→A recovery, safety-backup return to B, corruption refusal, interruption handling, reset survival — is exercised end-to-end against the packed public CLI by `scripts/smoke-recovery.sh`.
 
@@ -50,7 +50,7 @@ The installer stages per-module skill libraries (`plugins/horizonlayer/skills/{k
 
 The test suite treats behavior contracts as executable specifications:
 
-- **657 unit tests across server and dashboard**, with v8 coverage gates at 90% for branches, functions, lines, and statements enforced in CI.
+- **Unit tests across server and dashboard**, with v8 coverage gates at 90% for branches, functions, lines, and statements enforced in CI.
 - **Contract tests** pin cross-layer agreements: emitted SQL vs `schema.sql` table sets, MCP envelope shapes, compact-reference grammar, and query-language parsing.
 - **PostgreSQL integration suites** run real concurrency, optimistic-revision, and RAG-generation scenarios against disposable schemas, failing hard (not skipping) when the database variable is unset.
 - **Docker-backed smoke journeys** drive the packed CLI exactly as users do: setup → MCP → dashboard → backup → recover, in isolated temporary homes.

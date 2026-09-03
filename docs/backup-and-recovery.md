@@ -1,6 +1,6 @@
 # Backup and Runtime Recovery
 
-HorizonLayer Backup protects canonical Knowledge and Issue data stored in the saved Docker-managed PostgreSQL 17 runtime. It does not manage an external `DATABASE_URL`, copy Docker volumes, or include Qdrant. Qdrant is a Derived Search Index and is cleared, then rebuilt lazily from recovered PostgreSQL data.
+HorizonLayer Backup protects canonical Knowledge and Issue data stored in the saved Docker-managed PostgreSQL 17 runtime. It does not manage an external `DATABASE_URL`, copy Docker volumes, or include Qdrant. Qdrant is a Derived Search Index and is cleared, then rebuilt lazily from recovered PostgreSQL data. Managed Backup refuses only a `DATABASE_URL` override; `RAG_ENABLED` and `QDRANT_URL` are allowed. Runtime Recovery refuses both `DATABASE_URL` and `QDRANT_URL` overrides.
 
 ## Create and verify a Backup
 
@@ -10,7 +10,7 @@ npx -y horizonlayer@latest backup
 npx -y horizonlayer@latest backup /secure/path/horizonlayer-data.hlbackup
 ```
 
-The default destination is the private `backups/` directory beside `runtime.json`; it survives `npx -y horizonlayer@latest reset --yes`. An explicit parent directory must already exist. HorizonLayer writes a PostgreSQL custom-format payload to a private temporary file, validates it with the managed container's PostgreSQL 17 tools, adds a versioned manifest and SHA-256 checksum, and atomically publishes a mode-`0600` `.hlbackup`. Existing destinations are never replaced.
+The default destination is the private `backups/` directory beside `runtime.json`; it survives `npx -y horizonlayer@latest reset --yes`. An explicit parent directory must already exist. HorizonLayer writes a PostgreSQL custom-format payload to a private temporary file beside the destination, validates it with the managed container's PostgreSQL 17 tools, adds a versioned manifest and SHA-256 checksum, and atomically publishes a mode-`0600` `.hlbackup` with a hard link, which requires staging and destination to share a filesystem. Existing destinations are never replaced.
 
 Treat the artifact as sensitive: it contains all workspaces, pages and blocks, typed databases and rows, Issue Projects, Issues, comments, subtasks, dependencies, cross-domain links, sessions, runs, checkpoints, tags, importance values, revisions, and archived records. Store it with the same controls as the original data. Do not recover an artifact from an untrusted source because PostgreSQL archives can contain executable database definitions.
 
@@ -30,9 +30,9 @@ Confirm only after verifying all displayed paths and the source:
 npx -y horizonlayer@latest recover /secure/path/horizonlayer-data.hlbackup --yes
 ```
 
-Confirmed recovery acquires the lifecycle lock and rejects `DATABASE_URL`, `QDRANT_URL`, or `RAG_ENABLED` overrides. It starts and health-checks the saved runtime, validates both the requested archive and an automatic safety Backup, then stops the normal PostgreSQL and Qdrant services. A uniquely named PostgreSQL container mounts the existing managed volume without publishing its normal host port. `pg_restore` uses `--clean --if-exists --no-owner --no-acl --single-transaction --exit-on-error`, so an SQL failure before commit leaves the old database intact.
+Confirmed recovery acquires the lifecycle lock and rejects `DATABASE_URL` or `QDRANT_URL` overrides. It starts and health-checks the saved runtime, validates both the requested archive and an automatic safety Backup, then stops the normal PostgreSQL and Qdrant services. A uniquely named PostgreSQL container mounts the existing managed volume without publishing its normal host port. `pg_restore` uses `--clean --if-exists --no-owner --no-acl --single-transaction --exit-on-error`, so an SQL failure before commit leaves the old database intact.
 
-After restore, HorizonLayer runs `ANALYZE`, checks every canonical table, clears the managed Qdrant collection, removes the isolated container, and restarts healthy services. The receipt records both checksums, the recovered snapshot interval, the retained safety Backup, completion time, health, and configuration path. Inspect important records through MCP or `horizonlayer dashboard` before deleting that safety artifact.
+After restore, HorizonLayer runs `ANALYZE`, validates the canonical schema with a 16-table presence count, clears the managed Qdrant collection, removes the isolated container, and restarts healthy services. The receipt records both checksums, the recovered snapshot interval, the retained safety Backup, completion time, health, and configuration path. Inspect important records through MCP or `npx -y horizonlayer@latest dashboard` before deleting that safety artifact.
 
 ## Failure outcomes and troubleshooting
 

@@ -19,7 +19,7 @@ The default MCP catalog exposes one compact `knowledge` tool when Knowledge is s
 1. Use `knowledge` with the `workspace` operation and `list` action before creating a scope, then create a workspace only when no existing scope fits.
 2. Use the `database` operation and `create` action to define a stable typed collection and its properties.
 3. Use the `row` operation and `create` action with values keyed by exact property names; include the title property.
-4. Use `row` `query` for deterministic typed filtering, or the `search` operation with `mode: "records"` for natural-language retrieval.
+4. Use `row` `query` for deterministic typed filtering, or the `search` operation with `mode: "records"` for natural-language retrieval. Use `mode: "rag"` only when semantic evidence is needed; when concurrent writes prevent a stable index snapshot, RAG search returns the valid subset flagged `stale: true` instead of failing.
 5. Before changing an existing object, read it, use its latest revision, and handle a conflict by rereading before retrying.
 
 ## Issue workflow
@@ -33,5 +33,20 @@ The default MCP catalog exposes one compact `issues` tool when Issues is selecte
 5. Link an Issue and Knowledge Page only when the relationship matters. `link.list` returns direct metadata; `link.traverse` follows a bounded graph (maximum depth 3) without automatically expanding linked content.
 
 Knowledge and Issues share one canonical PostgreSQL database and Backup artifact, but either module can be selected alone. The legacy eight-tool MCP catalog remains available explicitly through `horizonlayer legacy-mcp` for compatibility.
+
+## MCP error taxonomy
+
+Every tool failure returns a structured error envelope classified centrally (`src/tools/common.ts`): `{ ok: false, action, result: null, error: { code, message, retryable }, meta }`. The six codes are:
+
+| Code | Meaning | `retryable` |
+| --- | --- | --- |
+| `INVALID_ARGUMENT` | Malformed input, unknown values, or rejected preconditions | `false` |
+| `INVALID_REFERENCE` | A foreign-key target does not exist | `false` |
+| `NOT_FOUND` | The named record does not exist | `false` |
+| `CONFLICT` | A revision mismatch, duplicate, or lifecycle precondition failure | `false`, except serialization failures, deadlocks, unavailable locks, and stale-revision writes, which are `true` |
+| `DEPENDENCY_UNAVAILABLE` | PostgreSQL, Qdrant, or the network is unreachable | `true` |
+| `INTERNAL` | Anything unclassified | `false` |
+
+`INTERNAL` messages are masked: the envelope carries only `HorizonLayer could not complete the request`, while the original detail is logged server-side tagged with the action. On any other code the envelope carries the actionable message, so agents can reconcile and retry without guessing.
 
 This workflow stays local to the PostgreSQL instance selected by the launcher or `DATABASE_URL`. The dashboard is a loopback local interface; it is not a remote collaboration or hosting service.

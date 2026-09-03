@@ -72,7 +72,7 @@ Use Docker-managed PostgreSQL and Qdrant with the bundled Codex plugin. No globa
 npx -y horizonlayer@latest setup
 ```
 
-`setup` selects Knowledge, Issues, or Both and optionally installs the matching Codex or Claude Code skills. It starts local services, creates or reuses the shared `Default` Knowledge Workspace and an Issue Project named after the current directory, and writes a credential-free `.horizonlayer.json`. Rerunning setup is idempotent.
+`setup` selects Knowledge, Issues, or Both and optionally installs the matching Codex or Claude Code skills. It starts local services, creates or reuses the shared `Default` Knowledge Workspace and an Issue Project named after the current directory, and writes a credential-free `.horizonlayer.json`. Rerunning setup is idempotent. If the local embedding model cannot be downloaded, setup warns and continues with RAG disabled for that run; rerun `setup` to retry the embedding warm-up.
 
 For scripts or CI, provide every choice without prompts:
 
@@ -88,7 +88,7 @@ Supported module values are `knowledge`, `issues`, and `both`; skill targets are
 npx -y horizonlayer@latest doctor
 ```
 
-The command reports the configuration path and whether Docker Desktop, PostgreSQL, and Qdrant are ready. It exits nonzero if any required local service is unavailable.
+The command reports the configuration path and whether Docker Desktop, PostgreSQL, and Qdrant are ready. It validates configuration values first and names the offending variable when they are invalid. It exits nonzero if any required local service is unavailable.
 
 ### 3. Connect a coding agent
 
@@ -197,11 +197,49 @@ DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/DATABASE' \
 
 Set `RAG_ENABLED=true` and `QDRANT_URL` only when you also operate a compatible Qdrant instance. Do not run `setup`, `stop`, or `reset` to manage an external PostgreSQL instance.
 
+## Environment variable reference
+
+Source of truth: `src/config.ts` (`loadConfig`) for defaults, `src/localRuntime.ts` (`hasExplicitRuntimeOverride`) for provisioning. Only `DATABASE_URL` suppresses managed provisioning; `RAG_ENABLED` and `QDRANT_URL` never do — they refine the managed runtime instead of replacing its PostgreSQL connection.
+
+| Variable | Default | Scope | Provisioning and lifecycle effect |
+| --- | --- | --- | --- |
+| `DATABASE_URL` | (none) | `mcp`, `dashboard`, `backup`, `recover` | Suppresses managed provisioning and first-launch setup. Managed Backup and Runtime Recovery refuse it. |
+| `DB_HOST` | `localhost` | `mcp`, `dashboard` (external PostgreSQL path) | None. Explicit values take precedence over managed values after setup. |
+| `DB_PORT` | `5432` | `mcp`, `dashboard` (external PostgreSQL path) | None. |
+| `DB_NAME` | `horizon_layer` | `mcp`, `dashboard` (external PostgreSQL path) | None. |
+| `DB_USER` | `postgres` | `mcp`, `dashboard` (external PostgreSQL path) | None. |
+| `DB_PASSWORD` | (empty) | `mcp`, `dashboard` (external PostgreSQL path) | None. |
+| `DB_SSL_MODE` | `disable` | `mcp`, `dashboard` (external PostgreSQL path) | None. |
+| `DB_SSL_REJECT_UNAUTHORIZED` | `true` | `mcp`, `dashboard` (external PostgreSQL path) | None. |
+| `DB_POOL_MAX` | `10` | `mcp`, `dashboard` | None. |
+| `DB_IDLE_TIMEOUT_MS` | `30000` | `mcp`, `dashboard` | None. |
+| `DB_CONNECTION_TIMEOUT_MS` | `10000` | `mcp`, `dashboard` | None. |
+| `DB_STATEMENT_TIMEOUT_MS` | `30000` | `mcp`, `dashboard` | None. |
+| `DASHBOARD_PORT` | `4317` | `dashboard` (`--port` overrides it per run) | None. |
+| `RAG_ENABLED` | `false` | `mcp`, `setup` | Never suppresses provisioning. Allowed for Backup and Recovery. |
+| `QDRANT_URL` | `http://127.0.0.1:6333` | `mcp`, `setup` | Never suppresses provisioning. Allowed for Backup; Runtime Recovery refuses it. |
+| `QDRANT_API_KEY` | (none) | `mcp`, `setup` | None. Requires `https` on non-loopback hosts. |
+| `QDRANT_COLLECTION` | `horizonlayer_rag` | `mcp`, `setup` | None. |
+| `QDRANT_TIMEOUT_MS` | `5000` | `mcp` | None. |
+| `EMBEDDING_MODEL` | `onnx-community/all-MiniLM-L6-v2-ONNX` | `mcp`, `setup` (warm-up) | None. |
+| `EMBEDDING_REVISION` | `aff7a1dc4e8a1ea593e6ea21e95c22ef0a25966f` | `mcp`, `setup` (warm-up) | None. |
+| `EMBEDDING_DTYPE` | `fp32` | `mcp`, `setup` (warm-up) | None. |
+| `EMBEDDING_ALLOW_DOWNLOAD` | `true` | `setup` (warm-up) | None. |
+| `EMBEDDING_CACHE_DIR` | `$XDG_CACHE_HOME/horizonlayer/models`, or `~/.cache/horizonlayer/models` | `mcp`, `setup` (warm-up) | None. |
+| `APP_NAME` | `Horizon Layer` | `mcp` (server display name) | None. |
+| `HORIZONLAYER_HOME` | (none) | `setup`, launcher | Selects a dedicated runtime directory and stable dedicated Docker Compose project. |
+| `HORIZONLAYER_MODULES` | (both modules) | `setup`, `mcp` | Selects the `knowledge`, `issues`, or `both` tool catalog. |
+| `HORIZONLAYER_INTEGRATION_DATABASE_URL` | (none) | Integration tests only | Never read by the launcher or MCP server. |
+
 ## Troubleshooting
 
 | Symptom | Recovery |
 | --- | --- |
 | `doctor` says configuration is missing | Run `setup` first. |
+| `doctor` says configuration is invalid | Fix the named variable values against the [environment variable reference](#environment-variable-reference), then run `doctor` again. |
+| `mcp` or `dashboard` reports no PostgreSQL connection | Run `setup` for the managed runtime, or set `DATABASE_URL` to an existing PostgreSQL instance. |
+| `install` cannot stage the plugin | Check the reported host path for a conflicting file or directory, remove or rename it, then rerun `install`. Restart the agent client after installing. |
+| Setup warns the embedding model could not load | Expected degradation: setup continues with RAG disabled. Rerun `setup` to retry the warm-up. |
 | Docker is missing or its daemon is unavailable | Install or start Docker Desktop (macOS/Windows), or start Docker Engine (Linux), then rerun `setup`. |
 | PostgreSQL or Qdrant is unavailable | Run `doctor`, inspect Docker Desktop or the local containers, then rerun `setup`. The launcher reports the failed dependency and recovery direction. |
 | No candidate local port is available | Free one of the reported loopback ports, then rerun `setup`. Setup chooses an available supported port automatically. |
@@ -213,7 +251,7 @@ Set `RAG_ENABLED=true` and `QDRANT_URL` only when you also operate a compatible 
 | `runtime.json` is invalid or unreadable | Restore a backup to retain existing data. For a disposable development runtime, inspect the saved project/volume names from that backup before manually removing only those resources and the invalid config; then run `setup`. |
 | An external database cannot connect | Check `DATABASE_URL`, network access, and the role's schema permissions; then launch `mcp` or `dashboard` with the corrected environment. |
 
-Run `npx -y horizonlayer@latest help` for the complete command list.
+Run `npx -y horizonlayer@latest help` for the complete command list. Help prints to stdout; `npx -y horizonlayer@latest --version` prints the package version.
 
 ## Data model and behavior
 

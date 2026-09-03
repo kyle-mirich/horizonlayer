@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible defect in Horizon Layer
+description: Report a reproducible defect in HorizonLayer
 title: "[bug] "
 labels:
   - bug

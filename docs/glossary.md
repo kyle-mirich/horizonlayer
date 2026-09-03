@@ -1,8 +1,12 @@
 # HorizonLayer Glossary
 
-The shared vocabulary used across HorizonLayer's code, documentation, and agent-facing skills. Terms are normative: when writing docs or tool descriptions, prefer these names over the listed avoid-terms.
+The shared vocabulary used across HorizonLayer's code, documentation, and agent-facing skills. Terms are normative: when writing docs or tool descriptions, prefer these names over the listed avoid-terms. Every term below names something referenced outside this file; anything else is described inline where it is used.
 
 ## Language
+
+**HorizonLayer**:
+The product name, always written as one word with capital H and L.
+_Avoid_: Horizon Layer, horizon-layer
 
 **Managed Local Runtime**:
 A user-owned HorizonLayer environment provisioned and operated on the user's machine.
@@ -22,11 +26,7 @@ _Avoid_: Workspace export, snapshot
 
 **Runtime Recovery**:
 Recreating a Managed Local Runtime's Canonical Knowledge from a validated Backup.
-_Avoid_: Record restore, import
-
-**Record Restore**:
-Returning an archived workspace, page, database, row, property, block, or link to its active lifecycle state.
-_Avoid_: Runtime recovery
+_Avoid_: Archived-record restore, import
 
 **Knowledge Module**:
 The optional HorizonLayer MCP module for the existing workspace-scoped knowledge records.
@@ -37,7 +37,7 @@ The optional HorizonLayer MCP module for first-class work-tracking records, inde
 _Avoid_: Separate Issue MCP, Jira clone, workspace-scoped task database
 
 **Issue Tracker**:
-The Issue Module's collection of Jira-style Issue Projects and their Issues in a Shared Canonical Database.
+The Issue Module's collection of Jira-style Issue Projects and their Issues in one shared PostgreSQL database.
 _Avoid_: Knowledge Workspace
 
 **Issue Project**:
@@ -55,14 +55,6 @@ _Avoid_: Custom field, workspace
 **Issue Comment**:
 An append-only discussion entry attached to an Issue, attributed to a human or agent.
 _Avoid_: Knowledge Page, Issue description
-
-**Knowledge-Issue Link**:
-An optional, many-to-many relationship between a Knowledge Page and an Issue that agents can follow from either module, without making the Issue belong to the Page's Workspace or the Page belong to the Issue's Project.
-_Avoid_: Required issue documentation, duplicated content, shared workspace
-
-**Link Navigation**:
-An on-demand, CLI-like traversal from a Knowledge Page or Issue through compact linked-record references, where an agent chooses the branches and records to open.
-_Avoid_: Automatic context expansion, forced cross-module reads
 
 **Compact MCP Surface**:
 The smallest set of clearly described MCP tools needed for an agent to operate installed HorizonLayer modules without wasting its context budget.
@@ -88,34 +80,10 @@ _Avoid_: Advisory assignee, permission system
 A filterable view of Issues that agents use to find work, including work that is open, unassigned, and unblocked.
 _Avoid_: Separate task queue, raw database query
 
-**Shared Canonical Database**:
-The one PostgreSQL database that authoritatively stores both Knowledge Module records and Issue Module records, in their respective tables.
-_Avoid_: Separate issue database, duplicated knowledge store
-
-**Host Project Installation**:
-An interactive HorizonLayer setup run from a host code project that selects and configures the MCP modules the project will use; it can create a default Issue Project named for that host project.
-_Avoid_: Issue Project, global installation, separate installer per module
-
 **Module Selection**:
-The Host Project Installation choice to configure the Knowledge Module, the Issue Module, or both.
+The setup choice to configure the Knowledge Module, the Issue Module, or both.
 _Avoid_: Two required products, implicit all-modules setup
-
-**Project Module Configuration**:
-Project-local configuration that declares the HorizonLayer MCP modules a project uses while the records remain in the user's Shared Canonical Database by default.
-_Avoid_: Per-project database, global module selection
 
 **Default Knowledge Workspace**:
 The Knowledge Module's initial Workspace, named `Default`, created by setup as an optional parent container for Pages; agents can create other Knowledge Workspaces.
 _Avoid_: Issue Project, required issue scope
-
-**Dedicated Runtime**:
-An explicitly configured Managed Local Runtime with separate local services and Canonical Knowledge from the default runtime.
-_Avoid_: Default project setup, isolated workspace
-
-**HorizonLayer Skills**:
-Optional agent-facing guidance installed by HorizonLayer's own installer alongside selected HorizonLayer MCP modules.
-_Avoid_: MCP tools, required runtime dependency, externally managed skill installation
-
-**HorizonLayer Bootstrap**:
-The HorizonLayer-owned interactive CLI that selects modules and optionally installs their bundled skills for a project.
-_Avoid_: Generic skills CLI, separate module installers
