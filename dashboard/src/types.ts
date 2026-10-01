@@ -464,6 +464,8 @@ export type SearchScope =
   | { kind: 'database'; database_id: string };
 
 interface SearchInputBase {
+  // Dashboard navigation consumes canonical IDs and citations from full results.
+  format: 'full';
   query: string;
   scope: SearchScope;
   tags?: string[];

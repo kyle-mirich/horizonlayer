@@ -86,6 +86,7 @@ export function SearchPalette({
       setLoading(true);
       setError(null);
       void api.search({
+        format: 'full',
         limit: mode === 'records' ? 15 : 10,
         mode,
         query: search,
