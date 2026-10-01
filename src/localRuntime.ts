@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, win32 } from 'node:path';
+import { dirname, join, resolve, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -90,7 +90,7 @@ export function localRuntimeDirectory(
   platform: NodeJS.Platform = process.platform,
   homeDirectory = homedir()
 ): string {
-  if (environment.HORIZONLAYER_HOME) return environment.HORIZONLAYER_HOME;
+  if (environment.HORIZONLAYER_HOME) return resolve(environment.HORIZONLAYER_HOME);
   if (platform === 'darwin') {
     return join(homeDirectory, 'Library', 'Application Support', 'HorizonLayer');
   }
@@ -366,20 +366,26 @@ export function composeProjectForEnvironment(
   if (!override) return 'horizonlayer';
   // A dedicated configuration home must also own dedicated Docker resources.
   // Keep the ordinary per-user runtime's established project name unchanged.
-  const suffix = createHash('sha256').update(override).digest('hex').slice(0, 12);
+  const suffix = createHash('sha256').update(localRuntimeDirectory(environment)).digest('hex').slice(0, 12);
   return `horizonlayer-${suffix}`;
 }
 
 export async function createLocalRuntimeConfig(
-  environment: NodeJS.ProcessEnv = process.env
+  environment: NodeJS.ProcessEnv = process.env,
+  isAvailable: (port: number) => Promise<boolean> = portAvailable
 ): Promise<LocalRuntimeConfig> {
+  const ragDisabled = ['false', '0', 'no', 'off'].includes(environment.RAG_ENABLED?.toLowerCase() ?? '');
   return {
     compose_project: composeProjectForEnvironment(environment),
     database_name: 'horizon_layer',
     database_password: randomUUID().replaceAll('-', ''),
-    database_port: await chooseLocalPort(DEFAULT_DATABASE_PORTS),
+    database_port: await chooseLocalPort(DEFAULT_DATABASE_PORTS, isAvailable),
     database_user: 'postgres',
-    qdrant_port: await chooseLocalPort(DEFAULT_QDRANT_PORTS),
+    // Keep a valid saved port for a future semantic-search launch without
+    // requiring an unused service's ports during PostgreSQL-only setup.
+    qdrant_port: ragDisabled
+      ? DEFAULT_QDRANT_PORTS[0]!
+      : await chooseLocalPort(DEFAULT_QDRANT_PORTS, isAvailable),
     version: CONFIG_VERSION,
   };
 }

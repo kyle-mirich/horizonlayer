@@ -91,6 +91,28 @@ describe('local runtime paths', () => {
     );
   });
 
+  it('isolates relative runtime homes by their resolved directory and shares path aliases', () => {
+    const firstDirectory = join(tmpdir(), 'horizonlayer-first-project');
+    const secondDirectory = join(tmpdir(), 'horizonlayer-second-project');
+    const environment = { HORIZONLAYER_HOME: '.horizonlayer' };
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(firstDirectory);
+    try {
+      const firstProject = composeProjectForEnvironment(environment);
+      expect(localRuntimeDirectory(environment)).toBe(join(firstDirectory, '.horizonlayer'));
+      expect(localRuntimeConfigPath(environment)).toBe(join(firstDirectory, '.horizonlayer', 'runtime.json'));
+      expect(composeProjectForEnvironment({ HORIZONLAYER_HOME: join(firstDirectory, '.horizonlayer') }))
+        .toBe(firstProject);
+      expect(composeProjectForEnvironment({ HORIZONLAYER_HOME: `${firstDirectory}/nested/../.horizonlayer` }))
+        .toBe(firstProject);
+
+      cwd.mockReturnValue(secondDirectory);
+      expect(composeProjectForEnvironment(environment)).not.toBe(firstProject);
+      expect(localRuntimeDirectory(environment)).toBe(join(secondDirectory, '.horizonlayer'));
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
   it('builds platform-specific Docker Desktop launch commands', () => {
     expect(dockerDesktopLaunchCommand('darwin')).toEqual({
       command: 'open',
@@ -266,6 +288,23 @@ describe('local runtime configuration', () => {
     await expect(chooseLocalPort([55_432, 55_433], async () => false)).rejects.toThrow(
       'Stop the process using one of those loopback ports'
     );
+  });
+
+  it.each(['false', '0', 'no', 'off'])('provisions PostgreSQL without requiring Qdrant ports for RAG_ENABLED=%s', async (ragEnabled) => {
+    const available = vi.fn(async (port: number) => port === 55_432);
+
+    await expect(createLocalRuntimeConfig({ RAG_ENABLED: ragEnabled }, available)).resolves.toMatchObject({
+      database_port: 55_432,
+      qdrant_port: 6_333,
+    });
+    expect(available.mock.calls.map(([port]) => port)).toEqual([55_432]);
+  });
+
+  it('still requires an available Qdrant port when semantic search is enabled', async () => {
+    const available = vi.fn(async (port: number) => port === 55_432);
+
+    await expect(createLocalRuntimeConfig({ RAG_ENABLED: 'true' }, available))
+      .rejects.toThrow('No available local port found among: 6333, 56333, 56334, 56335');
   });
 });
 

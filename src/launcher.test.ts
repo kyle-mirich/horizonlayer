@@ -411,6 +411,17 @@ describe('managed runtime launches with semantic search disabled', () => {
     expect(process.env.DATABASE_URL).toBe('postgres://postgres:test-password@127.0.0.1:55432/horizon_layer');
   });
 
+  it('reuses the saved Compose project and ports when the runtime home uses a relative path', async () => {
+    const { compose } = mockManagedServices();
+    vi.stubEnv('HORIZONLAYER_HOME', '.horizonlayer-runtime');
+
+    await main(['mcp']);
+
+    expect(managedRuntime.createLocalRuntimeConfig).not.toHaveBeenCalled();
+    expect(managedRuntime.writeLocalRuntimeConfig).not.toHaveBeenCalled();
+    expect(compose).toHaveBeenCalledWith('start', localRuntime, undefined, ['db']);
+  });
+
   it.each(['setup', 'mcp', 'dashboard'])('skips Qdrant and model warm-up during first %s provisioning', async (mode) => {
     const { compose, fetcher, loadEmbedder } = mockManagedServices();
     vi.mocked(managedRuntime.readLocalRuntimeConfig).mockResolvedValueOnce(null);

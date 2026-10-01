@@ -74,6 +74,8 @@ npx -y horizonlayer@latest setup
 
 `setup` selects Knowledge, Issues, or Both and optionally installs the matching Codex or Claude Code skills. It starts local services, creates or reuses the shared `Default` Knowledge Workspace and an Issue Project named after the current directory, and writes a credential-free `.horizonlayer.json`. Rerunning setup is idempotent. Set `RAG_ENABLED=false` to start only PostgreSQL and skip Qdrant readiness and embedding-model warm-up during setup, MCP, and dashboard launches. Keep that variable set for subsequent launches if semantic search should remain disabled. If the local embedding model cannot be downloaded, setup warns and continues with RAG disabled for that run; rerun `setup` to retry the embedding warm-up.
 
+A PostgreSQL-only first setup records port `6333` for future Qdrant startup without checking its availability. Before enabling RAG later, ensure that the Qdrant port saved in `runtime.json` is free. Existing runtime ports are reused; a conflict is reported by Docker Compose without changing the saved configuration.
+
 For scripts or CI, provide every choice without prompts:
 
 ```bash
@@ -135,7 +137,7 @@ Use this path for the standard local installation. `setup` reuses the saved conf
 | Runtime configuration (macOS) | `~/Library/Application Support/HorizonLayer/runtime.json` |
 | Runtime configuration (Windows) | `%LOCALAPPDATA%\HorizonLayer\runtime.json` |
 | Runtime configuration (Linux) | `$XDG_CONFIG_HOME/horizonlayer/runtime.json`, or `~/.config/horizonlayer/runtime.json` |
-| Configuration override | Set `HORIZONLAYER_HOME` to a dedicated HorizonLayer directory before its first setup. It receives a stable, dedicated Docker Compose project; the project name is recorded in `runtime.json`. |
+| Configuration override | Set `HORIZONLAYER_HOME` to a dedicated HorizonLayer directory before its first setup. Relative paths resolve from the current working directory. New runtimes receive a dedicated Docker Compose project based on the normalized absolute directory, so `.` and `..` path aliases share one runtime and equal relative paths in different directories stay separate. Existing saved project names are reused from `runtime.json`. |
 | PostgreSQL and Qdrant data | Docker named volumes. The default runtime uses `horizonlayer_postgres-data` and `horizonlayer_qdrant-data`; an overridden home uses the project prefix recorded in its `runtime.json`. |
 | Downloaded embedding model | `$XDG_CACHE_HOME/horizonlayer/models`, or `~/.cache/horizonlayer/models` |
 
