@@ -242,4 +242,62 @@ integrationDescribe('Issue Module canonical persistence', () => {
       expect.objectContaining({ id: dependency.id, blocking_issue_id: blocker.id, blocked_issue_id: blocked.id }),
     ]);
   });
+
+  it('returns one successful dependency archive and one retryable MCP conflict for concurrent writers', async () => {
+    const project = await issueProjects.createIssueProject({ project_key: 'DAC', name: 'Dependency archive race' });
+    const blocker = await issues.createIssue({ created_by: 'test', project_id: project.id, title: 'Blocker' });
+    const blocked = await issues.createIssue({ created_by: 'test', project_id: project.id, title: 'Blocked' });
+    const dependency = await issues.createIssueDependency(blocker.id, blocked.id);
+    const request = { action: 'dependency.archive', input: { dependency_id: dependency.id, revision: dependency.revision } };
+    const responses = await Promise.all([server.callTool('issues', request), server.callTool('issues', request)]);
+    expect(responses.filter((response) => !response.isError)).toHaveLength(1);
+    const refused = responses.find((response) => response.isError);
+    expect(refused?.structuredContent).toMatchObject({
+      ok: false, action: 'dependency.archive', result: null,
+      error: { code: 'CONFLICT', retryable: true },
+    });
+    const current = await setup.query<{ archived_at: Date | null; revision: number }>(
+      'SELECT archived_at, revision FROM issue_dependencies WHERE id = $1', [dependency.id]
+    );
+    expect(current.rows[0]).toMatchObject({ archived_at: expect.any(Date), revision: dependency.revision + 1 });
+  });
+
+  it('distinguishes already archived dependencies, stale tokens, and missing dependencies through MCP', async () => {
+    const project = await issueProjects.createIssueProject({ project_key: 'DAS', name: 'Dependency archive state' });
+    const blocker = await issues.createIssue({ created_by: 'test', project_id: project.id, title: 'Blocker' });
+    const blocked = await issues.createIssue({ created_by: 'test', project_id: project.id, title: 'Blocked' });
+    const dependency = await issues.createIssueDependency(blocker.id, blocked.id);
+    const archived = await issues.archiveIssueDependency(dependency.id, dependency.revision);
+    await expectMcpRefusal('dependency.archive', {
+      dependency_id: dependency.id, revision: archived!.revision,
+    }, 'CONFLICT', `Issue dependency ${dependency.id} is already archived`);
+    const stale = await server.callTool('issues', {
+      action: 'dependency.archive', input: { dependency_id: dependency.id, revision: dependency.revision },
+    });
+    expect(stale.isError).toBe(true);
+    expect(stale.structuredContent).toMatchObject({
+      ok: false, result: null, error: { code: 'CONFLICT', retryable: true },
+    });
+    const missing = await server.callTool('issues', {
+      action: 'dependency.archive', input: { dependency_id: randomUUID(), revision: 1 },
+    });
+    expect(missing.isError).toBe(true);
+    expect(missing.structuredContent).toMatchObject({
+      ok: false, result: null, error: { code: 'NOT_FOUND', retryable: false },
+    });
+    const current = await setup.query<{ revision: number }>(
+      'SELECT revision FROM issue_dependencies WHERE id = $1', [dependency.id]
+    );
+    expect(current.rows[0].revision).toBe(archived!.revision);
+  });
+
+  it.each([
+    ['ready = banana', 'Issue ready filter must be true or false'],
+    ['status IN ()', 'Issue query IN clause requires at least one value'],
+    ['priority IN ()', 'Issue query IN clause requires at least one value'],
+    ['tag IN ()', 'Issue query IN clause requires at least one value'],
+    ['project = ""', 'Issue project filter cannot be empty'],
+  ])('rejects an invalid MCP query without broadening its results: %s', async (query, message) => {
+    await expectMcpRefusal('issue.query', { query }, 'INVALID_ARGUMENT', message);
+  });
 });
