@@ -231,8 +231,14 @@ async function createStateA(): Promise<StateIds> {
       workspace_id: workspaceId,
     })).result, 'archived page create');
     const archivedPageId = getString(archivedPage, 'id');
+    const evidenceBlock = record(asArray(archivedPage.blocks, 'archived page blocks')[0], 'evidence block');
+    const evidenceArchive = record((await callTool(client, 'page', {
+      action: 'block_archive',
+      block_id: getString(evidenceBlock, 'id'),
+      revision: getRevision(evidenceBlock, 'evidence block'),
+    })).result, 'evidence block archive');
     await callTool(client, 'page', {
-      action: 'archive', page_id: archivedPageId, revision: getRevision(archivedPage, 'archived page'),
+      action: 'archive', page_id: archivedPageId, revision: Number(evidenceArchive.page_revision),
     });
 
     const database = record((await callTool(client, 'database', {
@@ -556,6 +562,10 @@ async function verifyMcpState(ids: StateIds, phase: 'A' | 'B'): Promise<void> {
       action: 'get', include_archived: true, page_id: ids.archivedPageId,
     })).result, 'archived page/get');
     assert(archived.archived_at != null, 'archived entity semantics were not recovered');
+    const archivedBlocks = asArray(archived.blocks, 'recovered archived page blocks');
+    assert(archivedBlocks.length === 1, 'archived Block evidence was not recovered');
+    assert(record(archivedBlocks[0], 'recovered archived block').archived_at != null,
+      'archived Block semantics were not recovered');
     assert(ids.bOnlyPageId, 'B-only page identifier was not retained for recovery checks');
     if (phase === 'A') {
       const bOnlyMissing = await callToolEnvelope(client, 'page', {
