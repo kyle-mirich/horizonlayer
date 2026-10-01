@@ -176,7 +176,7 @@ export async function listLinks(params: {
     `SELECT ${LINK_COLUMNS}
      FROM links
      WHERE ${conditions.join(' AND ')}
-     ORDER BY updated_at DESC, created_at DESC
+     ORDER BY updated_at DESC, created_at DESC, id DESC
      LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values
   );

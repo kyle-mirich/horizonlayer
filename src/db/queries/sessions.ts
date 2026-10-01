@@ -249,7 +249,7 @@ export async function listSessions(params: {
      FROM sessions
      WHERE workspace_id = $1
        AND ($2::text[] IS NULL OR status = ANY($2))
-     ORDER BY last_activity_at DESC, created_at DESC
+     ORDER BY last_activity_at DESC, created_at DESC, id DESC
      LIMIT $3 OFFSET $4`,
     [params.workspace_id, params.status?.length ? params.status : null, limit, offset]
   );

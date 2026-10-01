@@ -645,14 +645,14 @@ export async function queryRows(params: {
   const total = Number.parseInt(countRows[0]?.count ?? '0', 10);
 
   const rowValues = [...values];
-  let orderBy = 'r.updated_at DESC, r.created_at DESC';
+  let orderBy = 'r.updated_at DESC, r.created_at DESC, r.id DESC';
   if (params.sort_by) {
     const property = propertiesByName.get(params.sort_by)!;
     rowValues.push(property.id);
     const direction = params.sort_direction === 'desc' ? 'DESC' : 'ASC';
     orderBy = `(SELECT v.${valueColumn(property.property_type)} FROM database_row_values v
       WHERE v.row_id = r.id AND v.property_id = $${rowValues.length} LIMIT 1)
-      ${direction} NULLS LAST, r.created_at DESC`;
+      ${direction} NULLS LAST, r.created_at DESC, r.id DESC`;
   }
   rowValues.push(limit, offset);
   const { rows } = await pool.query<DatabaseRow>(
