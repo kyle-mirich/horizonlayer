@@ -3,8 +3,8 @@
 ## Docker-managed local startup
 
 1. Run `npx -y horizonlayer@latest setup`. In an interactive terminal, choose Knowledge, Issues, or Both and whether to install the matching bundled skills. For automation, use `--non-interactive --modules knowledge|issues|both --skills none|codex|claude|all`.
-2. The launcher creates or reuses local runtime settings, starts PostgreSQL and Qdrant through Docker, initializes the canonical schema, and writes a portable `.horizonlayer.json` containing only the selected modules and default scope names.
-3. Run `npx -y horizonlayer@latest doctor` to check the saved configuration, Docker, PostgreSQL, and Qdrant.
+2. The launcher creates or reuses local runtime settings, starts PostgreSQL and Qdrant through Docker, initializes the canonical schema, and writes a portable `.horizonlayer.json` containing only the selected modules and default scope names. With `RAG_ENABLED=false`, setup starts PostgreSQL alone and skips embedding warm-up; keep the variable set on later launches to keep semantic search disabled.
+3. Run `npx -y horizonlayer@latest doctor` to check the saved configuration, Docker, PostgreSQL, and enabled Qdrant service.
 4. Run `npx -y horizonlayer@latest install codex` or `npx -y horizonlayer@latest install claude`, then restart that agent client.
 5. Before destructive maintenance, run `npx -y horizonlayer@latest backup`, inspect its receipt, and preview recovery with `npx -y horizonlayer@latest recover FILE`. The preview is read-only.
 6. Confirmed recovery keeps a safety Backup, restores PostgreSQL atomically, validates canonical data, clears Qdrant, and restarts the services.
@@ -19,7 +19,7 @@ The default MCP catalog exposes one compact `knowledge` tool when Knowledge is s
 1. Use `knowledge` with the `workspace` operation and `list` action before creating a scope, then create a workspace only when no existing scope fits.
 2. Use the `database` operation and `create` action to define a stable typed collection and its properties.
 3. Use the `row` operation and `create` action with values keyed by exact property names; include the title property.
-4. Use `row` `query` for deterministic typed filtering, or the `search` operation with `mode: "records"` for natural-language retrieval. Use `mode: "rag"` only when semantic evidence is needed; when concurrent writes prevent a stable index snapshot, RAG search returns the valid subset flagged `stale: true` instead of failing.
+4. Use `row` `query` for deterministic typed filtering, or the `search` operation with `mode: "records"` for natural-language retrieval. Use `mode: "rag"` only when semantic evidence is needed. If index reconciliation exhausts its retries after finding valid canonical chunks, RAG can return that subset with `stale: true`. If no valid subset was found, it returns a retryable `DEPENDENCY_UNAVAILABLE` error. PostgreSQL record search remains available without Qdrant.
 5. Before changing an existing object, read it, use its latest revision, and handle a conflict by rereading before retrying.
 
 ## Issue workflow
@@ -44,7 +44,7 @@ Every tool failure returns a structured error envelope classified centrally (`sr
 | `INVALID_REFERENCE` | A foreign-key target does not exist | `false` |
 | `NOT_FOUND` | The named record does not exist | `false` |
 | `CONFLICT` | A revision mismatch, duplicate, or lifecycle precondition failure | `false`, except serialization failures, deadlocks, unavailable locks, and stale-revision writes, which are `true` |
-| `DEPENDENCY_UNAVAILABLE` | PostgreSQL, Qdrant, or the network is unreachable | `true` |
+| `DEPENDENCY_UNAVAILABLE` | A required service, embedding provider, or stable RAG snapshot is unavailable | Usually `true`; disabled RAG and permanent configuration errors are `false` |
 | `INTERNAL` | Anything unclassified | `false` |
 
 `INTERNAL` messages are masked: the envelope carries only `HorizonLayer could not complete the request`, while the original detail is logged server-side tagged with the action. On any other code the envelope carries the actionable message, so agents can reconcile and retry without guessing.
