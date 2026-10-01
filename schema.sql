@@ -266,6 +266,15 @@ CREATE TABLE IF NOT EXISTS issue_dependencies (
   CONSTRAINT issue_dependencies_self_check CHECK (blocking_issue_id <> blocked_issue_id)
 );
 
+-- Internal coordination state, recreated when an older backup is initialized.
+-- A real row write serializes graph edits and rejects stale RR/serializable
+-- snapshots; an advisory lock alone cannot refresh those snapshots.
+CREATE TABLE IF NOT EXISTS issue_graph_state (
+  singleton  BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+  generation BIGINT NOT NULL DEFAULT 0
+);
+INSERT INTO issue_graph_state (singleton) VALUES (TRUE) ON CONFLICT DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS record_links (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -617,6 +626,16 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION coordinate_issue_graph_write() RETURNS trigger AS $$
+BEGIN
+  UPDATE issue_graph_state SET generation = generation + 1 WHERE singleton;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Issue graph coordination state is missing; initialize the canonical schema';
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE FUNCTION validate_issue_parent() RETURNS trigger AS $$
 DECLARE
   parent_project UUID;
@@ -635,14 +654,17 @@ BEGIN
     RAISE EXCEPTION 'Subtask and parent must belong to the same Issue Project';
   END IF;
   IF NEW.id IS NOT NULL AND EXISTS (
-    WITH RECURSIVE ancestors(id, parent_issue_id) AS (
-      SELECT id, parent_issue_id FROM issues WHERE id = NEW.parent_issue_id
+    WITH RECURSIVE ancestors(id, parent_issue_id, visited, is_cycle) AS (
+      SELECT id, parent_issue_id, ARRAY[id], FALSE
+      FROM issues WHERE id = NEW.parent_issue_id
       UNION ALL
-      SELECT candidate.id, candidate.parent_issue_id
+      SELECT candidate.id, candidate.parent_issue_id,
+             current.visited || candidate.id, candidate.id = ANY(current.visited)
       FROM issues candidate
       JOIN ancestors current ON candidate.id = current.parent_issue_id
+      WHERE NOT current.is_cycle
     )
-    SELECT 1 FROM ancestors WHERE id = NEW.id
+    SELECT 1 FROM ancestors WHERE id = NEW.id OR is_cycle
   ) THEN
     RAISE EXCEPTION 'Issue parent relationship would create a cycle';
   END IF;
@@ -690,6 +712,12 @@ $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION validate_issue_dependency() RETURNS trigger AS $$
 BEGIN
+  -- Removing an edge cannot introduce a cycle. Permit repair even when an old
+  -- cycle exists or an endpoint has since been archived; adds/restores validate.
+  IF TG_OP = 'UPDATE' AND NEW.archived_at IS NOT NULL THEN
+    RETURN NEW;
+  END IF;
+
   IF NOT EXISTS (
     SELECT 1 FROM issues
     WHERE id = NEW.blocking_issue_id AND archived_at IS NULL
@@ -993,6 +1021,18 @@ DROP TRIGGER IF EXISTS validate_agent_run_scope_trigger ON agent_runs;
 CREATE TRIGGER validate_agent_run_scope_trigger
 BEFORE INSERT OR UPDATE OF workspace_id, session_id ON agent_runs
 FOR EACH ROW EXECUTE FUNCTION validate_agent_run_scope();
+
+-- Statement guards run before target row locks and project-number allocation.
+-- Other Issue updates (title, status, assignment) do not acquire this guard.
+DROP TRIGGER IF EXISTS coordinate_issue_parent_graph_trigger ON issues;
+CREATE TRIGGER coordinate_issue_parent_graph_trigger
+BEFORE INSERT OR UPDATE OF project_id, parent_issue_id ON issues
+FOR EACH STATEMENT EXECUTE FUNCTION coordinate_issue_graph_write();
+
+DROP TRIGGER IF EXISTS coordinate_issue_dependency_graph_trigger ON issue_dependencies;
+CREATE TRIGGER coordinate_issue_dependency_graph_trigger
+BEFORE INSERT OR UPDATE OF blocking_issue_id, blocked_issue_id, archived_at ON issue_dependencies
+FOR EACH STATEMENT EXECUTE FUNCTION coordinate_issue_graph_write();
 
 DROP TRIGGER IF EXISTS allocate_issue_identity_trigger ON issues;
 CREATE TRIGGER allocate_issue_identity_trigger

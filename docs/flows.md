@@ -20,7 +20,7 @@ The default MCP catalog exposes one compact `knowledge` tool when Knowledge is s
 2. Use the `database` operation and `create` action to define a stable typed collection and its properties.
 3. Use the `row` operation and `create` action with values keyed by exact property names; include the title property.
 4. Use `row` `query` for deterministic typed filtering, or the `search` operation with `mode: "records"` for natural-language retrieval. Use `mode: "rag"` only when semantic evidence is needed. If index reconciliation exhausts its retries after finding valid canonical chunks, RAG can return that subset with `stale: true`. If no valid subset was found, it returns a retryable `DEPENDENCY_UNAVAILABLE` error. PostgreSQL record search remains available without Qdrant.
-5. Before changing an existing object, read it, use its latest revision, and handle a conflict by rereading before retrying.
+5. Before changing an existing object, read it and use its latest revision. For a retryable conflict, reread and reconcile before retrying; for a nonretryable conflict, resolve the condition named in the error first.
 
 ## Issue workflow
 

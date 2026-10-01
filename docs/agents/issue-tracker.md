@@ -18,7 +18,7 @@ The project-local `.horizonlayer.json` records the selected modules and the defa
 - **Block**: call `issues` with `action: "dependency.create"` using `blocking_issue` for the prerequisite and `blocked_issue` for the dependent ticket.
 - **Link context**: call `issues` with `action: "link.create"` to connect an Issue to a Knowledge Page, then use bounded `link.traverse` when navigation is useful.
 
-Issue keys such as `HORIZONLAYER-12` are the human-facing names. UUIDs are also valid. Every mutable record write uses its latest `revision`; on `CONFLICT`, reread, reconcile, and retry once. Use explicit `done` or `closed` status rather than inferring completion from a comment, dependency, or subtask.
+Issue keys such as `HORIZONLAYER-12` are the human-facing names. UUIDs are also valid. Every mutable record write uses its latest `revision`; on a retryable `CONFLICT`, reread, reconcile, and retry once. For a nonretryable conflict, resolve the condition named in the error before trying again. Use explicit `done` or `closed` status rather than inferring completion from a comment, dependency, or subtask.
 
 ## Workflow tags
 
