@@ -192,7 +192,7 @@ describe('DashboardApiClient', () => {
       action: 'search', error: null, meta: {}, ok: true, result: { mode: 'records', records: [], truncated: false },
     })) as DashboardFetch;
     const client = createDashboardApiClient({ baseUrl: 'http://localhost:4317///', fetch: fetcher });
-    await expect(client.search({ mode: 'records', query: 'notes', scope: { kind: 'workspace', workspace_id: 'workspace-1' } }))
+    await expect(client.search({ format: 'full', mode: 'records', query: 'notes', scope: { kind: 'workspace', workspace_id: 'workspace-1' } }))
       .resolves.toMatchObject({ action: 'search' });
     expect(fetcher).toHaveBeenCalledWith('http://localhost:4317/api/tools/search', expect.objectContaining({ method: 'POST' }));
   });

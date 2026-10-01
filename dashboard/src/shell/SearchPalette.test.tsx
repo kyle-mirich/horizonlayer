@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { formatRagSearch, formatRecordSearch } from '../../../src/tools/searchFormat';
 import type { DashboardApiClient } from '../api';
 import type { RagChunk, SearchRecord, Workspace } from '../types';
 import { SearchPalette } from './SearchPalette';
@@ -13,7 +14,7 @@ const workspace: Workspace = {
   created_at: '2026-07-01T00:00:00.000Z',
   description: null,
   icon: null,
-  id: 'workspace-1',
+  id: '10000000-0000-4000-8000-000000000001',
   name: 'Research garden',
   revision: 1,
   updated_at: '2026-07-01T00:00:00.000Z',
@@ -22,7 +23,7 @@ const workspace: Workspace = {
 const pageRecord: SearchRecord = {
   created_at: '2026-07-01T00:00:00.000Z',
   database_id: null,
-  id: 'page-1',
+  id: '20000000-0000-4000-8000-000000000001',
   importance: 0.5,
   parent_page_id: null,
   revision: 1,
@@ -38,8 +39,8 @@ const pageRecord: SearchRecord = {
 
 const rowRecord: SearchRecord = {
   ...pageRecord,
-  database_id: 'database-1',
-  id: 'row-1',
+  database_id: '30000000-0000-4000-8000-000000000001',
+  id: '40000000-0000-4000-8000-000000000001',
   snippet: 'A useful row result',
   title: 'Row result',
   type: 'row',
@@ -47,13 +48,13 @@ const rowRecord: SearchRecord = {
 
 const chunk: RagChunk = {
   citation: {
-    block_id: 'block-1',
+    block_id: '50000000-0000-4000-8000-000000000001',
     block_position: 0,
     block_revision: 2,
     block_type: 'heading',
     char_end: 20,
     char_start: 0,
-    id: 'page-2',
+    id: '20000000-0000-4000-8000-000000000002',
     part: 'block',
     revision: 3,
     title: 'Retrieved page',
@@ -64,6 +65,24 @@ const chunk: RagChunk = {
   rank: 1,
   score: 0.9,
   text: 'A matching block passage',
+};
+
+const rowChunk: RagChunk = {
+  citation: {
+    database_description: null,
+    database_id: rowRecord.database_id!,
+    database_name: 'Research records',
+    id: rowRecord.id,
+    properties: [],
+    revision: rowRecord.revision,
+    title: rowRecord.title,
+    type: 'row',
+    updated_at: rowRecord.updated_at,
+    workspace_id: workspace.id,
+  },
+  rank: 1,
+  score: 0.8,
+  text: 'A matching row passage',
 };
 
 function success(result: unknown) {
@@ -110,12 +129,16 @@ afterEach(() => {
 describe('SearchPalette', () => {
   it('searches records, moves selection with arrows, and opens the selected row', async () => {
     const { onClose, onNavigate, search } = renderPalette({
-      search: async () => success({ mode: 'records', records: [pageRecord, rowRecord], truncated: false }),
+      search: async (input) => success(formatRecordSearch(
+        { records: [pageRecord, rowRecord], truncated: false },
+        input.format === 'full' ? 'full' : 'compact',
+      )),
     });
 
     expect(screen.getByText('Search the real records.')).toBeTruthy();
     await searchFor('agents');
     await waitFor(() => expect(search).toHaveBeenCalledWith({
+      format: 'full',
       limit: 15,
       mode: 'records',
       query: 'agents',
@@ -128,15 +151,30 @@ describe('SearchPalette', () => {
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     expect(screen.getByRole('option', { name: /Row result/ }).getAttribute('aria-selected')).toBe('true');
     fireEvent.keyDown(input, { key: 'Enter' });
-    expect(onNavigate).toHaveBeenCalledWith({ name: 'database', databaseId: 'database-1', rowId: 'row-1' });
+    expect(onNavigate).toHaveBeenCalledWith({ name: 'database', databaseId: rowRecord.database_id, rowId: rowRecord.id });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('requests canonical record fields and opens a page with Enter', async () => {
+    const { onClose, onNavigate } = renderPalette({
+      search: async (input) => success(formatRecordSearch(
+        { records: [pageRecord], truncated: false },
+        input.format === 'full' ? 'full' : 'compact',
+      )),
+    });
+    await searchFor('page');
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Search query' }), { key: 'Enter' });
+    expect(onNavigate).toHaveBeenCalledWith({ name: 'page', pageId: pageRecord.id });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('option', { name: /Page result/ }).textContent).toContain('Page');
+    expect(screen.queryByText('Database row')).toBeNull();
   });
 
   it('switches to semantic passages and navigates from a page citation', async () => {
     const { onClose, onNavigate, search } = renderPalette({
       search: async (input) => success(input.mode === 'rag'
-        ? { chunks: [chunk], mode: 'rag', truncated: false }
-        : { mode: 'records', records: [], truncated: false }),
+        ? formatRagSearch({ chunks: [chunk], truncated: false }, input.format === 'full' ? 'full' : 'compact')
+        : formatRecordSearch({ records: [], truncated: false }, input.format === 'full' ? 'full' : 'compact')),
     });
     await searchFor('retrieve');
     await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
@@ -145,14 +183,38 @@ describe('SearchPalette', () => {
       fireEvent.click(screen.getByRole('button', { name: /Passages/ }));
     });
     await waitFor(() => expect(search).toHaveBeenLastCalledWith(expect.objectContaining({
-      limit: 10, mode: 'rag', query: 'retrieve',
+      format: 'full', limit: 10, mode: 'rag', query: 'retrieve',
     }), expect.anything()));
     expect(screen.getByText('Retrieved page')).toBeTruthy();
     expect(screen.getByText('Page block · heading')).toBeTruthy();
     expect(screen.getByText('A matching block passage')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('option', { name: /Retrieved page/ }));
-    expect(onNavigate).toHaveBeenCalledWith({ name: 'page', pageId: 'page-2' });
+    expect(onNavigate).toHaveBeenCalledWith({ name: 'page', pageId: chunk.citation.id });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('requests canonical passage citations and opens their database row with Enter', async () => {
+    const { onClose, onNavigate, search } = renderPalette({
+      search: async (input) => success(input.mode === 'rag'
+        ? formatRagSearch({ chunks: [rowChunk], truncated: false }, input.format === 'full' ? 'full' : 'compact')
+        : formatRecordSearch({ records: [], truncated: false }, input.format === 'full' ? 'full' : 'compact')),
+    });
+    await searchFor('row passage');
+    await runSearchDebounce(() => {
+      fireEvent.click(screen.getByRole('button', { name: /Passages/ }));
+    });
+    expect(search).toHaveBeenLastCalledWith({
+      format: 'full',
+      limit: 10,
+      mode: 'rag',
+      query: 'row passage',
+      scope: { kind: 'workspace', workspace_id: workspace.id },
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(screen.getByRole('option', { name: /Row result/ }).textContent).toContain('Research records · row passage');
+
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Search query' }), { key: 'Enter' });
+    expect(onNavigate).toHaveBeenCalledWith({ name: 'database', databaseId: rowRecord.database_id, rowId: rowRecord.id });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
