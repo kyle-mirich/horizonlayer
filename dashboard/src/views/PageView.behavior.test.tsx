@@ -100,6 +100,21 @@ function renderPage(options: { pageImpl?: (input: Record<string, unknown>) => Pr
 afterEach(() => cleanup());
 
 describe('PageView behavior', () => {
+  it('rejects pages belonging to a different workspace before rendering editing controls', async () => {
+    const { pageMethod } = renderPage({
+      pageImpl: async (input) => {
+        if (input.action !== 'get') throw new Error('unexpected page mutation');
+        return success('get', pageDetails({ workspace_id: 'other-workspace' }));
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: 'We couldn’t open this page.' })).toBeTruthy();
+    expect(screen.getByText('This page belongs to a different workspace')).toBeTruthy();
+    expect(screen.queryByLabelText('Page title')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Archive page' })).toBeNull();
+    expect(pageMethod).toHaveBeenCalledTimes(1);
+  });
+
   it('edits details, blocks, archived-block visibility, appending, and page archival', async () => {
     const user = userEvent.setup();
     const { navigate, pageMethod, refreshWorkspaceData, showToast } = renderPage();
