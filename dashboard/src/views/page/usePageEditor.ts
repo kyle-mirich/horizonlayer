@@ -13,6 +13,10 @@ function blockDraftKey(blockId: string): string {
   return `block:${blockId}`;
 }
 
+function blockMetadataKey(blockId: string): string {
+  return `${blockDraftKey(blockId)}:metadata`;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'The page could not be updated';
 }
@@ -45,6 +49,7 @@ export function usePageEditor(pageId: string) {
   const persistedTitleRef = useRef('');
   const blocksRef = useRef<Block[]>([]);
   const persistedBlockContentRef = useRef(new Map<string, string>());
+  const persistedBlockMetadataRef = useRef(new Map<string, JsonObject>());
 
   const mutationState = useMutationState();
   const {
@@ -98,6 +103,7 @@ export function usePageEditor(pageId: string) {
     pageRevisionRef.current = 1;
     blocksRef.current = [];
     persistedBlockContentRef.current = new Map();
+    persistedBlockMetadataRef.current = new Map();
     titleRef.current = '';
     persistedTitleRef.current = '';
 
@@ -120,6 +126,9 @@ export function usePageEditor(pageId: string) {
         persistedBlockContentRef.current = new Map(
           loaded.blocks.map((block) => [block.id, block.content]),
         );
+        persistedBlockMetadataRef.current = new Map(
+          loaded.blocks.map((block) => [block.id, block.metadata]),
+        );
         titleRef.current = loaded.title;
         persistedTitleRef.current = loaded.title;
         setPage(loaded);
@@ -140,6 +149,7 @@ export function usePageEditor(pageId: string) {
           if (controller.signal.aborted) return;
           for (const block of next.result.blocks) {
             persistedBlockContentRef.current.set(block.id, block.content);
+            persistedBlockMetadataRef.current.set(block.id, block.metadata);
           }
           blockPage = next.result.blocks_page;
           updatePageState((current) => {
@@ -278,6 +288,7 @@ export function usePageEditor(pageId: string) {
         if (result) {
           const { response, submitted } = result;
           persistedBlockContentRef.current.set(blockId, response.result.block.content);
+          persistedBlockMetadataRef.current.set(blockId, response.result.block.metadata);
           applyPageRevision(response.result.page_revision);
           updateLocalBlock(blockId, (latest) => ({
             ...response.result.block,
@@ -313,16 +324,29 @@ export function usePageEditor(pageId: string) {
     void runMutation(async (signal) => {
       const live = blocksRef.current.find((block) => block.id === blockId);
       if (!live || live.archived_at) return null;
-      const response = await api.page({
-        action: 'block_update',
-        block_id: blockId,
-        metadata,
-        revision: live.revision,
-      }, { signal });
-      return response;
+      try {
+        return await api.page({
+          action: 'block_update',
+          block_id: blockId,
+          metadata,
+          revision: live.revision,
+        }, { signal });
+      } catch (error) {
+        const persistedMetadata = persistedBlockMetadataRef.current.get(blockId);
+        if (persistedMetadata) {
+          // An older failure must not replace a newer queued toggle. Roll back
+          // only this draft, using confirmed metadata rather than prior drafts.
+          updateLocalBlock(blockId, (latest) => latest.metadata === metadata
+            ? { ...latest, metadata: persistedMetadata }
+            : latest);
+        }
+        throw error;
+      }
     }, {
+      issueKey: blockMetadataKey(blockId),
       onSuccess: (response) => {
         if (!response) return;
+        persistedBlockMetadataRef.current.set(blockId, response.result.block.metadata);
         applyPageRevision(response.result.page_revision);
         updateLocalBlock(blockId, (latest) => ({
           ...response.result.block,
@@ -367,6 +391,7 @@ export function usePageEditor(pageId: string) {
         const { archiveResponse, contentUpdate, submitted } = result;
         if (contentUpdate && submitted !== null) {
           persistedBlockContentRef.current.set(blockId, contentUpdate.result.block.content);
+          persistedBlockMetadataRef.current.set(blockId, contentUpdate.result.block.metadata);
           applyPageRevision(contentUpdate.result.page_revision);
           updateLocalBlock(blockId, (latest) => ({
             ...contentUpdate.result.block,
@@ -374,6 +399,7 @@ export function usePageEditor(pageId: string) {
             metadata: latest.metadata,
           }));
         }
+        persistedBlockMetadataRef.current.set(blockId, archiveResponse.result.block.metadata);
         applyPageRevision(archiveResponse.result.page_revision);
         updateLocalBlock(blockId, () => archiveResponse.result.block);
         setDirty(blockDraftKey(blockId), false);
@@ -410,6 +436,7 @@ export function usePageEditor(pageId: string) {
         applyPageRevision(response.result.page_revision);
         for (const block of response.result.blocks) {
           persistedBlockContentRef.current.set(block.id, block.content);
+          persistedBlockMetadataRef.current.set(block.id, block.metadata);
         }
         updatePageState((current) => ({
           ...current,

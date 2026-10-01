@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -39,6 +39,16 @@ function pageRecord(details: PageDetails, overrides: Partial<Page> = {}): Page {
 }
 function success(action: string, result: unknown) {
   return { action, error: null, meta: {}, ok: true as const, result };
+}
+
+function deferred<Result>() {
+  let resolve!: (value: Result) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<Result>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
 }
 
 function renderPage(options: { pageImpl?: (input: Record<string, unknown>) => Promise<unknown> } = {}) {
@@ -100,6 +110,95 @@ function renderPage(options: { pageImpl?: (input: Record<string, unknown>) => Pr
 afterEach(() => cleanup());
 
 describe('PageView behavior', () => {
+  it('restores a failed todo toggle and retains its error after an unrelated append succeeds', async () => {
+    const { pageMethod } = renderPage({
+      pageImpl: async (input) => {
+        if (input.action === 'get') return success('get', pageDetails());
+        if (input.action === 'block_update') throw new Error('Todo could not be saved');
+        if (input.action === 'append') return success('append', {
+          blocks: [block({ block_type: 'callout', content: '', id: 'appended' })], page_revision: 4,
+        });
+        throw new Error('unexpected page mutation');
+      },
+    });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Mark to-do complete' }));
+    await screen.findByRole('status', { name: 'Could not save' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Callout' }));
+    await screen.findByLabelText('Callout block');
+
+    expect.soft(screen.getByRole<HTMLInputElement>('checkbox').checked).toBe(false);
+    expect.soft(screen.getByRole('status').getAttribute('aria-label')).toBe('Could not save');
+    expect(pageMethod.mock.calls.filter(([input]) => input.action === 'append')).toHaveLength(1);
+  });
+
+  it('keeps a newer todo toggle when an older toggle fails and rolls back to persisted metadata when both fail', async () => {
+    const firstUpdate = deferred<unknown>();
+    const secondUpdate = deferred<unknown>();
+    let updates = 0;
+    const { pageMethod } = renderPage({
+      pageImpl: async (input) => {
+        if (input.action === 'get') return success('get', pageDetails());
+        if (input.action === 'block_update') {
+          updates += 1;
+          return updates === 1 ? firstUpdate.promise : secondUpdate.promise;
+        }
+        throw new Error('unexpected page mutation');
+      },
+    });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Mark to-do complete' }));
+    await waitFor(() => expect(updates).toBe(1));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Mark to-do incomplete' }));
+
+    await act(async () => firstUpdate.reject(new Error('First toggle failed')));
+    await waitFor(() => expect(updates).toBe(2));
+    expect(screen.getByRole<HTMLInputElement>('checkbox').checked).toBe(false);
+
+    await act(async () => secondUpdate.reject(new Error('Second toggle failed')));
+    await screen.findByRole('status', { name: 'Could not save' });
+
+    expect(screen.getByRole<HTMLInputElement>('checkbox').checked).toBe(false);
+    expect(pageMethod.mock.calls.filter(([input]) => input.action === 'block_update').map(([input]) => input))
+      .toEqual([
+        expect.objectContaining({ metadata: { done: true }, revision: 2 }),
+        expect.objectContaining({ metadata: { done: false }, revision: 2 }),
+      ]);
+  });
+
+  it('restores the last successful todo metadata when a newer queued toggle fails', async () => {
+    const firstUpdate = deferred<unknown>();
+    const secondUpdate = deferred<unknown>();
+    let updates = 0;
+    const { pageMethod } = renderPage({
+      pageImpl: async (input) => {
+        if (input.action === 'get') return success('get', pageDetails());
+        if (input.action === 'block_update') {
+          updates += 1;
+          return updates === 1 ? firstUpdate.promise : secondUpdate.promise;
+        }
+        throw new Error('unexpected page mutation');
+      },
+    });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Mark to-do complete' }));
+    await waitFor(() => expect(updates).toBe(1));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Mark to-do incomplete' }));
+    await act(async () => firstUpdate.resolve(success('block_update', {
+      block: { ...todoBlock, metadata: { done: true }, revision: 3 }, page_revision: 4,
+    })));
+    await waitFor(() => expect(updates).toBe(2));
+    expect(screen.getByRole<HTMLInputElement>('checkbox').checked).toBe(false);
+
+    await act(async () => secondUpdate.reject(new Error('Newer toggle failed')));
+    await screen.findByRole('status', { name: 'Could not save' });
+
+    expect(screen.getByRole<HTMLInputElement>('checkbox').checked).toBe(true);
+    expect(pageMethod.mock.calls.filter(([input]) => input.action === 'block_update').map(([input]) => input))
+      .toEqual([
+        expect.objectContaining({ metadata: { done: true }, revision: 2 }),
+        expect.objectContaining({ metadata: { done: false }, revision: 3 }),
+      ]);
+  });
+
   it('rejects pages belonging to a different workspace before rendering editing controls', async () => {
     const { pageMethod } = renderPage({
       pageImpl: async (input) => {
