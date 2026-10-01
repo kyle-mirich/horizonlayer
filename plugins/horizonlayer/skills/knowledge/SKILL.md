@@ -37,8 +37,9 @@ Use the HorizonLayer MCP tools as a shared source of truth, not as a transcript 
 
 1. Read the latest entity and capture its `revision`.
 2. Send the smallest valid update.
-3. On `CONFLICT`, read the entity again, reconcile the intended change, and retry once with the new revision.
-4. Archive instead of inventing hard-delete behavior. Include archived entities only for recovery or audit work.
-5. Check the structured envelope: `ok: false` is a tool failure even when the MCP call itself completed.
+3. Retain the returned aggregate token: Block mutations return `page_revision`, property mutations return `database_revision`, and Row value updates return the Row's `revision`. Use those tokens for subsequent writes to their containing records; keep child revisions for writes to the child itself.
+4. On a retryable `CONFLICT`, read the entity again, reconcile the intended change, and retry once with the new revision. For a nonretryable lifecycle conflict, resolve the condition named in the error before trying again.
+5. Archive instead of inventing hard-delete behavior. Archive active child Pages and Blocks before their Page; restore parent Pages before children. Include archived entities only for recovery or audit work.
+6. Check the structured envelope: `ok: false` is a tool failure even when the MCP call itself completed.
 
 When reporting back, name the workspace and the pages or rows used. Include IDs only when they help a later agent continue the work.
