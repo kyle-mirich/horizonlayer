@@ -190,4 +190,27 @@ describe('Issue persistence', () => {
     await expect(archiveIssueDependency('dependency-1', 1))
       .resolves.toMatchObject({ archived_at: 'now' });
   });
+
+  it.each([null, 'now'])('reports stale dependency archive revisions with archived_at=%s', async (archivedAt) => {
+    mocks.query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({
+      rows: [{ archived_at: archivedAt, revision: 4 }],
+    });
+    await expect(archiveIssueDependency('dependency-1', 1)).rejects.toThrow(
+      'Conflict: Issue dependency dependency-1 is at revision 4, not 1'
+    );
+  });
+
+  it('reports an already archived dependency at its current revision', async () => {
+    mocks.query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({
+      rows: [{ archived_at: 'now', revision: 2 }],
+    });
+    await expect(archiveIssueDependency('dependency-1', 2)).rejects.toThrow(
+      'Issue dependency dependency-1 is already archived'
+    );
+  });
+
+  it('keeps missing dependency archive results nullable', async () => {
+    mocks.query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    await expect(archiveIssueDependency('missing', 1)).resolves.toBeNull();
+  });
 });

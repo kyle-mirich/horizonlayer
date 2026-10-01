@@ -17,7 +17,23 @@ describe('parseIssueQuery', () => {
       priority: ['highest'],
       ready: true,
     });
+    expect(parseIssueQuery('ready = TRUE')).toEqual({ ready: true });
+    expect(parseIssueQuery('ready = False')).toEqual({ ready: false });
     expect(parseIssueQuery('')).toEqual({});
+  });
+
+  it.each(['banana', '1', '""'])('rejects invalid ready values: %s', (value) => {
+    expect(() => parseIssueQuery(`project = HL AND ready = ${value}`)).toThrow(
+      'Issue ready filter must be true or false'
+    );
+  });
+
+  it.each(['status', 'priority', 'tag'])('rejects empty %s collections instead of removing the filter', (field) => {
+    expect(() => parseIssueQuery(`${field} IN ()`)).toThrow('requires at least one value');
+  });
+
+  it.each(['""', '"   "'])('rejects an empty project filter: %s', (value) => {
+    expect(() => parseIssueQuery(`project = ${value}`)).toThrow('project filter cannot be empty');
   });
 
   it('rejects unsupported clauses instead of silently broadening a query', () => {

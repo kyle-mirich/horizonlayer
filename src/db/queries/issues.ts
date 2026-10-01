@@ -361,5 +361,12 @@ export async function archiveIssueDependency(
      RETURNING id, blocking_issue_id, blocked_issue_id, revision, archived_at, created_at, updated_at`,
     [id, revision]
   );
+  if (!rows[0]) {
+    const current = await getPool().query<{ archived_at: string | null; revision: number }>(
+      'SELECT revision, archived_at FROM issue_dependencies WHERE id = $1',
+      [id]
+    );
+    assertArchiveTransition('Issue dependency', id, revision, true, current.rows[0]);
+  }
   return rows[0] ?? null;
 }

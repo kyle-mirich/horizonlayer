@@ -35,8 +35,10 @@ export function parseIssueQuery(query: string): ParsedIssueQuery {
       const [, rawField, operator, rawValue] = match;
       const field = rawField.toLowerCase();
       const value = unquote(rawValue);
-      if (field === 'project' && operator === '=') result.project_key = value.toUpperCase();
-      else if (field === 'status' && operator === '=') {
+      if (field === 'project' && operator === '=') {
+        if (!value.trim()) throw new Error('Issue project filter cannot be empty');
+        result.project_key = value.toUpperCase();
+      } else if (field === 'status' && operator === '=') {
         if (!ISSUE_STATUSES.includes(value as IssueStatus)) throw new Error(`Unknown Issue status: ${value}`);
         result.status = [value as IssueStatus];
       } else if (field === 'priority' && operator === '=') {
@@ -45,14 +47,20 @@ export function parseIssueQuery(query: string): ParsedIssueQuery {
       } else if (field === 'assignee' && operator === '=') result.assignee = value;
       else if ((field === 'text' || field === 'summary') && operator === '~') result.text = value;
       else if (field === 'tag' && operator === '=') result.tags = [value];
-      else if (field === 'ready' && operator === '=') result.ready = value.toLowerCase() === 'true';
-      else throw new Error(`Unsupported Issue query clause: ${clause}`);
+      else if (field === 'ready' && operator === '=') {
+        const normalized = value.toLowerCase();
+        if (normalized !== 'true' && normalized !== 'false') {
+          throw new Error('Issue ready filter must be true or false');
+        }
+        result.ready = normalized === 'true';
+      } else throw new Error(`Unsupported Issue query clause: ${clause}`);
       continue;
     }
     match = clause.match(/^([a-z_]+)\s+IN\s+(.+)$/iu);
     if (match) {
       const field = match[1].toLowerCase();
       const items = values(match[2]);
+      if (items.length === 0) throw new Error('Issue query IN clause requires at least one value');
       if (field === 'status') {
         if (items.some((item) => !ISSUE_STATUSES.includes(item as IssueStatus))) throw new Error('Unknown Issue status in IN clause');
         result.status = items as IssueStatus[];
