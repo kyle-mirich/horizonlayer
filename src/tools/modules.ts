@@ -244,7 +244,9 @@ function issuesDefinition(): AppToolDefinition<typeof IssuesSchema> {
       try {
         const parsed = issueInputs[action].safeParse(input);
         if (!parsed.success) throw invalidInput(action, parsed.error);
-        return successEnvelope({ action, result: await executeIssueAction(action, parsed.data) });
+        const result = await executeIssueAction(action, parsed.data);
+        if (result === null) throw new Error(`Record for ${action} not found`);
+        return successEnvelope({ action, result });
       } catch (error) {
         return errorEnvelopeFromUnknown(action, error);
       }

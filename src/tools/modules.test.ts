@@ -123,6 +123,44 @@ describe('compact module handlers', () => {
       .resolves.toMatchObject({ structuredContent: { ok: false } });
   });
 
+  it.each([
+    ['project.get', { project_id: id }, 'getIssueProject'],
+    ['project.update', { project_id: id, revision: 1, name: 'Updated' }, 'updateIssueProject'],
+    ['project.archive', { project_id: id, revision: 1 }, 'archiveIssueProject'],
+    ['project.restore', { project_id: id, revision: 1 }, 'restoreIssueProject'],
+    ['dependency.archive', { dependency_id: id, revision: 1 }, 'archiveIssueDependency'],
+    ['link.restore', { link_id: id, revision: 1 }, 'restoreLink'],
+  ] as const)('reports a missing record for %s as NOT_FOUND', async (action, input, mockName) => {
+    const [issues] = definitions(['issues']);
+    mocks[mockName].mockResolvedValueOnce(null);
+
+    const result = await issues.execute({ action, input });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      action,
+      ok: false,
+      result: null,
+      error: { code: 'NOT_FOUND', retryable: false },
+    });
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual(result.structuredContent);
+  });
+
+  it('preserves revision conflicts when a project mutation fails', async () => {
+    const [issues] = definitions(['issues']);
+    const message = `Conflict: Issue Project ${id} is at revision 2, not 1`;
+    mocks.updateIssueProject.mockRejectedValueOnce(new Error(message));
+
+    const result = await issues.execute({
+      action: 'project.update', input: { project_id: id, revision: 1, name: 'Updated' },
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      ok: false,
+      error: { code: 'CONFLICT', message, retryable: true },
+    });
+  });
+
   it('accepts compact references wherever identifiers are accepted', async () => {
     const [issues] = definitions(['issues']);
     const compactProject = compactReference('workspace', id);

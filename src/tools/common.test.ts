@@ -95,6 +95,23 @@ describe('tool common helpers', () => {
     expect(envelope.structuredContent.error).toMatchObject({ code, retryable });
   });
 
+  it.each([
+    ['archive', 'Page p-1 still has active blocks'],
+    ['archive', 'Page p-1 still has active child pages'],
+    ['issue.claim', 'Issue HL-1 is not ready to claim'],
+  ])('preserves actionable state conflicts for %s: %s', (action, message) => {
+    const envelope = errorEnvelopeFromUnknown(action, new Error(message));
+
+    expect(envelope.isError).toBe(true);
+    expect(envelope.structuredContent.error).toEqual({
+      code: 'CONFLICT',
+      message,
+      retryable: false,
+    });
+    expect(JSON.parse(envelope.content[0].text)).toEqual(envelope.structuredContent);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
   it('handles non-Error failures without throwing during classification', () => {
     const envelope = errorEnvelopeFromUnknown('update', null);
     expect(envelope.structuredContent.error).toMatchObject({
