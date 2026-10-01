@@ -340,7 +340,7 @@ export async function listDatabases(params: {
      WHERE workspace_id = $1
        AND ($2::boolean OR archived_at IS NULL)
        AND ($3::text[] IS NULL OR tags && $3::text[])
-     ORDER BY updated_at DESC, created_at DESC
+     ORDER BY updated_at DESC, created_at DESC, id DESC
      LIMIT $4 OFFSET $5`,
     [params.workspace_id, includeArchived, params.tags?.length ? params.tags : null, limit, offset]
   );

@@ -19,7 +19,7 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 function classifyError(error: unknown): MutationIssue {
-  return error instanceof DashboardApiError && error.code === 'CONFLICT'
+  return error instanceof DashboardApiError && error.code === 'CONFLICT' && error.retryable === true
     ? 'conflict'
     : 'error';
 }

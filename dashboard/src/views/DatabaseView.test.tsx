@@ -216,6 +216,7 @@ describe('DatabaseView', () => {
       action: 'update',
       code: 'CONFLICT',
       endpoint: '/api/tools/row',
+      retryable: true,
       status: 409,
     });
     const { api, rowMethod } = mockApi({ rowUpdateError: conflict });
@@ -383,6 +384,7 @@ describe('DatabaseView', () => {
       action: 'update',
       code: 'CONFLICT',
       endpoint: '/api/tools/row',
+      retryable: true,
       status: 409,
     });
     const { api, rowMethod } = mockApi();

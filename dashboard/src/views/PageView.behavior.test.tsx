@@ -329,7 +329,7 @@ describe('PageView behavior', () => {
     const user = userEvent.setup();
     let getCalls = 0;
     const conflict = new DashboardApiError('Page changed elsewhere', {
-      action: 'update', code: 'CONFLICT', endpoint: '/api/tools/page', status: 409,
+      action: 'update', code: 'CONFLICT', endpoint: '/api/tools/page', retryable: true, status: 409,
     });
     const { pageMethod, showToast } = renderPage({
       pageImpl: async (input) => {
@@ -350,5 +350,36 @@ describe('PageView behavior', () => {
     await user.click(screen.getByRole('button', { name: 'Reload latest and discard local drafts' }));
     await waitFor(() => expect(pageMethod.mock.calls.filter(([input]) => input.action === 'get')).toHaveLength(2));
     expect(await screen.findByDisplayValue('Latest title')).toBeTruthy();
+  });
+
+  it('reports an archive lifecycle refusal without claiming the page changed or discarding detail drafts', async () => {
+    const user = userEvent.setup();
+    const refusal = new DashboardApiError(`Page ${PAGE_ID} still has active blocks`, {
+      action: 'archive', code: 'CONFLICT', endpoint: '/api/tools/page', retryable: false, status: 409,
+    });
+    const { pageMethod, navigate, showToast } = renderPage({
+      pageImpl: async (input) => {
+        if (input.action === 'get') return success('get', pageDetails());
+        if (input.action === 'archive') throw refusal;
+        throw new Error('unexpected page mutation');
+      },
+    });
+    await screen.findByLabelText('Page title');
+    await user.click(screen.getByRole('button', { name: 'Details' }));
+    const details = screen.getByRole('region', { name: 'Page details' });
+    const tags = within(details).getByRole<HTMLInputElement>('textbox', { name: /^Tags/ });
+    fireEvent.change(tags, { target: { value: 'unsaved, local' } });
+    await user.click(screen.getByRole('button', { name: 'Archive page' }));
+    await user.click(within(await screen.findByRole('dialog', { name: 'Archive this page?' }))
+      .getByRole('button', { name: 'Archive page' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(refusal.message, { tone: 'error' }));
+
+    expect(screen.getByRole('status').getAttribute('aria-label')).toBe('Could not save');
+    expect(screen.queryByRole('status', { name: 'Changed elsewhere' })).toBeNull();
+    expect(tags.value).toBe('unsaved, local');
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Page title').value).toBe('Field notes');
+    expect(screen.getByText('rev 3')).toBeTruthy();
+    expect(pageMethod.mock.calls.filter(([input]) => input.action === 'get')).toHaveLength(1);
+    expect(navigate).not.toHaveBeenCalled();
   });
 });

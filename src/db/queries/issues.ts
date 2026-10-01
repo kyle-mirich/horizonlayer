@@ -190,7 +190,7 @@ export async function queryIssues(params: {
     `SELECT ${ISSUE_COLUMNS.replaceAll('\n  ', '\n  candidate.')}
      FROM issues candidate
      WHERE ${conditions.join(' AND ')}
-     ORDER BY candidate.updated_at DESC, candidate.created_at DESC
+     ORDER BY candidate.updated_at DESC, candidate.created_at DESC, candidate.id DESC
      LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values
   );
