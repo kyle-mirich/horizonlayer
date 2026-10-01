@@ -94,7 +94,7 @@ export async function listWorkspaces(params: {
     `SELECT ${WORKSPACE_COLUMNS}
      FROM workspaces
      WHERE ($1::boolean OR archived_at IS NULL)
-     ORDER BY updated_at DESC, created_at DESC
+     ORDER BY updated_at DESC, created_at DESC, id DESC
      LIMIT $2 OFFSET $3`,
     [params.include_archived ?? false, limit, offset]
   );

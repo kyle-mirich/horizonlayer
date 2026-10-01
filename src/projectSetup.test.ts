@@ -35,7 +35,7 @@ async function temporaryProject(name = 'sample-project') {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   mocks.listWorkspaces.mockResolvedValue([]);
   mocks.createWorkspace.mockResolvedValue(workspace);
   mocks.listIssueProjects.mockResolvedValue([]);
@@ -103,6 +103,102 @@ describe('project setup', () => {
     expect(changed.config.issues).toEqual(expect.objectContaining({ project_key: issueProject.project_key }));
     expect(mocks.listIssueProjects).not.toHaveBeenCalled();
     expect(mocks.installAgentPlugins).not.toHaveBeenCalled();
+  });
+
+  it('reuses a workspace after the first resource page', async () => {
+    const directory = await temporaryProject();
+    mocks.listWorkspaces
+      .mockResolvedValueOnce(Array.from({ length: 101 }, (_value, index) => ({
+        id: `workspace-${index}`, name: `Other workspace ${index}`,
+      })))
+      .mockResolvedValueOnce([workspace]);
+
+    const result = await setupProject({ directory, interactive: false, modules: ['knowledge'], skills: 'none' });
+
+    expect(result.config.knowledge).toEqual({ workspace_name: 'Default' });
+    expect(mocks.createWorkspace).not.toHaveBeenCalled();
+    expect(mocks.listWorkspaces).toHaveBeenNthCalledWith(1, { limit: 101, offset: 0 });
+    expect(mocks.listWorkspaces).toHaveBeenNthCalledWith(2, { limit: 101, offset: 101 });
+  });
+
+  it('reuses a saved Issue Project after the first resource page', async () => {
+    const directory = await temporaryProject();
+    await setupProject({ directory, interactive: false, modules: ['issues'], skills: 'none' });
+    vi.clearAllMocks();
+    mocks.listIssueProjects
+      .mockResolvedValueOnce(Array.from({ length: 101 }, (_value, index) => ({
+        id: `project-${index}`, project_key: `P${index}`, name: `Other project ${index}`,
+      })))
+      .mockResolvedValueOnce([issueProject]);
+
+    const result = await setupProject({ directory, interactive: false, skills: 'none' });
+
+    expect(result.config.issues).toEqual({ project_key: 'SAMPLEPROJECT', project_name: 'sample-project' });
+    expect(mocks.createIssueProject).not.toHaveBeenCalled();
+    expect(mocks.listIssueProjects).toHaveBeenNthCalledWith(2, {
+      include_archived: true, limit: 101, offset: 101,
+    });
+  });
+
+  it('reserves project keys appearing after the first resource page', async () => {
+    const directory = await temporaryProject();
+    mocks.listIssueProjects
+      .mockResolvedValueOnce(Array.from({ length: 101 }, (_value, index) => ({
+        id: `project-${index}`, project_key: `P${index}`, name: `Other project ${index}`,
+      })))
+      .mockResolvedValueOnce([
+        { ...issueProject, project_key: 'SAMPLEPROJECT', name: 'Another project' },
+        { ...issueProject, project_key: 'SAMPLEPROJECT2', name: 'Another project two' },
+      ]);
+    mocks.createIssueProject.mockResolvedValue({ ...issueProject, project_key: 'SAMPLEPROJECT3' });
+
+    const result = await setupProject({ directory, interactive: false, modules: ['issues'], skills: 'none' });
+
+    expect(mocks.createIssueProject).toHaveBeenCalledWith({
+      name: 'sample-project', project_key: 'SAMPLEPROJECT3',
+    });
+    expect(result.config.issues?.project_key).toBe('SAMPLEPROJECT3');
+  });
+
+  it('reuses a renamed saved Issue Project by its immutable key', async () => {
+    const directory = await temporaryProject();
+    await setupProject({ directory, interactive: false, modules: ['issues'], skills: 'none' });
+    vi.clearAllMocks();
+    mocks.listIssueProjects.mockResolvedValue([{ ...issueProject, name: 'Renamed project' }]);
+
+    const result = await setupProject({ directory, interactive: false, skills: 'none' });
+
+    expect(mocks.createIssueProject).not.toHaveBeenCalled();
+    expect(result.config.issues).toEqual({ project_key: 'SAMPLEPROJECT', project_name: 'Renamed project' });
+  });
+
+  it('keeps archived project keys reserved without reusing the archived project', async () => {
+    const directory = await temporaryProject();
+    mocks.listIssueProjects.mockImplementation(async (params: { include_archived?: boolean }) => (
+      params.include_archived ? [{ ...issueProject, archived_at: '2026-10-01T00:00:00.000Z' }] : []
+    ));
+    mocks.createIssueProject.mockResolvedValue({ ...issueProject, project_key: 'SAMPLEPROJECT2' });
+
+    const result = await setupProject({ directory, interactive: false, modules: ['issues'], skills: 'none' });
+
+    expect(mocks.listIssueProjects).toHaveBeenCalledWith({ include_archived: true, limit: 101, offset: 0 });
+    expect(mocks.createIssueProject).toHaveBeenCalledWith({ name: 'sample-project', project_key: 'SAMPLEPROJECT2' });
+    expect(result.config.issues?.project_key).toBe('SAMPLEPROJECT2');
+  });
+
+  it('matches active canonical resource names without surrounding spaces or case differences', async () => {
+    const directory = await temporaryProject();
+    mocks.listWorkspaces.mockResolvedValue([{ ...workspace, name: '  DEFAULT  ' }]);
+    mocks.listIssueProjects.mockResolvedValue([{
+      ...issueProject, name: '  SAMPLE-PROJECT  ', project_key: 'EXISTING',
+    }]);
+
+    const result = await setupProject({ directory, interactive: false, skills: 'none' });
+
+    expect(mocks.createWorkspace).not.toHaveBeenCalled();
+    expect(mocks.createIssueProject).not.toHaveBeenCalled();
+    expect(result.config.knowledge?.workspace_name).toBe('  DEFAULT  ');
+    expect(result.config.issues).toEqual({ project_key: 'EXISTING', project_name: '  SAMPLE-PROJECT  ' });
   });
 
   it('supports interactive choices and declining skill installation', async () => {

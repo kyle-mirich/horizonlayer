@@ -18,6 +18,7 @@ const PROJECT_CONFIG_VERSION = 1;
 const PROJECT_CONFIG_NAME = '.horizonlayer.json';
 const DEFAULT_WORKSPACE_NAME = 'Default';
 const ALL_MODULES: HorizonModule[] = ['knowledge', 'issues'];
+const RESOURCE_PAGE_SIZE = 101;
 
 export type SkillInstallTarget = InstallTarget | 'none';
 
@@ -145,26 +146,43 @@ function defaultProjectKey(name: string): string {
   return (key.length >= 2 ? key : `${key}P`).slice(0, 20);
 }
 
+async function listAllResources<T>(
+  list: (params: { limit: number; offset: number }) => Promise<T[]>
+): Promise<T[]> {
+  const resources: T[] = [];
+  for (let offset = 0; ; offset += RESOURCE_PAGE_SIZE) {
+    const page = await list({ limit: RESOURCE_PAGE_SIZE, offset });
+    resources.push(...page);
+    if (page.length < RESOURCE_PAGE_SIZE) return resources;
+  }
+}
+
+function normalizedResourceName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
 async function resolveKnowledge(config: ProjectConfig) {
   const workspaceName = config.knowledge?.workspace_name ?? DEFAULT_WORKSPACE_NAME;
-  const existing = (await listWorkspaces({ limit: 101 })).find(
-    (workspace) => workspace.name === workspaceName
+  const existing = (await listAllResources(listWorkspaces)).find(
+    (workspace) => normalizedResourceName(workspace.name) === normalizedResourceName(workspaceName)
   );
   return existing ?? createWorkspace({ name: workspaceName });
 }
 
 async function resolveIssueProject(config: ProjectConfig, projectName: string) {
-  const projects = await listIssueProjects({ limit: 101 });
+  const projects = await listAllResources((params) => listIssueProjects({ ...params, include_archived: true }));
+  const activeProjects = projects.filter((project) => project.archived_at == null);
   if (config.issues) {
-    const stored = projects.find((project) => (
-      project.project_key === config.issues!.project_key
-      && project.name === config.issues!.project_name
+    const stored = activeProjects.find((project) => (
+      project.project_key === config.issues!.project_key.trim().toUpperCase()
     ));
     if (stored) return stored;
   }
-  const byName = projects.find((project) => project.name === projectName);
+  const byName = activeProjects.find((project) => (
+    normalizedResourceName(project.name) === normalizedResourceName(projectName)
+  ));
   if (byName) return byName;
-  const baseKey = config.issues?.project_key ?? defaultProjectKey(projectName);
+  const baseKey = (config.issues?.project_key ?? defaultProjectKey(projectName)).trim().toUpperCase();
   let key = baseKey;
   let suffix = 2;
   while (projects.some((project) => project.project_key === key)) {
