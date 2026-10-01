@@ -165,6 +165,8 @@ export function App({ api = dashboardApi }: { api?: DashboardApiClient }) {
   const workspace = activeWorkspaces.find((item) => item.id === workspaceId)
     ?? activeWorkspaces[0]
     ?? null;
+  const selectedWorkspaceIdRef = useRef<string | null>(null);
+  selectedWorkspaceIdRef.current = workspace?.id ?? null;
 
   const showToast = useCallback((message: string, options?: { tone?: 'default' | 'error' }) => {
     const id = ++toastId.current;
@@ -295,7 +297,11 @@ export function App({ api = dashboardApi }: { api?: DashboardApiClient }) {
   }, [api, workspaceId]);
 
   const refreshWorkspaceData = useCallback(async () => {
-    if (workspace) await loadWorkspaceIndex(workspace.id);
+    // Queued editor saves can finish after switching workspaces. Their captured
+    // callback must not replace the selected workspace's current index.
+    if (workspace && selectedWorkspaceIdRef.current === workspace.id) {
+      await loadWorkspaceIndex(workspace.id);
+    }
   }, [loadWorkspaceIndex, workspace]);
 
   async function createWorkspace(draft: WorkspaceDraft) {
