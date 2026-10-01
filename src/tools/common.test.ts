@@ -98,6 +98,7 @@ describe('tool common helpers', () => {
   it.each([
     ['archive', 'Page p-1 still has active blocks'],
     ['archive', 'Page p-1 still has active child pages'],
+    ['project.archive', 'Issue Project project-1 still has active Issues'],
     ['issue.claim', 'Issue HL-1 is not ready to claim'],
   ])('preserves actionable state conflicts for %s: %s', (action, message) => {
     const envelope = errorEnvelopeFromUnknown(action, new Error(message));
@@ -105,6 +106,22 @@ describe('tool common helpers', () => {
     expect(envelope.isError).toBe(true);
     expect(envelope.structuredContent.error).toEqual({
       code: 'CONFLICT',
+      message,
+      retryable: false,
+    });
+    expect(JSON.parse(envelope.content[0].text)).toEqual(envelope.structuredContent);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['issue.update', 'Issue parent relationship would create a cycle'],
+    ['dependency.create', 'Issue dependency would create a cycle'],
+  ])('preserves actionable cycle validation for %s: %s', (action, message) => {
+    const envelope = errorEnvelopeFromUnknown(action, { code: 'P0001', message });
+
+    expect(envelope.isError).toBe(true);
+    expect(envelope.structuredContent.error).toEqual({
+      code: 'INVALID_ARGUMENT',
       message,
       retryable: false,
     });

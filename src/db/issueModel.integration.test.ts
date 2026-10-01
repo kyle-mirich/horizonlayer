@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 
 import pg, { type PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { AppServer } from '../mcp.js';
 
 const integrationDatabaseUrl = process.env.HORIZONLAYER_INTEGRATION_DATABASE_URL;
 const integrationDescribe = integrationDatabaseUrl ? describe.sequential : describe.skip;
@@ -27,6 +28,7 @@ integrationDescribe('Issue Module canonical persistence', () => {
   let issueProjects: typeof import('./queries/issueProjects.js');
   let issues: typeof import('./queries/issues.js');
   let links: typeof import('./queries/links.js');
+  let server: AppServer;
   let workspaceId: string;
   let pageId: string;
 
@@ -56,6 +58,10 @@ integrationDescribe('Issue Module canonical persistence', () => {
     issueProjects = await import('./queries/issueProjects.js');
     issues = await import('./queries/issues.js');
     links = await import('./queries/links.js');
+    const { AppServer } = await import('../mcp.js');
+    const { registerModuleTools } = await import('../tools/modules.js');
+    server = new AppServer({ name: 'issue-model-integration', version: '0.0.0' });
+    registerModuleTools(server, ['issues']);
   }, 15_000);
 
   afterAll(async () => {
@@ -168,5 +174,72 @@ integrationDescribe('Issue Module canonical persistence', () => {
         expect.objectContaining({ depth: 1, id: issue.id, type: 'issue' }),
         expect.objectContaining({ depth: 2, id: secondIssue.id, type: 'issue' }),
       ]));
+  });
+
+  async function expectMcpRefusal(
+    action: string,
+    input: Record<string, unknown>,
+    code: 'CONFLICT' | 'INVALID_ARGUMENT',
+    message: string
+  ): Promise<void> {
+    const response = await server.callTool('issues', { action, input });
+    expect(response.isError).toBe(true);
+    expect(response.structuredContent).toMatchObject({
+      ok: false,
+      action,
+      result: null,
+      error: { code, message, retryable: false },
+    });
+    const content = response.content[0];
+    expect(content.type).toBe('text');
+    if (content.type === 'text') expect(JSON.parse(content.text)).toEqual(response.structuredContent);
+  }
+
+  it('returns an actionable MCP conflict when a project still contains active Issues', async () => {
+    const project = await issueProjects.createIssueProject({ project_key: 'ARC', name: 'Archive refusal' });
+    const issue = await issues.createIssue({ created_by: 'test', project_id: project.id, title: 'Active Issue' });
+    const current = await issueProjects.getIssueProject(project.id);
+
+    await expectMcpRefusal('project.archive', {
+      project_id: project.id, revision: current!.revision,
+    }, 'CONFLICT', `Issue Project ${project.id} still has active Issues`);
+    await expect(issueProjects.getIssueProject(project.id)).resolves.toMatchObject({
+      archived_at: null, revision: current!.revision,
+    });
+
+    await issues.archiveIssue(issue.id, issue.revision);
+    const archived = await server.callTool('issues', {
+      action: 'project.archive', input: { project_id: project.id, revision: current!.revision },
+    });
+    expect(archived.structuredContent).toMatchObject({ ok: true });
+  });
+
+  it('returns actionable MCP validation for an Issue parent cycle without changing its revision', async () => {
+    const project = await issueProjects.createIssueProject({ project_key: 'PAR', name: 'Parent cycle' });
+    const parent = await issues.createIssue({ created_by: 'test', project_id: project.id, title: 'Parent' });
+    const child = await issues.createIssue({
+      created_by: 'test', project_id: project.id, title: 'Child', parent_issue_id: parent.id,
+    });
+
+    await expectMcpRefusal('issue.update', {
+      issue: parent.id, revision: parent.revision, parent_issue: child.id,
+    }, 'INVALID_ARGUMENT', 'Issue parent relationship would create a cycle');
+    await expect(issues.getIssue(parent.id)).resolves.toMatchObject({
+      parent_issue_id: null, revision: parent.revision,
+    });
+  });
+
+  it('returns actionable MCP validation for an Issue dependency cycle without adding it', async () => {
+    const project = await issueProjects.createIssueProject({ project_key: 'DEP', name: 'Dependency cycle' });
+    const blocker = await issues.createIssue({ created_by: 'test', project_id: project.id, title: 'Blocker' });
+    const blocked = await issues.createIssue({ created_by: 'test', project_id: project.id, title: 'Blocked' });
+    const dependency = await issues.createIssueDependency(blocker.id, blocked.id);
+
+    await expectMcpRefusal('dependency.create', {
+      blocking_issue: blocked.id, blocked_issue: blocker.id,
+    }, 'INVALID_ARGUMENT', 'Issue dependency would create a cycle');
+    await expect(issues.listIssueDependencies(blocked.id)).resolves.toEqual([
+      expect.objectContaining({ id: dependency.id, blocking_issue_id: blocker.id, blocked_issue_id: blocked.id }),
+    ]);
   });
 });
