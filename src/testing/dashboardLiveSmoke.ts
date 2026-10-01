@@ -347,7 +347,7 @@ async function main(): Promise<void> {
       revision: appendedBlockRevision,
     }), 'page/block_restore result was not an object');
     appendedBlock = asRecord(restoreBlockMutation.block, 'page/block_restore omitted block');
-    getRevision(appendedBlock, 'page/block_restore block');
+    appendedBlockRevision = getRevision(appendedBlock, 'page/block_restore block');
     pageRevision = positiveInteger(
       restoreBlockMutation.page_revision,
       'page/block_restore page_revision'
@@ -366,6 +366,38 @@ async function main(): Promise<void> {
       'page/get returned a stale updated block revision'
     );
 
+    const blockedArchive = await requestJson(baseUrl, '/api/tools/page', {
+      body: JSON.stringify({ action: 'archive', page_id: pageId, revision: pageRevision }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    assert(blockedArchive.status === 409, 'Page archival with active Blocks did not return HTTP 409');
+    assertEnvelopeShape(blockedArchive.body, 'page/archive active Blocks');
+    assert(blockedArchive.body.ok === false, 'Page archival with active Blocks unexpectedly succeeded');
+    assert(blockedArchive.body.result === null, 'Page archival conflict returned a result');
+    const archiveError = asRecord(blockedArchive.body.error, 'Page archival conflict omitted error details');
+    assert(archiveError.code === 'CONFLICT', 'Page archival with active Blocks did not return CONFLICT');
+    assert(archiveError.retryable === false, 'Page archival lifecycle conflict was unexpectedly retryable');
+    assert(
+      typeof archiveError.message === 'string' && archiveError.message.includes('active blocks'),
+      'Page archival conflict did not explain the active Blocks'
+    );
+
+    const archivedBlocks: Array<{ id: string; revision: number }> = [];
+    for (const [blockId, revision] of [
+      [initialBlockId, initialBlockRevision],
+      [appendedBlockId, appendedBlockRevision],
+    ] as const) {
+      const mutation = asRecord(await callTool(baseUrl, 'page', 'block_archive', {
+        action: 'block_archive', block_id: blockId, revision,
+      }), 'page/block_archive before Page archival result was not an object');
+      archivedBlocks.push({
+        id: blockId,
+        revision: getRevision(asRecord(mutation.block, 'page/block_archive omitted block'), 'archived block'),
+      });
+      pageRevision = positiveInteger(mutation.page_revision, 'page/block_archive page_revision');
+    }
+
     page = asRecord(await callTool(baseUrl, 'page', 'archive', {
       action: 'archive',
       page_id: pageId,
@@ -377,7 +409,13 @@ async function main(): Promise<void> {
       page_id: pageId,
       revision: pageRevision,
     }), 'page/restore result was not an object');
-    getRevision(page, 'page/restore');
+    pageRevision = getRevision(page, 'page/restore');
+    for (const block of archivedBlocks) {
+      const mutation = asRecord(await callTool(baseUrl, 'page', 'block_restore', {
+        action: 'block_restore', block_id: block.id, revision: block.revision,
+      }), 'page/block_restore after Page restore result was not an object');
+      pageRevision = positiveInteger(mutation.page_revision, 'page/block_restore page_revision');
+    }
 
     let database = asRecord(await callTool(baseUrl, 'database', 'create', {
       action: 'create',
