@@ -184,6 +184,7 @@ export function DatabaseLedger({
                     {visibleProperties.map((property) => (
                       <td className={property.property_type === 'title' ? 'is-title' : ''} key={property.id}>
                         <CellEditor
+                          choiceResetKey={rowEditor.choiceResetKeys.get(row.id) ?? 0}
                           disabled={rowEditor.rowsLoading || archived || rowArchived || property.archived_at !== null}
                           key={`table-${row.id}-${property.id}-${editorEpoch}`}
                           onCommit={(value) => rowEditor.updateRowValue(row, property, value)}
@@ -235,6 +236,7 @@ export function DatabaseLedger({
                       <div className="database-card__field" key={property.id}>
                         <span>{property.name}</span>
                         <CellEditor
+                          choiceResetKey={rowEditor.choiceResetKeys.get(row.id) ?? 0}
                           disabled={rowEditor.rowsLoading || archived || rowArchived || property.archived_at !== null}
                           key={`card-${row.id}-${property.id}-${editorEpoch}`}
                           onCommit={(value) => rowEditor.updateRowValue(row, property, value)}

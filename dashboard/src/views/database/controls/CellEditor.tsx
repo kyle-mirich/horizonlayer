@@ -11,14 +11,16 @@ import {
 } from './DatabaseControlUtils';
 
 export const CellEditor = memo(function CellEditor({
+  choiceResetKey = 0,
   disabled,
   onCommit,
   property,
   rowLabel,
   value,
 }: {
+  choiceResetKey?: number;
   disabled: boolean;
-  onCommit(value: JsonValue): void;
+  onCommit(value: JsonValue): Promise<unknown>;
   property: DatabaseProperty;
   rowLabel: string;
   value: JsonValue | undefined;
@@ -31,6 +33,28 @@ export const CellEditor = memo(function CellEditor({
   const draftRef = useRef(initialDraft);
   const dirtyRef = useRef(false);
   const submittedDraftRef = useRef<string | null>(null);
+  const [choiceDraft, setChoiceDraft] = useState(value);
+  const choiceDraftRef = useRef(value);
+  const choicePendingRef = useRef(false);
+  const choiceSubmissionRef = useRef(0);
+  const choicePropertyRef = useRef(property.id);
+  const choiceResetKeyRef = useRef(choiceResetKey);
+
+  useEffect(() => {
+    const resetChoice = choicePropertyRef.current !== property.id
+      || choiceResetKeyRef.current !== choiceResetKey;
+    choicePropertyRef.current = property.id;
+    choiceResetKeyRef.current = choiceResetKey;
+    // Save completion is independent of React rendering every acknowledgement.
+    if (resetChoice) {
+      choiceSubmissionRef.current += 1;
+      choicePendingRef.current = false;
+    } else if (choicePendingRef.current) {
+      return;
+    }
+    choiceDraftRef.current = value;
+    setChoiceDraft(value);
+  }, [choiceResetKey, property.id, value]);
 
   useEffect(() => {
     const serverDraft = cellDraftValue(property.property_type, value);
@@ -84,14 +108,26 @@ export const CellEditor = memo(function CellEditor({
     submitDraft(parsed);
   };
 
+  const commitChoice = (next: JsonValue) => {
+    if (sameJsonValue(next, choiceDraftRef.current)) return;
+    const submission = ++choiceSubmissionRef.current;
+    choiceDraftRef.current = next;
+    choicePendingRef.current = true;
+    setChoiceDraft(next);
+    const finishChoice = () => {
+      if (choiceSubmissionRef.current === submission) choicePendingRef.current = false;
+    };
+    void onCommit(next).then(finishChoice, finishChoice);
+  };
+
   if (property.property_type === 'checkbox') {
     return (
       <label className="cell-checkbox" title={label}>
         <input
           aria-label={label}
-          checked={value === true}
+          checked={choiceDraft === true}
           disabled={disabled}
-          onChange={(event) => onCommit(event.target.checked)}
+          onChange={(event) => commitChoice(event.target.checked)}
           type="checkbox"
         />
         <span aria-hidden="true"><Icon name="check" size={13} /></span>
@@ -105,8 +141,8 @@ export const CellEditor = memo(function CellEditor({
         aria-label={label}
         className="cell-input cell-input--select"
         disabled={disabled}
-        onChange={(event) => onCommit(event.target.value || null)}
-        value={typeof value === 'string' ? value : ''}
+        onChange={(event) => commitChoice(event.target.value || null)}
+        value={typeof choiceDraft === 'string' ? choiceDraft : ''}
       >
         <option value="">None</option>
         {choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
@@ -115,7 +151,7 @@ export const CellEditor = memo(function CellEditor({
   }
 
   if (property.property_type === 'multi_select' && choicesConfigured) {
-    const selected = multiValue(value);
+    const selected = multiValue(choiceDraft);
     const remaining = choices.filter((choice) => !selected.includes(choice));
     return (
       <div className="cell-multi" aria-label={label} role="group">
@@ -125,7 +161,7 @@ export const CellEditor = memo(function CellEditor({
             className="choice-chip"
             disabled={disabled}
             key={choice}
-            onClick={() => onCommit(selected.filter((item) => item !== choice))}
+            onClick={() => commitChoice(multiValue(choiceDraftRef.current).filter((item) => item !== choice))}
             type="button"
           >
             {choice}<span aria-hidden="true">×</span>
@@ -137,7 +173,7 @@ export const CellEditor = memo(function CellEditor({
             className="choice-adder"
             disabled={disabled}
             onChange={(event) => {
-              if (event.target.value) onCommit([...selected, event.target.value]);
+              if (event.target.value) commitChoice([...multiValue(choiceDraftRef.current), event.target.value]);
               event.target.value = '';
             }}
             value=""
@@ -192,7 +228,8 @@ export const CellEditor = memo(function CellEditor({
       value={draft}
     />
   );
-}, (previous, next) => previous.disabled === next.disabled
+}, (previous, next) => previous.choiceResetKey === next.choiceResetKey
+  && previous.disabled === next.disabled
   && previous.property.id === next.property.id
   && previous.property.revision === next.property.revision
   && previous.rowLabel === next.rowLabel
