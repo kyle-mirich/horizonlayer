@@ -4,7 +4,7 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { DashboardApiClient } from '../api';
+import { DashboardApiError, type DashboardApiClient } from '../api';
 import { DashboardViewContext, type DashboardViewContextValue } from '../shell/DashboardContext';
 import type { DatabaseProperty, DatabaseRow, DatabaseWithProperties, Workspace } from '../types';
 import { DatabaseView } from './DatabaseView';
@@ -115,6 +115,86 @@ afterEach(() => {
 });
 
 describe('DatabaseView behavior', () => {
+  it('keeps lifecycle property refusals separate from revision conflicts without reloading the schema', async () => {
+    const user = userEvent.setup();
+    const refusal = new DashboardApiError('Property cannot be restored because an active property conflicts', {
+      action: 'property_restore', code: 'CONFLICT', endpoint: '/api/tools/database', retryable: false, status: 409,
+    });
+    const { databaseMethod, showToast } = renderView({
+      databaseImpl: async (input) => {
+        if (input.action === 'get') return success('get', database);
+        if (input.action === 'property_restore') throw refusal;
+        throw new Error('unexpected database mutation');
+      },
+    });
+    await screen.findByRole('heading', { name: 'Research' });
+    await user.click(screen.getByRole('button', { name: 'Schema' }));
+    const schema = await screen.findByRole('dialog', { name: 'Database schema' });
+    await user.click(within(schema).getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+
+    expect(showToast).toHaveBeenCalledWith(refusal.message, { tone: 'error' });
+    expect(screen.getByRole('status').getAttribute('aria-label')).toBe('Could not save');
+    expect(screen.queryByRole('status', { name: 'Changed elsewhere' })).toBeNull();
+    expect(databaseMethod.mock.calls.filter(([input]) => input.action === 'get')).toHaveLength(1);
+    expect(screen.getByText('rev 2')).toBeTruthy();
+  });
+
+  it('reports a nonretryable row lifecycle refusal without reloading the database as a stale revision', async () => {
+    const user = userEvent.setup();
+    const refusal = new DashboardApiError(`row ${row.id} is already archived`, {
+      action: 'archive', code: 'CONFLICT', endpoint: '/api/tools/row', retryable: false, status: 409,
+    });
+    const { databaseMethod, showToast } = renderView({
+      rowId: row.id,
+      rowImpl: async (input) => {
+        if (input.action === 'query') return success('query', {
+          items: [row], page: { has_more: false, limit: 50, next_offset: null, offset: 0 }, total: 1,
+        });
+        if (input.action === 'get') return success('get', row);
+        if (input.action === 'archive') throw refusal;
+        throw new Error('unexpected row mutation');
+      },
+    });
+    const details = await screen.findByRole('dialog', { name: 'Alpha' });
+    await user.click(within(details).getByRole('button', { name: 'Archive record' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+
+    expect(showToast).toHaveBeenCalledWith(refusal.message, { tone: 'error' });
+    expect(screen.getByRole('status').getAttribute('aria-label')).toBe('Could not save');
+    expect(screen.queryByRole('status', { name: 'Changed elsewhere' })).toBeNull();
+    expect(databaseMethod.mock.calls.filter(([input]) => input.action === 'get')).toHaveLength(1);
+  });
+
+  it('reloads the schema after a retryable property revision conflict', async () => {
+    const user = userEvent.setup();
+    const conflict = new DashboardApiError('Property revision changed', {
+      action: 'property_restore', code: 'CONFLICT', endpoint: '/api/tools/database', retryable: true, status: 409,
+    });
+    let reads = 0;
+    const { databaseMethod, showToast } = renderView({
+      databaseImpl: async (input) => {
+        if (input.action === 'get') {
+          reads += 1;
+          return success('get', { ...database, revision: reads === 1 ? 2 : 3 });
+        }
+        if (input.action === 'property_restore') throw conflict;
+        throw new Error('unexpected database mutation');
+      },
+    });
+    await screen.findByRole('heading', { name: 'Research' });
+    await user.click(screen.getByRole('button', { name: 'Schema' }));
+    await user.click(within(await screen.findByRole('dialog', { name: 'Database schema' }))
+      .getByRole('button', { name: 'Restore' }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      'This changed elsewhere. The latest version is loading.', { tone: 'error' },
+    ));
+    await screen.findByText('rev 3');
+    expect(screen.getByRole('status', { name: 'Changed elsewhere' })).toBeTruthy();
+    expect(databaseMethod.mock.calls.filter(([input]) => input.action === 'get')).toHaveLength(2);
+  });
+
   it('retains both rapid multi-select additions while the first save is pending', async () => {
     const user = userEvent.setup();
     const firstUpdate = deferred<unknown>();
