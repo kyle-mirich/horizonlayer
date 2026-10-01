@@ -121,6 +121,7 @@ function classifyError(error: unknown): {
     || normalized.includes('closed and cannot be modified')
     || normalized.includes('still has active blocks')
     || normalized.includes('still has active child pages')
+    || normalized.includes('still has active issues')
     || normalized.includes('is not ready to claim')
   ) {
     return { code: 'CONFLICT', message, retryable: false };
@@ -136,6 +137,8 @@ function classifyError(error: unknown): {
     || normalized.includes('unknown ')
     || normalized.includes('unsupported')
     || normalized.includes('at least one')
+    || normalized === 'issue parent relationship would create a cycle'
+    || normalized === 'issue dependency would create a cycle'
   ) {
     return { code: 'INVALID_ARGUMENT', message, retryable: false };
   }
