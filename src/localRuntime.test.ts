@@ -158,6 +158,16 @@ describe('local runtime configuration', () => {
     expect(environment.DATABASE_URL).toBe(runtimeEnvironment(config).DATABASE_URL);
   });
 
+  it('fills empty runtime overrides with the saved managed values', () => {
+    const environment: NodeJS.ProcessEnv = { DATABASE_URL: '', QDRANT_URL: '', RAG_ENABLED: '' };
+
+    applyLocalRuntimeEnvironment(config, environment);
+
+    expect(environment.DATABASE_URL).toBe('postgres://postgres:local-password@127.0.0.1:55432/horizon_layer');
+    expect(environment.QDRANT_URL).toBe('http://127.0.0.1:6333');
+    expect(environment.RAG_ENABLED).toBe('true');
+  });
+
   it('writes and reads a private, validated runtime configuration', async () => {
     const path = await temporaryPath('nested/runtime.json');
     await writeLocalRuntimeConfig(config, path);
@@ -380,6 +390,16 @@ describe('local runtime service commands', () => {
       .mockReturnValueOnce(commandResult({ status: 1 }))
       .mockReturnValueOnce(commandResult({ status: 1, stderr: 'compose plugin missing' }));
     expect(() => runCompose('start', config, import.meta.filename)).toThrow('Docker Compose v2 is unavailable');
+  });
+
+  it('starts only PostgreSQL when the caller disables semantic search', () => {
+    spawnSyncMock.mockReturnValueOnce(commandResult());
+
+    runCompose('start', config, import.meta.filename, ['db']);
+
+    expect(spawnSyncMock).toHaveBeenCalledWith('docker', [
+      'compose', '-f', import.meta.filename, '-p', 'horizonlayer', 'up', '-d', 'db',
+    ], expect.objectContaining({ stdio: 'inherit' }));
   });
 
   it('opens dashboard URLs only on supported platforms and propagates launch status', () => {

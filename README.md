@@ -72,7 +72,7 @@ Use Docker-managed PostgreSQL and Qdrant with the bundled Codex plugin. No globa
 npx -y horizonlayer@latest setup
 ```
 
-`setup` selects Knowledge, Issues, or Both and optionally installs the matching Codex or Claude Code skills. It starts local services, creates or reuses the shared `Default` Knowledge Workspace and an Issue Project named after the current directory, and writes a credential-free `.horizonlayer.json`. Rerunning setup is idempotent. If the local embedding model cannot be downloaded, setup warns and continues with RAG disabled for that run; rerun `setup` to retry the embedding warm-up.
+`setup` selects Knowledge, Issues, or Both and optionally installs the matching Codex or Claude Code skills. It starts local services, creates or reuses the shared `Default` Knowledge Workspace and an Issue Project named after the current directory, and writes a credential-free `.horizonlayer.json`. Rerunning setup is idempotent. Set `RAG_ENABLED=false` to start only PostgreSQL and skip Qdrant readiness and embedding-model warm-up during setup, MCP, and dashboard launches. Keep that variable set for subsequent launches if semantic search should remain disabled. If the local embedding model cannot be downloaded, setup warns and continues with RAG disabled for that run; rerun `setup` to retry the embedding warm-up.
 
 For scripts or CI, provide every choice without prompts:
 
@@ -88,7 +88,7 @@ Supported module values are `knowledge`, `issues`, and `both`; skill targets are
 npx -y horizonlayer@latest doctor
 ```
 
-The command reports the configuration path and whether Docker Desktop, PostgreSQL, and Qdrant are ready. It validates configuration values first and names the offending variable when they are invalid. It exits nonzero if any required local service is unavailable.
+The command reports the configuration path and whether Docker Desktop, PostgreSQL, and Qdrant are ready. With `RAG_ENABLED=false`, it reports Qdrant as disabled and requires only Docker and PostgreSQL. It validates configuration values first and names the offending variable when they are invalid. It exits nonzero if any required local service is unavailable.
 
 ### 3. Connect a coding agent
 
@@ -216,7 +216,7 @@ Source of truth: `src/config.ts` (`loadConfig`) for defaults, `src/localRuntime.
 | `DB_CONNECTION_TIMEOUT_MS` | `10000` | `mcp`, `dashboard` | None. |
 | `DB_STATEMENT_TIMEOUT_MS` | `30000` | `mcp`, `dashboard` | None. |
 | `DASHBOARD_PORT` | `4317` | `dashboard` (`--port` overrides it per run) | None. |
-| `RAG_ENABLED` | `false` | `mcp`, `setup` | Never suppresses provisioning. Allowed for Backup and Recovery. |
+| `RAG_ENABLED` | `false` (external); `true` (managed) | `mcp`, `dashboard`, `setup`, `doctor` | Never suppresses PostgreSQL provisioning. When false, managed launches start only PostgreSQL and setup skips embedding warm-up. Allowed for Backup and Recovery; Recovery still clears and verifies Qdrant. |
 | `QDRANT_URL` | `http://127.0.0.1:6333` | `mcp`, `setup` | Never suppresses provisioning. Allowed for Backup; Runtime Recovery refuses it. |
 | `QDRANT_API_KEY` | (none) | `mcp`, `setup` | None. Requires `https` on non-loopback hosts. |
 | `QDRANT_COLLECTION` | `horizonlayer_rag` | `mcp`, `setup` | None. |
