@@ -8,6 +8,8 @@ import type { DashboardStatus, Database, Page, Workspace } from './types';
 
 type UnknownProps = Record<string, unknown>;
 
+const contentRefresh = vi.hoisted(() => ({ current: null as (() => Promise<void>) | null }));
+
 vi.mock('./shell/Sidebar', () => ({
   Sidebar: (props: UnknownProps) => (
     <aside
@@ -29,20 +31,23 @@ vi.mock('./shell/Sidebar', () => ({
 }));
 
 vi.mock('./shell/WorkspaceContent', () => ({
-  WorkspaceContent: (props: UnknownProps) => (
-    <main data-route={JSON.stringify(props.route)} data-testid="workspace-content" id="main-content">
-      <output data-testid="content-workspace">{(props.workspace as Workspace).id}</output>
-      <output data-testid="content-pages">{(props.pages as Array<{ id: string }>).map((item) => item.id).join(',')}</output>
-      <output data-testid="content-databases">{(props.databases as Array<{ id: string }>).map((item) => item.id).join(',')}</output>
-      <button onClick={() => void (props.onCreatePage as () => Promise<void>)()} type="button">content create page</button>
-      <button onClick={() => void (props.onCreateDatabase as () => Promise<void>)()} type="button">content create database</button>
-      <button onClick={() => (props.onOpenSearch as () => void)()} type="button">content search</button>
-      <button onClick={() => void (props.onWorkspaceDataChanged as () => Promise<void>)()} type="button">content refresh</button>
-      <button onClick={() => (props.navigate as (target: { name: 'archive' }) => void)({ name: 'archive' })} type="button">content archive route</button>
-      <button onClick={() => (props.navigate as (target: { name: 'page'; pageId: string }) => void)({ name: 'page', pageId: 'missing-page' })} type="button">content missing page route</button>
-      <button onClick={() => (props.navigate as (target: { name: 'database'; databaseId: string }) => void)({ name: 'database', databaseId: 'missing-database' })} type="button">content missing database route</button>
-    </main>
-  ),
+  WorkspaceContent: (props: UnknownProps) => {
+    contentRefresh.current = props.onWorkspaceDataChanged as () => Promise<void>;
+    return (
+      <main data-route={JSON.stringify(props.route)} data-testid="workspace-content" id="main-content">
+        <output data-testid="content-workspace">{(props.workspace as Workspace).id}</output>
+        <output data-testid="content-pages">{(props.pages as Array<{ id: string }>).map((item) => item.id).join(',')}</output>
+        <output data-testid="content-databases">{(props.databases as Array<{ id: string }>).map((item) => item.id).join(',')}</output>
+        <button onClick={() => void (props.onCreatePage as () => Promise<void>)()} type="button">content create page</button>
+        <button onClick={() => void (props.onCreateDatabase as () => Promise<void>)()} type="button">content create database</button>
+        <button onClick={() => (props.onOpenSearch as () => void)()} type="button">content search</button>
+        <button onClick={() => void (props.onWorkspaceDataChanged as () => Promise<void>)()} type="button">content refresh</button>
+        <button onClick={() => (props.navigate as (target: { name: 'archive' }) => void)({ name: 'archive' })} type="button">content archive route</button>
+        <button onClick={() => (props.navigate as (target: { name: 'page'; pageId: string }) => void)({ name: 'page', pageId: 'missing-page' })} type="button">content missing page route</button>
+        <button onClick={() => (props.navigate as (target: { name: 'database'; databaseId: string }) => void)({ name: 'database', databaseId: 'missing-database' })} type="button">content missing database route</button>
+      </main>
+    );
+  },
 }));
 
 vi.mock('./shell/SearchPalette', () => ({
@@ -215,6 +220,7 @@ async function waitForWorkspace(id: string) {
 }
 
 beforeEach(() => {
+  contentRefresh.current = null;
   window.history.replaceState(null, '', '/');
   window.localStorage.clear();
   window.sessionStorage.clear();
@@ -499,6 +505,44 @@ describe('App orchestration', () => {
     await act(async () => firstPages.resolve(success('list', { items: [page('stale-page', first.id)], page: pageInfo })));
     expect(screen.getByTestId('content-pages').textContent).toBe('second-page');
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('ignores old workspace refresh callbacks after selection while keeping current refreshes working', async () => {
+    const first = workspace('workspace-1', 'First');
+    const second = workspace('workspace-2', 'Second');
+    const { api, pageMock, databaseMock } = makeApi({
+      workspace: async () => success('list', { items: [first, second], page: pageInfo }),
+    });
+    pageMock.mockImplementation(async (input: Record<string, unknown>) => success('list', {
+      items: [page(`${String(input.workspace_id)}-page`, String(input.workspace_id))], page: pageInfo,
+    }));
+    databaseMock.mockImplementation(async (input: Record<string, unknown>) => success('list', {
+      items: [database(`${String(input.workspace_id)}-database`, String(input.workspace_id))], page: pageInfo,
+    }));
+    render(<App api={api} />);
+    await waitForWorkspace(first.id);
+    const refreshFirstWorkspace = contentRefresh.current!;
+
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar workspaces' }));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Mock workspaces' }))
+      .getByRole('button', { name: 'dialog select second' }));
+    await waitForWorkspace(second.id);
+    const refreshSecondWorkspace = contentRefresh.current!;
+    const callsBeforeStaleRefresh = pageMock.mock.calls.length;
+
+    await act(async () => refreshFirstWorkspace());
+
+    expect(pageMock).toHaveBeenCalledTimes(callsBeforeStaleRefresh);
+    expect(databaseMock).toHaveBeenCalledTimes(callsBeforeStaleRefresh);
+    expect(screen.getByTestId('content-pages').textContent).toBe('workspace-2-page');
+    expect(screen.getByTestId('content-databases').textContent).toBe('workspace-2-database');
+    expect(screen.getByTestId('sidebar').getAttribute('data-loading')).toBe('false');
+
+    await act(async () => refreshSecondWorkspace());
+
+    expect(pageMock).toHaveBeenCalledTimes(callsBeforeStaleRefresh + 1);
+    expect(pageMock).toHaveBeenLastCalledWith(expect.objectContaining({ workspace_id: second.id }), expect.anything());
+    await waitForWorkspace(second.id);
   });
 
   it('controls the drawer, navigation, status, and search entry points', async () => {

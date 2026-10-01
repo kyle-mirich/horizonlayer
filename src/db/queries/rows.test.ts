@@ -229,6 +229,49 @@ describe('row persistence contracts', () => {
     expect(String(mocks.poolQuery.mock.calls[0]?.[0])).toContain('r.archived_at IS NULL');
   });
 
+  it.each([
+    '__proto__', 'constructor', 'prototype', 'toString', '__defineGetter__', '__defineSetter__',
+  ])('hydrates %s as an own property without changing the values prototype', async (name) => {
+    mocks.poolQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM database_rows r')) {
+        return { rows: [{ ...row(), workspace_id: 'ws-1' }] };
+      }
+      if (sql.includes('FROM database_properties')) return { rows: [property({ name })] };
+      if (sql.includes('FROM database_row_values')) return { rows: [storedValue()] };
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const { getRow } = await import('./rows.js');
+
+    const hydrated = await getRow('row-1');
+
+    expect(Object.hasOwn(hydrated!.values, name)).toBe(true);
+    expect(hydrated!.values[name]).toBe('Ship it');
+    expect(Object.getPrototypeOf(hydrated!.values)).toBe(Object.prototype);
+    expect(JSON.parse(JSON.stringify(hydrated!.values))).toEqual({ [name]: 'Ship it' });
+  });
+
+  it('hydrates an array under __proto__ without setting the object prototype', async () => {
+    mocks.poolQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM database_rows r')) {
+        return { rows: [{ ...row(), workspace_id: 'ws-1' }] };
+      }
+      if (sql.includes('FROM database_properties')) {
+        return { rows: [property({ name: '__proto__', property_type: 'multi_select' })] };
+      }
+      if (sql.includes('FROM database_row_values')) {
+        return { rows: [storedValue({ value_text: null, value_json: ['Agent'] })] };
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const { getRow } = await import('./rows.js');
+
+    const hydrated = await getRow('row-1');
+
+    expect(Object.getPrototypeOf(hydrated!.values)).toBe(Object.prototype);
+    expect(Object.hasOwn(hydrated!.values, '__proto__')).toBe(true);
+    expect(hydrated!.values.__proto__).toEqual(['Agent']);
+  });
+
   it('queries with discriminated filters, tags, archive visibility, and parameterized pagination', async () => {
     mocks.poolQuery.mockImplementation(async (sql: string) => {
       if (sql.includes('FROM databases')) return { rows: [{ id: 'db-1', workspace_id: 'ws-1' }] };

@@ -589,4 +589,99 @@ describe('PageView', () => {
     expect(titleWrites).toHaveLength(1);
     await waitFor(() => expect(view.refreshWorkspaceData).toHaveBeenCalledTimes(1));
   });
+
+  it('uses the completed block revision when flushing another draft after navigation', async () => {
+    const first = makePage();
+    const firstUpdate = deferred<unknown>();
+    const secondPageId = 'page-2';
+    let blockUpdateCount = 0;
+    const pageApi = vi.fn<PageApi>(async (input) => {
+      if (input.action === 'get') {
+        return success('get', input.page_id === secondPageId
+          ? makePage({ blocks: [], id: secondPageId, title: 'Second page' })
+          : first);
+      }
+      if (input.action === 'block_update') {
+        blockUpdateCount += 1;
+        if (blockUpdateCount === 1) return firstUpdate.promise;
+        return success('block_update', {
+          block: { ...first.blocks[0]!, content: input.content ?? '', revision: 4 },
+          page_revision: 5,
+        });
+      }
+      throw new Error(`Unexpected action ${input.action}`);
+    });
+    const view = renderPage(pageApi);
+    const block = await screen.findByLabelText<HTMLTextAreaElement>('Text block');
+
+    fireEvent.change(block, { target: { value: 'First edit' } });
+    fireEvent.blur(block);
+    await waitFor(() => expect(blockUpdateCount).toBe(1));
+    fireEvent.change(block, { target: { value: 'Saved while leaving' } });
+    view.rerenderPage(secondPageId);
+    expect(await screen.findByDisplayValue('Second page')).toBeTruthy();
+
+    await act(async () => {
+      firstUpdate.resolve(success('block_update', {
+        block: { ...first.blocks[0]!, content: 'First edit', revision: 3 },
+        page_revision: 4,
+      }));
+      await firstUpdate.promise;
+    });
+
+    await waitFor(() => expect(blockUpdateCount).toBe(2));
+    const writes = pageApi.mock.calls.map(([input]) => input)
+      .filter((input) => input.action === 'block_update');
+    expect(writes).toEqual([
+      expect.objectContaining({ content: 'First edit', revision: 2 }),
+      expect.objectContaining({ content: 'Saved while leaving', revision: 3 }),
+    ]);
+  });
+
+  it('uses the completed page revision when flushing another title after navigation', async () => {
+    const first = makePage();
+    const firstUpdate = deferred<unknown>();
+    const secondPageId = 'page-2';
+    let titleUpdateCount = 0;
+    const pageApi = vi.fn<PageApi>(async (input) => {
+      if (input.action === 'get') {
+        return success('get', input.page_id === secondPageId
+          ? makePage({ blocks: [], id: secondPageId, title: 'Second page' })
+          : first);
+      }
+      if (input.action === 'update') {
+        titleUpdateCount += 1;
+        if (titleUpdateCount === 1) return firstUpdate.promise;
+        return success('update', pageRecord(first, {
+          revision: 5,
+          title: input.title ?? first.title,
+        }));
+      }
+      throw new Error(`Unexpected action ${input.action}`);
+    });
+    const view = renderPage(pageApi);
+    const title = await screen.findByLabelText<HTMLTextAreaElement>('Page title');
+
+    fireEvent.change(title, { target: { value: 'First edit' } });
+    fireEvent.blur(title);
+    await waitFor(() => expect(titleUpdateCount).toBe(1));
+    fireEvent.change(title, { target: { value: 'Saved while leaving' } });
+    view.rerenderPage(secondPageId);
+    expect(await screen.findByDisplayValue('Second page')).toBeTruthy();
+
+    await act(async () => {
+      firstUpdate.resolve(success('update', pageRecord(first, { revision: 4, title: 'First edit' })));
+      await firstUpdate.promise;
+    });
+
+    await waitFor(() => expect(titleUpdateCount).toBe(2));
+    const writes = pageApi.mock.calls.map(([input]) => input)
+      .filter((input) => input.action === 'update');
+    expect(writes).toEqual([
+      expect.objectContaining({ page_id: PAGE_ID, title: 'First edit', revision: 3 }),
+      expect.objectContaining({ page_id: PAGE_ID, title: 'Saved while leaving', revision: 4 }),
+    ]);
+    await waitFor(() => expect(view.refreshWorkspaceData).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Page title').value).toBe('Second page');
+  });
 });

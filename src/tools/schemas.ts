@@ -37,17 +37,10 @@ function serializedJsonBytes(value: unknown): number | null {
 }
 
 function boundedJsonObject(maxBytes: number, label: string) {
-  return z.record(z.unknown()).superRefine((value, context) => {
-    const bytes = serializedJsonBytes(value);
-    if (bytes === null) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: `${label} must be JSON-serializable` });
-    } else if (bytes > maxBytes) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `${label} must serialize to at most ${maxBytes} bytes`,
-      });
-    }
-  }).describe(`${label}; JSON object serialized size is limited to ${maxBytes} UTF-8 bytes`);
+  // Validate bytes on the original value and retain its own keys. Zod records
+  // suppress __proto__; the intersection restores it with safe object spreads.
+  return boundedJsonValue(maxBytes, label).and(z.record(z.unknown()))
+    .describe(`${label}; JSON object serialized size is limited to ${maxBytes} UTF-8 bytes`);
 }
 
 function boundedJsonValue(maxBytes: number, label: string) {

@@ -183,12 +183,14 @@ describe('keyed mutation queues', () => {
       return { mutationState, queue };
     });
 
+    let firstExecution!: Promise<Row | undefined>;
+    let secondExecution!: Promise<Row | undefined>;
     act(() => {
-      result.current.queue.enqueue('row-1', async (row) => {
+      firstExecution = result.current.queue.enqueue('row-1', async (row) => {
         requestedRevisions.push(row.revision);
         return first.promise;
       });
-      result.current.queue.enqueue('row-1', async (row) => {
+      secondExecution = result.current.queue.enqueue('row-1', async (row) => {
         requestedRevisions.push(row.revision);
         return { ...row, revision: row.revision + 1, value: 'c' };
       });
@@ -199,11 +201,15 @@ describe('keyed mutation queues', () => {
     await waitFor(() => expect(rows.get('row-1')).toMatchObject({ revision: 3, value: 'c' }));
     expect(requestedRevisions).toEqual([1, 2]);
     expect(rows.get('row-1')).toMatchObject({ revision: 3, value: 'c' });
+    await expect(firstExecution).resolves.toMatchObject({ revision: 2, value: 'b' });
+    await expect(secondExecution).resolves.toMatchObject({ revision: 3, value: 'c' });
 
     const failure = deferred<Row>();
+    let failedExecution!: Promise<Row | undefined>;
+    let droppedExecution!: Promise<Row | undefined>;
     act(() => {
-      result.current.queue.enqueue('row-1', () => failure.promise);
-      result.current.queue.enqueue('row-1', async (row) => ({ ...row, revision: 99 }));
+      failedExecution = result.current.queue.enqueue('row-1', () => failure.promise);
+      droppedExecution = result.current.queue.enqueue('row-1', async (row) => ({ ...row, revision: 99 }));
     });
     act(() => failure.reject(new Error('conflict')));
     await waitFor(() => expect(onFailure).toHaveBeenCalledWith('row-1', 'conflict'));
@@ -211,5 +217,34 @@ describe('keyed mutation queues', () => {
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'conflict' }), 'conflict', 'row-1');
     expect(onFailure).toHaveBeenCalledWith('row-1', 'conflict');
     expect(result.current.mutationState.saveState).toBe('conflict');
+    await expect(failedExecution).resolves.toBeUndefined();
+    await expect(droppedExecution).resolves.toBeUndefined();
+  });
+
+  it('settles cancelled queued writes without applying an ignored late response', async () => {
+    const response = deferred<{ id: string; revision: number }>();
+    const applied = vi.fn();
+    const { result } = renderHook(() => useKeyedMutationQueue({
+      apply: applied,
+      classifyError,
+      getCurrent: (id: string) => ({ id, revision: 1 }),
+      mutationState: useMutationState(),
+      onError: vi.fn(),
+      onFailure: vi.fn(),
+    }));
+
+    let execution!: Promise<{ id: string; revision: number } | undefined>;
+    act(() => {
+      execution = result.current.enqueue('row-1', () => response.promise);
+    });
+    await act(async () => {
+      const pending = result.current.cancelPending();
+      response.resolve({ id: 'row-1', revision: 2 });
+      await pending;
+      await execution;
+    });
+
+    expect(applied).not.toHaveBeenCalled();
+    await expect(execution).resolves.toBeUndefined();
   });
 });

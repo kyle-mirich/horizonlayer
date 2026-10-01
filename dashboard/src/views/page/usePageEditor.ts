@@ -23,8 +23,13 @@ function classifyError(error: unknown): MutationIssue {
     : 'error';
 }
 
+interface PageMutationOptions<Result> {
+  issueKey?: string;
+  onSuccess?(result: Result): Promise<void> | void;
+}
+
 export function usePageEditor(pageId: string) {
-  const { api, navigate, refreshWorkspaceData, showToast } = useDashboard();
+  const { api, navigate, refreshWorkspaceData, showToast, workspace } = useDashboard();
   const [page, setPage] = useState<PageDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -58,6 +63,16 @@ export function usePageEditor(pageId: string) {
     mutationState,
     onError: handleMutationError,
   });
+  const runQueuedMutation = mutations.run;
+  const runMutation = useCallback(<Result,>(
+    request: (signal: AbortSignal) => Promise<Result>,
+    options: PageMutationOptions<Result>,
+  ) => runQueuedMutation(request, {
+    ...options,
+    // Navigation flushes drafts into the same queue. Keep its authoritative
+    // revisions current even after the editor has been replaced.
+    onSuccessAfterUnmount: options.onSuccess,
+  }), [runQueuedMutation]);
   const autosave = useDebouncedAutosave({
     flushOnUnmount: true,
     mutationState,
@@ -96,6 +111,9 @@ export function usePageEditor(pageId: string) {
         }, { signal: controller.signal });
         if (controller.signal.aborted) return;
         const loaded = first.result;
+        if (loaded.workspace_id !== workspace.id) {
+          throw new Error('This page belongs to a different workspace');
+        }
         pageRef.current = loaded;
         pageRevisionRef.current = loaded.revision;
         blocksRef.current = loaded.blocks;
@@ -147,7 +165,7 @@ export function usePageEditor(pageId: string) {
     })();
 
     return () => controller.abort();
-  }, [api, pageId, retryKey, showToast, updatePageState]);
+  }, [api, pageId, retryKey, showToast, updatePageState, workspace.id]);
 
   const applyPageRevision = useCallback((revision: number) => {
     if (revision <= pageRevisionRef.current) return;
@@ -174,7 +192,7 @@ export function usePageEditor(pageId: string) {
       return;
     }
 
-    void mutations.run((signal) => api.page({
+    void runMutation((signal) => api.page({
       action: 'update',
       page_id: pageId,
       revision: pageRevisionRef.current,
@@ -192,7 +210,7 @@ export function usePageEditor(pageId: string) {
         }));
         if (titleRef.current.trim() === submitted) {
           titleRef.current = response.result.title;
-          setTitle(response.result.title);
+          if (isMounted()) setTitle(response.result.title);
         }
         setDirty(
           TITLE_DRAFT_KEY,
@@ -200,14 +218,13 @@ export function usePageEditor(pageId: string) {
         );
         await refreshWorkspaceData();
       },
-      onSuccessAfterUnmount: refreshWorkspaceData,
     });
   }, [
     api,
     isMounted,
-    mutations,
     pageId,
     refreshWorkspaceData,
+    runMutation,
     showToast,
     setDirty,
     updatePageState,
@@ -243,7 +260,7 @@ export function usePageEditor(pageId: string) {
       return;
     }
 
-    void mutations.run(async (signal) => {
+    void runMutation(async (signal) => {
       const live = blocksRef.current.find((block) => block.id === blockId);
       if (!live || live.archived_at) return null;
       const submitted = live.content;
@@ -275,7 +292,7 @@ export function usePageEditor(pageId: string) {
         );
       },
     });
-  }, [api, applyPageRevision, mutations, setDirty, updateLocalBlock]);
+  }, [api, applyPageRevision, runMutation, setDirty, updateLocalBlock]);
 
   const saveBlock = useCallback((blockId: string) => {
     if (!autosave.flush(blockDraftKey(blockId))) persistBlock(blockId);
@@ -293,7 +310,7 @@ export function usePageEditor(pageId: string) {
 
   const saveBlockMetadata = useCallback((blockId: string, metadata: JsonObject) => {
     updateLocalBlock(blockId, (block) => ({ ...block, metadata }));
-    void mutations.run(async (signal) => {
+    void runMutation(async (signal) => {
       const live = blocksRef.current.find((block) => block.id === blockId);
       if (!live || live.archived_at) return null;
       const response = await api.page({
@@ -314,12 +331,12 @@ export function usePageEditor(pageId: string) {
         }));
       },
     });
-  }, [api, applyPageRevision, mutations, updateLocalBlock]);
+  }, [api, applyPageRevision, runMutation, updateLocalBlock]);
 
   const mutateBlockArchive = useCallback((blockId: string, restore: boolean) => {
     autosave.cancel(blockDraftKey(blockId));
     setBusyBlockIds((current) => new Set(current).add(blockId));
-    const execution = mutations.run(async (signal) => {
+    const execution = runMutation(async (signal) => {
       let live = blocksRef.current.find((block) => block.id === blockId);
       if (!live) return null;
       if (restore ? live.archived_at === null : live.archived_at !== null) return null;
@@ -360,7 +377,7 @@ export function usePageEditor(pageId: string) {
         applyPageRevision(archiveResponse.result.page_revision);
         updateLocalBlock(blockId, () => archiveResponse.result.block);
         setDirty(blockDraftKey(blockId), false);
-        showToast(restore ? 'Block restored' : 'Block archived');
+        if (isMounted()) showToast(restore ? 'Block restored' : 'Block archived');
       },
     });
     void execution.finally(() => {
@@ -376,14 +393,14 @@ export function usePageEditor(pageId: string) {
     applyPageRevision,
     autosave,
     isMounted,
-    mutations,
+    runMutation,
     setDirty,
     showToast,
     updateLocalBlock,
   ]);
 
   const appendBlock = useCallback((blockType: BlockType) => {
-    void mutations.run((signal) => api.page({
+    void runMutation((signal) => api.page({
       action: 'append',
       blocks: [{ block_type: blockType, content: '' }],
       page_id: pageId,
@@ -400,7 +417,7 @@ export function usePageEditor(pageId: string) {
         }));
       },
     });
-  }, [api, applyPageRevision, mutations, pageId, updatePageState]);
+  }, [api, applyPageRevision, pageId, runMutation, updatePageState]);
 
   const saveProperties = useCallback((onSaved?: () => void) => {
     const tags = [...new Set(tagsDraft.split(',').map((tag) => tag.trim()).filter(Boolean))];
@@ -408,7 +425,7 @@ export function usePageEditor(pageId: string) {
       showToast('Use at most 50 tags, each no longer than 100 characters', { tone: 'error' });
       return;
     }
-    void mutations.run((signal) => api.page({
+    void runMutation((signal) => api.page({
       action: 'update',
       importance: importanceDraft,
       page_id: pageId,
@@ -423,17 +440,19 @@ export function usePageEditor(pageId: string) {
           blocks: current.blocks,
           blocks_page: current.blocks_page,
         }));
-        setTagsDraft(response.result.tags.join(', '));
-        setImportanceDraft(response.result.importance);
-        onSaved?.();
+        if (isMounted()) {
+          setTagsDraft(response.result.tags.join(', '));
+          setImportanceDraft(response.result.importance);
+          onSaved?.();
+        }
         await refreshWorkspaceData();
-        showToast('Page details saved');
+        if (isMounted()) showToast('Page details saved');
       },
     });
-  }, [api, importanceDraft, mutations, pageId, refreshWorkspaceData, showToast, tagsDraft, updatePageState]);
+  }, [api, importanceDraft, isMounted, pageId, refreshWorkspaceData, runMutation, showToast, tagsDraft, updatePageState]);
 
   const setPageArchived = useCallback((restore: boolean, onSaved?: () => void) => {
-    void mutations.run((signal) => api.page({
+    void runMutation((signal) => api.page({
       action: restore ? 'restore' : 'archive',
       page_id: pageId,
       revision: pageRevisionRef.current,
@@ -447,12 +466,14 @@ export function usePageEditor(pageId: string) {
           blocks_page: current.blocks_page,
         }));
         await refreshWorkspaceData();
-        showToast(restore ? 'Page restored' : 'Page moved to archive');
-        onSaved?.();
-        if (!restore) navigate({ name: 'home' });
+        if (isMounted()) {
+          showToast(restore ? 'Page restored' : 'Page moved to archive');
+          onSaved?.();
+          if (!restore) navigate({ name: 'home' });
+        }
       },
     });
-  }, [api, mutations, navigate, pageId, refreshWorkspaceData, showToast, updatePageState]);
+  }, [api, isMounted, navigate, pageId, refreshWorkspaceData, runMutation, showToast, updatePageState]);
 
   const reloadLatest = useCallback(() => {
     autosave.discardAll();

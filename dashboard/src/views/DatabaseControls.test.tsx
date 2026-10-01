@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -20,6 +20,14 @@ import {
 } from './DatabaseControls';
 
 const NOW = '2026-07-01T00:00:00.000Z';
+
+function deferred<Result>() {
+  let resolve!: (value: Result) => void;
+  const promise = new Promise<Result>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
 
 function property(type: PropertyType, overrides: Partial<DatabaseProperty> = {}): DatabaseProperty {
   return {
@@ -96,7 +104,7 @@ describe('DatabaseControls helpers', () => {
 describe('CellEditor', () => {
   it('commits checkbox, configured select, and configured multi-select values', async () => {
     const user = userEvent.setup();
-    const onCommit = vi.fn();
+    const onCommit = vi.fn(async () => true);
     const { rerender } = render(<CellEditor disabled={false} onCommit={onCommit} property={checkbox} rowLabel="Alpha" value={false} />);
     await user.click(screen.getByLabelText('checkbox for Alpha'));
     expect(onCommit).toHaveBeenLastCalledWith(true);
@@ -109,12 +117,12 @@ describe('CellEditor', () => {
     await user.click(screen.getByRole('button', { name: 'Remove Red from multi_select' }));
     expect(onCommit).toHaveBeenLastCalledWith([]);
     await user.selectOptions(screen.getByLabelText('Add multi_select choice for Alpha'), 'Blue');
-    expect(onCommit).toHaveBeenLastCalledWith(['Red', 'Blue']);
+    expect(onCommit).toHaveBeenLastCalledWith(['Blue']);
   });
 
   it('normalizes text and multi-select drafts, rejects invalid numbers, and supports Escape', async () => {
     const user = userEvent.setup();
-    const onCommit = vi.fn();
+    const onCommit = vi.fn(async () => true);
     const noChoicesMulti = property('multi_select', { options: {} });
     const { rerender } = render(<CellEditor disabled={false} onCommit={onCommit} property={title} rowLabel="Alpha" value="Alpha" />);
     const input = screen.getByLabelText('Name for Alpha');
@@ -144,6 +152,69 @@ describe('CellEditor', () => {
     await user.type(choices, ' Red, blue, RED ');
     await user.tab();
     expect(onCommit).toHaveBeenLastCalledWith(['Red', 'blue']);
+  });
+
+  it('acknowledges cleared select choices when the canonical value is absent', async () => {
+    const user = userEvent.setup();
+    const onCommit = vi.fn(async () => true);
+    const { rerender } = render(<CellEditor disabled={false} onCommit={onCommit} property={select} rowLabel="Alpha" value="Planned" />);
+
+    await user.selectOptions(screen.getByLabelText('select for Alpha'), '');
+    expect(onCommit).toHaveBeenLastCalledWith(null);
+    rerender(<CellEditor disabled={false} onCommit={onCommit} property={select} rowLabel="Alpha" value={undefined} />);
+    expect(screen.getByLabelText('select for Alpha')).toHaveProperty('value', '');
+
+    rerender(<CellEditor disabled={false} onCommit={onCommit} property={select} rowLabel="Alpha" value="Done" />);
+    expect(screen.getByLabelText('select for Alpha')).toHaveProperty('value', 'Done');
+  });
+
+  it('accepts authoritative choices after intermediate save renders are batched away', async () => {
+    const user = userEvent.setup();
+    const first = deferred<void>();
+    const second = deferred<void>();
+    const onCommit = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const { rerender } = render(<CellEditor disabled={false} onCommit={onCommit} property={multi} rowLabel="Alpha" value={[]} />);
+
+    await user.selectOptions(screen.getByLabelText('Add multi_select choice for Alpha'), 'Red');
+    await user.selectOptions(screen.getByLabelText('Add multi_select choice for Alpha'), 'Blue');
+    await act(async () => {
+      first.resolve();
+      second.resolve();
+      await Promise.all([first.promise, second.promise]);
+    });
+    rerender(<CellEditor disabled={false} onCommit={onCommit} property={multi} rowLabel="Alpha" value={['Red', 'Blue']} />);
+    rerender(<CellEditor disabled={false} onCommit={onCommit} property={multi} rowLabel="Alpha" value={['Blue']} />);
+
+    expect(screen.queryByRole('button', { name: 'Remove Red from multi_select' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove Blue from multi_select' })).toBeTruthy();
+  });
+
+  it('invalidates old save completions when a failed row resets its choices', async () => {
+    const user = userEvent.setup();
+    const oldSave = deferred<void>();
+    const newSave = deferred<void>();
+    const onCommit = vi.fn()
+      .mockReturnValueOnce(oldSave.promise)
+      .mockReturnValueOnce(newSave.promise);
+    const { rerender } = render(<CellEditor choiceResetKey={0} disabled={false} onCommit={onCommit} property={multi} rowLabel="Alpha" value={[]} />);
+
+    await user.selectOptions(screen.getByLabelText('Add multi_select choice for Alpha'), 'Red');
+    rerender(<CellEditor choiceResetKey={1} disabled={false} onCommit={onCommit} property={multi} rowLabel="Alpha" value={[]} />);
+    await user.selectOptions(screen.getByLabelText('Add multi_select choice for Alpha'), 'Blue');
+    await act(async () => {
+      oldSave.resolve();
+      await oldSave.promise;
+    });
+    rerender(<CellEditor choiceResetKey={1} disabled={false} onCommit={onCommit} property={multi} rowLabel="Alpha" value={['Red']} />);
+
+    expect(screen.queryByRole('button', { name: 'Remove Red from multi_select' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove Blue from multi_select' })).toBeTruthy();
+    await act(async () => {
+      newSave.resolve();
+      await newSave.promise;
+    });
   });
 });
 
@@ -242,6 +313,30 @@ describe('database dialogs', () => {
     }, ['red', 'blue'], 0.8);
   });
 
+  it('retains prototype-sensitive property names in create-record payloads', async () => {
+    const user = userEvent.setup();
+    const onCreate = vi.fn();
+    const namedProperties = [
+      title,
+      property('text', { id: 'property-prototype', name: '__proto__' }),
+      property('text', { id: 'property-constructor', name: 'constructor' }),
+    ];
+    render(<CreateRowDialog disabled={false} onClose={vi.fn()} onCreate={onCreate} properties={namedProperties} />);
+
+    await user.type(screen.getByLabelText('Name'), 'Alpha');
+    await user.type(screen.getByLabelText('__proto__'), 'A named field');
+    await user.type(screen.getByLabelText('constructor'), 'Another named field');
+    await user.click(screen.getByRole('button', { name: 'Create record' }));
+
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    const values = onCreate.mock.calls[0]![0] as Record<string, unknown>;
+    expect(Object.hasOwn(values, '__proto__')).toBe(true);
+    expect(Object.hasOwn(values, 'constructor')).toBe(true);
+    expect(JSON.parse(JSON.stringify(values))).toEqual({
+      Name: 'Alpha', ['__proto__']: 'A named field', constructor: 'Another named field',
+    });
+  });
+
   it('covers row loading, normal edits/archiving, and archived restore behavior', async () => {
     const user = userEvent.setup();
     const onArchive = vi.fn();
@@ -281,7 +376,7 @@ describe('database dialogs', () => {
 
   it('covers remaining editor variants, title safeguards, and disabled archived details', async () => {
     const user = userEvent.setup();
-    const onCommit = vi.fn();
+    const onCommit = vi.fn(async () => true);
     const { rerender } = render(<CellEditor disabled={false} onCommit={onCommit} property={multi} rowLabel="Alpha" value={['Red', 'Blue']} />);
     expect(screen.queryByLabelText('Add multi_select choice for Alpha')).toBeNull();
     rerender(<CellEditor disabled={false} onCommit={onCommit} property={date} rowLabel="Alpha" value="2026-07-01T00:00:00.000Z" />);

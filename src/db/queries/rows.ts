@@ -383,7 +383,12 @@ async function hydrateRows(
     const property = propertiesById.get(stored.property_id);
     if (!property) continue;
     const values = valuesByRow.get(stored.row_id) ?? {};
-    values[property.name] = extractStoredValue(stored, property.property_type);
+    Object.defineProperty(values, property.name, {
+      value: extractStoredValue(stored, property.property_type),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
     valuesByRow.set(stored.row_id, values);
   }
   return rows.map((row) => ({ ...row, values: valuesByRow.get(row.id) ?? {} }));

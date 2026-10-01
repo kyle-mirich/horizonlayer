@@ -115,6 +115,305 @@ afterEach(() => {
 });
 
 describe('DatabaseView behavior', () => {
+  it('retains both rapid multi-select additions while the first save is pending', async () => {
+    const user = userEvent.setup();
+    const firstUpdate = deferred<unknown>();
+    const secondUpdate = deferred<unknown>();
+    const labelsProperty = property({
+      id: 'property-labels', name: 'Labels', options: { choices: ['A', 'B'] },
+      position: 4, property_type: 'multi_select',
+    });
+    let latestRow = { ...row, values: { ...row.values, Labels: [] as string[] } };
+    let updateCount = 0;
+    const { rowMethod } = renderView({
+      databaseImpl: async () => success('get', { ...database, properties: [...database.properties, labelsProperty] }),
+      rowImpl: async (input) => {
+        if (input.action === 'query') {
+          return success('query', {
+            items: [latestRow],
+            page: { has_more: false, limit: 50, next_offset: null, offset: 0 },
+            total: 1,
+          });
+        }
+        if (input.action === 'update') {
+          updateCount += 1;
+          if (updateCount === 1) return firstUpdate.promise;
+          return secondUpdate.promise;
+        }
+        throw new Error(`Unexpected row ${String(input.action)}`);
+      },
+    });
+    const adder = await screen.findByLabelText('Add Labels choice for Alpha');
+
+    await user.selectOptions(adder, 'A');
+    await waitFor(() => expect(updateCount).toBe(1));
+    await user.selectOptions(adder, 'B');
+    expect(updateCount).toBe(1);
+
+    await act(async () => {
+      latestRow = { ...latestRow, revision: 4, values: { ...latestRow.values, Labels: ['A'] } };
+      firstUpdate.resolve(success('update', latestRow));
+      await firstUpdate.promise;
+    });
+
+    await waitFor(() => expect(updateCount).toBe(2));
+    const writes = rowMethod.mock.calls.map(([input]) => input).filter((input) => input.action === 'update');
+    expect(writes).toEqual([
+      expect.objectContaining({ revision: 3, row_id: row.id, values: { Labels: ['A'] } }),
+      expect.objectContaining({ revision: 4, row_id: row.id, values: { Labels: ['A', 'B'] } }),
+    ]);
+    expect(screen.getByRole('button', { name: 'Remove A from Labels' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove B from Labels' })).toBeTruthy();
+    await act(async () => {
+      latestRow = { ...latestRow, revision: 5, values: { ...latestRow.values, ...(writes[1]!.values as object) } };
+      secondUpdate.resolve(success('update', latestRow));
+      await secondUpdate.promise;
+    });
+    expect(screen.getByRole('status', { name: 'Saved' })).toBeTruthy();
+  });
+
+  it('keeps the latest rapid checkbox toggle while the first save is pending', async () => {
+    const user = userEvent.setup();
+    const firstUpdate = deferred<unknown>();
+    const secondUpdate = deferred<unknown>();
+    const doneProperty = property({ id: 'property-done', name: 'Done', position: 4, property_type: 'checkbox' });
+    let latestRow = { ...row, values: { ...row.values, Done: false } };
+    let updateCount = 0;
+    const { rowMethod } = renderView({
+      databaseImpl: async () => success('get', { ...database, properties: [...database.properties, doneProperty] }),
+      rowImpl: async (input) => {
+        if (input.action === 'query') {
+          return success('query', {
+            items: [latestRow],
+            page: { has_more: false, limit: 50, next_offset: null, offset: 0 },
+            total: 1,
+          });
+        }
+        if (input.action === 'update') {
+          updateCount += 1;
+          if (updateCount === 1) return firstUpdate.promise;
+          return secondUpdate.promise;
+        }
+        throw new Error(`Unexpected row ${String(input.action)}`);
+      },
+    });
+    const checkbox = await screen.findByLabelText<HTMLInputElement>('Done for Alpha');
+
+    await user.click(checkbox);
+    await waitFor(() => expect(updateCount).toBe(1));
+    await user.click(checkbox);
+    expect(updateCount).toBe(1);
+
+    await act(async () => {
+      latestRow = { ...latestRow, revision: 4, values: { ...latestRow.values, Done: true } };
+      firstUpdate.resolve(success('update', latestRow));
+      await firstUpdate.promise;
+    });
+
+    await waitFor(() => expect(updateCount).toBe(2));
+    const writes = rowMethod.mock.calls.map(([input]) => input).filter((input) => input.action === 'update');
+    expect(writes).toEqual([
+      expect.objectContaining({ revision: 3, row_id: row.id, values: { Done: true } }),
+      expect.objectContaining({ revision: 4, row_id: row.id, values: { Done: false } }),
+    ]);
+    expect(checkbox.checked).toBe(false);
+    await act(async () => {
+      latestRow = { ...latestRow, revision: 5, values: { ...latestRow.values, ...(writes[1]!.values as object) } };
+      secondUpdate.resolve(success('update', latestRow));
+      await secondUpdate.promise;
+    });
+    expect(screen.getByRole('status', { name: 'Saved' })).toBeTruthy();
+  });
+
+  it('reloads a failed multi-select save and allows the choice to be retried', async () => {
+    const user = userEvent.setup();
+    const labelsProperty = property({
+      id: 'property-labels', name: 'Labels', options: { choices: ['A', 'B'] },
+      position: 4, property_type: 'multi_select',
+    });
+    const initialRow = { ...row, values: { ...row.values, Labels: [] as string[] } };
+    let queryCount = 0;
+    let updateCount = 0;
+    const { showToast } = renderView({
+      databaseImpl: async () => success('get', { ...database, properties: [...database.properties, labelsProperty] }),
+      rowImpl: async (input) => {
+        if (input.action === 'query') {
+          queryCount += 1;
+          return success('query', {
+            items: [initialRow],
+            page: { has_more: false, limit: 50, next_offset: null, offset: 0 },
+            total: 1,
+          });
+        }
+        if (input.action === 'update') {
+          updateCount += 1;
+          if (updateCount === 1) throw new Error('Choice save failed');
+          return success('update', {
+            ...initialRow, revision: 4, values: { ...initialRow.values, ...(input.values as object) },
+          });
+        }
+        throw new Error(`Unexpected row ${String(input.action)}`);
+      },
+    });
+
+    await user.selectOptions(await screen.findByLabelText('Add Labels choice for Alpha'), 'A');
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('Choice save failed', { tone: 'error' }));
+    await waitFor(() => expect(queryCount).toBe(2));
+    expect(screen.queryByRole('button', { name: 'Remove A from Labels' })).toBeNull();
+    expect(screen.getByRole('status', { name: 'Could not save' })).toBeTruthy();
+
+    await user.selectOptions(screen.getByLabelText('Add Labels choice for Alpha'), 'A');
+    await waitFor(() => expect(updateCount).toBe(2));
+    expect(screen.getByRole('button', { name: 'Remove A from Labels' })).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Saved' })).toBeTruthy();
+  });
+
+  it('preserves pending choices when another row fails and reloads the ledger', async () => {
+    const user = userEvent.setup();
+    const firstUpdate = deferred<unknown>();
+    const secondUpdate = deferred<unknown>();
+    const reloadRows = deferred<unknown>();
+    const labelsProperty = property({
+      id: 'property-labels', name: 'Labels', options: { choices: ['A', 'B', 'C'] },
+      position: 4, property_type: 'multi_select',
+    });
+    let latestRow = { ...row, values: { ...row.values, Labels: [] as string[] } };
+    const otherRow = { ...latestRow, id: 'row-2', values: { ...latestRow.values, Name: 'Beta' } };
+    let updateCount = 0;
+    let queryCount = 0;
+    const { rowMethod, showToast } = renderView({
+      databaseImpl: async () => success('get', { ...database, properties: [...database.properties, labelsProperty] }),
+      rowImpl: async (input) => {
+        if (input.action === 'query') {
+          queryCount += 1;
+          if (queryCount === 2) return reloadRows.promise;
+          return success('query', {
+            items: [latestRow, otherRow],
+            page: { has_more: false, limit: 50, next_offset: null, offset: 0 },
+            total: 2,
+          });
+        }
+        if (input.action === 'update') {
+          if (input.row_id === otherRow.id) throw new Error('Other row save failed');
+          updateCount += 1;
+          if (updateCount === 1) return firstUpdate.promise;
+          if (updateCount === 2) return secondUpdate.promise;
+          latestRow = { ...latestRow, revision: 6, values: { ...latestRow.values, ...(input.values as object) } };
+          return success('update', latestRow);
+        }
+        throw new Error(`Unexpected row ${String(input.action)}`);
+      },
+    });
+
+    await user.selectOptions(await screen.findByLabelText('Add Labels choice for Alpha'), 'A');
+    await waitFor(() => expect(updateCount).toBe(1));
+    await user.selectOptions(screen.getByLabelText('Add Labels choice for Alpha'), 'B');
+    await act(async () => {
+      latestRow = { ...latestRow, revision: 4, values: { ...latestRow.values, Labels: ['A'] } };
+      firstUpdate.resolve(success('update', latestRow));
+      await firstUpdate.promise;
+    });
+    await waitFor(() => expect(updateCount).toBe(2));
+
+    await user.selectOptions(screen.getByLabelText('Add Labels choice for Beta'), 'A');
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('Other row save failed', { tone: 'error' }));
+    await waitFor(() => expect(queryCount).toBe(2));
+    await waitFor(() => expect(screen.getByLabelText('Add Labels choice for Alpha')).toHaveProperty('disabled', true));
+    await act(async () => {
+      reloadRows.resolve(success('query', {
+        items: [latestRow, otherRow],
+        page: { has_more: false, limit: 50, next_offset: null, offset: 0 },
+        total: 2,
+      }));
+      await reloadRows.promise;
+    });
+    await waitFor(() => expect(screen.getByLabelText('Add Labels choice for Alpha')).toHaveProperty('disabled', false));
+    await user.selectOptions(screen.getByLabelText('Add Labels choice for Alpha'), 'C');
+
+    await act(async () => {
+      latestRow = { ...latestRow, revision: 5, values: { ...latestRow.values, Labels: ['A', 'B'] } };
+      secondUpdate.resolve(success('update', latestRow));
+      await secondUpdate.promise;
+    });
+    await waitFor(() => expect(updateCount).toBe(3));
+    const writes = rowMethod.mock.calls.map(([input]) => input)
+      .filter((input) => input.action === 'update' && input.row_id === row.id);
+    expect(writes[2]).toMatchObject({ revision: 5, values: { Labels: ['A', 'B', 'C'] } });
+    expect(screen.getByRole('button', { name: 'Remove A from Labels' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove B from Labels' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove C from Labels' })).toBeTruthy();
+  });
+
+  it('preserves a later removal when an earlier acknowledgement matches the latest selection', async () => {
+    const user = userEvent.setup();
+    const firstUpdate = deferred<unknown>();
+    const secondUpdate = deferred<unknown>();
+    const thirdUpdate = deferred<unknown>();
+    const labelsProperty = property({
+      id: 'property-labels', name: 'Labels', options: { choices: ['A', 'B', 'C'] },
+      position: 4, property_type: 'multi_select',
+    });
+    let latestRow = { ...row, values: { ...row.values, Labels: [] as string[] } };
+    let updateCount = 0;
+    const { rowMethod } = renderView({
+      databaseImpl: async () => success('get', { ...database, properties: [...database.properties, labelsProperty] }),
+      rowImpl: async (input) => {
+        if (input.action === 'query') {
+          return success('query', {
+            items: [latestRow],
+            page: { has_more: false, limit: 50, next_offset: null, offset: 0 },
+            total: 1,
+          });
+        }
+        if (input.action === 'update') {
+          updateCount += 1;
+          if (updateCount === 1) return firstUpdate.promise;
+          if (updateCount === 2) return secondUpdate.promise;
+          if (updateCount === 3) return thirdUpdate.promise;
+          latestRow = { ...latestRow, revision: 7, values: { ...latestRow.values, ...(input.values as object) } };
+          return success('update', latestRow);
+        }
+        throw new Error(`Unexpected row ${String(input.action)}`);
+      },
+    });
+
+    await user.selectOptions(await screen.findByLabelText('Add Labels choice for Alpha'), 'A');
+    await waitFor(() => expect(updateCount).toBe(1));
+    await user.selectOptions(screen.getByLabelText('Add Labels choice for Alpha'), 'B');
+    await user.click(screen.getByRole('button', { name: 'Remove B from Labels' }));
+    await act(async () => {
+      latestRow = { ...latestRow, revision: 4, values: { ...latestRow.values, Labels: ['A'] } };
+      firstUpdate.resolve(success('update', latestRow));
+      await firstUpdate.promise;
+    });
+    await waitFor(() => expect(updateCount).toBe(2));
+    await act(async () => {
+      latestRow = { ...latestRow, revision: 5, values: { ...latestRow.values, Labels: ['A', 'B'] } };
+      secondUpdate.resolve(success('update', latestRow));
+      await secondUpdate.promise;
+    });
+    await waitFor(() => expect(updateCount).toBe(3));
+    await user.selectOptions(screen.getByLabelText('Add Labels choice for Alpha'), 'C');
+
+    await act(async () => {
+      latestRow = { ...latestRow, revision: 6, values: { ...latestRow.values, Labels: ['A'] } };
+      thirdUpdate.resolve(success('update', latestRow));
+      await thirdUpdate.promise;
+    });
+    await waitFor(() => expect(updateCount).toBe(4));
+    const writes = rowMethod.mock.calls.map(([input]) => input).filter((input) => input.action === 'update');
+    expect(writes).toEqual([
+      expect.objectContaining({ revision: 3, values: { Labels: ['A'] } }),
+      expect.objectContaining({ revision: 4, values: { Labels: ['A', 'B'] } }),
+      expect.objectContaining({ revision: 5, values: { Labels: ['A'] } }),
+      expect.objectContaining({ revision: 6, values: { Labels: ['A', 'C'] } }),
+    ]);
+    expect(screen.getByRole('button', { name: 'Remove A from Labels' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Remove B from Labels' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove C from Labels' })).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Saved' })).toBeTruthy();
+  });
+
   it('handles sorting, filtering, pagination, schema, details, row creation, and archival', async () => {
     const user = userEvent.setup();
     const { databaseMethod, navigate, refreshWorkspaceData, rowMethod, showToast } = renderView();

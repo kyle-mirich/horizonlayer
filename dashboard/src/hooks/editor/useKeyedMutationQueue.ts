@@ -15,7 +15,7 @@ interface KeyedMutationQueueOptions<Entity> {
 
 export interface KeyedMutationQueue<Entity> {
   cancelPending(): Promise<void>;
-  enqueue(key: string, request: (current: Entity, signal: AbortSignal) => Promise<Entity>): void;
+  enqueue(key: string, request: (current: Entity, signal: AbortSignal) => Promise<Entity>): Promise<Entity | undefined>;
   hasPending(key: string): boolean;
 }
 
@@ -80,6 +80,7 @@ export function useKeyedMutationQueue<Entity>({
         if ((generationsRef.current.get(key) ?? 0) !== generation) return;
         if (isMounted()) applyRef.current(result);
         markSucceeded(issueKey);
+        return result;
       } catch (error) {
         if (signal.aborted) return;
         const issue = classifyErrorRef.current(error);
@@ -101,6 +102,7 @@ export function useKeyedMutationQueue<Entity>({
         generationsRef.current.delete(key);
       }
     });
+    return task.then((result) => result, () => undefined);
   }, [clearIssuesWhenIdle, finish, isMounted, markFailed, markSucceeded, start]);
 
   const cancelPending = useCallback(() => {

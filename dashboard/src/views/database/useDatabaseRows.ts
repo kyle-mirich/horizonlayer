@@ -62,6 +62,7 @@ export function useDatabaseRows({
   const [filterOpen, setFilterOpen] = useState(false);
   const [rowsRefreshKey, setRowsRefreshKey] = useState(0);
   const [selectedRefreshKey, setSelectedRefreshKey] = useState(0);
+  const [choiceResetKeys, setChoiceResetKeys] = useState<ReadonlyMap<string, number>>(() => new Map());
 
   const rowsRef = useRef<DatabaseRow[]>([]);
   const rowStateRef = useRef(new Map<string, DatabaseRow>());
@@ -95,6 +96,11 @@ export function useDatabaseRows({
   }, [onConflict, showToast]);
 
   const handleRowFailure = useCallback((id: string) => {
+    setChoiceResetKeys((current) => {
+      const next = new Map(current);
+      next.set(id, (current.get(id) ?? 0) + 1);
+      return next;
+    });
     rowStateRef.current.delete(id);
     setRowsRefreshKey((key) => key + 1);
     if (selectedRowRef.current?.id === id) {
@@ -232,8 +238,8 @@ export function useDatabaseRows({
   }, [api, databaseId, navigate, replaceSelectedRow, rowId, selectedRefreshKey, showToast]);
 
   const updateRowValue = useCallback((row: DatabaseRow, property: DatabaseProperty, value: JsonValue) => {
-    if (database?.archived_at || row.archived_at) return;
-    enqueueRowMutation(row.id, async (live, signal) => {
+    if (database?.archived_at || row.archived_at) return Promise.resolve(undefined);
+    return enqueueRowMutation(row.id, async (live, signal) => {
       const response = await api.row({
         action: 'update',
         revision: live.revision,
@@ -332,6 +338,7 @@ export function useDatabaseRows({
 
   return {
     applyFilter,
+    choiceResetKeys,
     clearFilter,
     filterOpen,
     filterOperator,

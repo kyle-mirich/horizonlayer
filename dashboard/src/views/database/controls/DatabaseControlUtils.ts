@@ -109,7 +109,8 @@ export function valuesFromDraft(
   properties: DatabaseProperty[],
   draft: RowFormDraft,
 ): JsonObject {
-  const values: JsonObject = {};
+  // Property names such as '__proto__' must be own JSON keys, not setters.
+  const values: JsonObject = Object.create(null) as JsonObject;
   for (const property of properties.filter((item) => !item.archived_at)) {
     const draftValue = draft[property.name];
     switch (property.property_type) {
