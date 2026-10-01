@@ -33,7 +33,7 @@ HorizonLayer is a local-first MCP server for durable coding-agent context and wo
 2. Search existing Pages or Databases before creating a duplicate.
 3. Read the canonical record before changing it.
 4. Send the latest `revision` with every mutable-record update, archive, or restore.
-5. On `CONFLICT`, reread, reconcile, and retry once.
+5. On a retryable `CONFLICT`, reread, reconcile, and retry once. For a nonretryable conflict, resolve the condition named in the error before trying again.
 6. Use Pages for prose, typed Rows for repeated facts, and explicit Links when the relationship itself is useful.
 
 ## The normal Issues workflow

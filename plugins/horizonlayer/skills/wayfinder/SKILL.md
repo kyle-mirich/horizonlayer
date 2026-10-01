@@ -71,7 +71,7 @@ The answer isn't part of the body — it's recorded on resolution (see [Work thr
 
 ## Wayfinding operations
 
-HorizonLayer is the tracker: one `issues` MCP tool for the map and its tickets, one `knowledge` tool for what those decisions produce. Put the operation in `action` (or `operation`) and its fields in `input`. Every response is an envelope — `ok: false` is a failure even when the call completed — and mutations need the entity's latest `revision`; on `CONFLICT`, re-read, reconcile, retry once.
+HorizonLayer is the tracker: one `issues` MCP tool for the map and its tickets, one `knowledge` tool for what those decisions produce. Put the operation in `action` (or `operation`) and its fields in `input`. Every response is an envelope — `ok: false` is a failure even when the call completed — and mutations need the entity's latest `revision`. On a retryable `CONFLICT`, re-read, reconcile, and retry once; for a nonretryable conflict, resolve the condition named in the error before trying again.
 
 | Wayfinding | HorizonLayer |
 | --- | --- |
