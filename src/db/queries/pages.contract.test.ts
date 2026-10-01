@@ -460,45 +460,55 @@ describe('page persistence contract', () => {
 
   it('refuses to archive a page with active child pages or blocks', async () => {
     const pageQueries = await import('./pages.js');
-
-    poolQueryMock
-      .mockResolvedValueOnce({ rows: [{ id: 'child-page' }] });
+    let activeChild: 'page' | 'block' | null = 'page';
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'ROLLBACK' || sql === 'COMMIT') return { rows: [] };
+      if (sql.includes('FOR UPDATE')) return { rows: [page()] };
+      if (sql.includes('parent_page_id = $1')) return { rows: activeChild === 'page' ? [{ id: 'child-page' }] : [] };
+      if (sql.includes('FROM blocks')) return { rows: activeChild === 'block' ? [{ id: 'block-1' }] : [] };
+      if (sql.includes('UPDATE pages')) return { rows: [page({ revision: 2, archived_at: '2026-01-02T00:00:00.000Z' })] };
+      throw new Error(`Unexpected query: ${sql}`);
+    });
     await expect(pageQueries.archivePage('page-1', 1)).rejects.toThrow(
       'Page page-1 still has active child pages'
     );
 
-    poolQueryMock.mockReset();
-    poolQueryMock
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ id: 'block-1' }] });
+    activeChild = 'block';
     await expect(pageQueries.archivePage('page-1', 1)).rejects.toThrow(
       'Page page-1 still has active blocks'
     );
 
-    poolQueryMock.mockReset();
-    poolQueryMock
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [page({ revision: 2, archived_at: '2026-01-02T00:00:00.000Z' })] });
+    activeChild = null;
     await expect(pageQueries.archivePage('page-1', 1)).resolves.toMatchObject({ revision: 2 });
     expect(requirePageMock).toHaveBeenCalledWith('page-1');
   });
 
   it('archives and restores pages as revision-checked entities with no public hard delete', async () => {
-    poolQueryMock
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [page({ revision: 2, archived_at: '2026-01-02T00:00:00.000Z' })] })
-      .mockResolvedValueOnce({ rows: [page({ revision: 3, archived_at: null })] });
+    const archived = page({ revision: 2, archived_at: '2026-01-02T00:00:00.000Z' });
+    let current = page();
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT') return { rows: [] };
+      if (sql.includes('FOR UPDATE')) return { rows: [current] };
+      if (sql.includes('parent_page_id = $1') || sql.includes('FROM blocks')) return { rows: [] };
+      if (sql.includes('UPDATE pages')) {
+        current = sql.includes('archived_at = NOW()') ? archived : page({ revision: 3 });
+        return { rows: [current] };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
 
     const pageQueries = await import('./pages.js');
     await expect(pageQueries.archivePage('page-1', 1)).resolves.toMatchObject({ revision: 2 });
     await expect(pageQueries.restorePage('page-1', 2)).resolves.toMatchObject({ revision: 3 });
 
-    expect(String(poolQueryMock.mock.calls[0]?.[0])).toContain('parent_page_id = $1');
-    expect(String(poolQueryMock.mock.calls[1]?.[0])).toContain('FROM blocks WHERE page_id = $1');
-    expect(String(poolQueryMock.mock.calls[2]?.[0])).toContain('archived_at = NOW()');
-    expect(String(poolQueryMock.mock.calls[3]?.[0])).toContain('archived_at = NULL');
+    const statements = clientQueryMock.mock.calls.map(([sql]) => String(sql));
+    expect(statements.findIndex((sql) => sql.includes('FOR UPDATE'))).toBeLessThan(
+      statements.findIndex((sql) => sql.includes('parent_page_id = $1'))
+    );
+    expect(statements.join('\n')).toContain('FROM blocks WHERE page_id = $1');
+    expect(statements.join('\n')).toContain('archived_at = NOW()');
+    expect(statements.join('\n')).toContain('archived_at = NULL');
+    expect(statements.filter((sql) => sql === 'COMMIT')).toHaveLength(2);
     expect(requirePageMock).toHaveBeenCalledTimes(2);
     expect(requirePageMock).toHaveBeenCalledWith('page-1');
     expect(pageQueries).not.toHaveProperty('deletePage');

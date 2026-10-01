@@ -334,15 +334,26 @@ CREATE OR REPLACE FUNCTION bump_knowledge_revision() RETURNS trigger AS $$
 DECLARE
   old_payload JSONB;
   new_payload JSONB;
+  aggregate_change BOOLEAN;
 BEGIN
   old_payload := to_jsonb(OLD) - ARRAY['revision', 'updated_at'];
   new_payload := to_jsonb(NEW) - ARRAY['revision', 'updated_at'];
 
-  -- A semantic no-op (identical payload ignoring revision bookkeeping) keeps
+  -- Child-record mutations explicitly mark their containing aggregate in the
+  -- UPDATE predicate. Consume this transaction-local, record-specific intent
+  -- here: an append/value/property write must advance its concurrency token
+  -- even though the parent's own payload is unchanged.
+  aggregate_change := current_setting('horizonlayer.revision_target', true)
+    = TG_TABLE_NAME || ':' || NEW.id::text;
+  IF aggregate_change THEN
+    PERFORM set_config('horizonlayer.revision_target', '', true);
+  END IF;
+
+  -- An unmarked semantic no-op (identical payload ignoring bookkeeping) keeps
   -- its revision so it does not invalidate the search index. updated_at is
   -- deliberately excluded: every mutation sets it, so including it would make
   -- this branch unreachable.
-  IF new_payload IS DISTINCT FROM old_payload THEN
+  IF new_payload IS DISTINCT FROM old_payload OR aggregate_change THEN
     NEW.revision := OLD.revision + 1;
     NEW.updated_at := clock_timestamp();
   ELSE

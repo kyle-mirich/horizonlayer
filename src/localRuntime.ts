@@ -254,7 +254,9 @@ export function applyLocalRuntimeEnvironment(
   overwrite = false
 ): void {
   for (const [name, value] of Object.entries(runtimeEnvironment(config))) {
-    if ((overwrite || environment[name] == null) && value != null) environment[name] = value;
+    if ((overwrite || environment[name] == null || environment[name] === '') && value != null) {
+      environment[name] = value;
+    }
   }
 }
 
@@ -385,7 +387,8 @@ export async function createLocalRuntimeConfig(
 export function runCompose(
   action: ComposeAction,
   config: LocalRuntimeConfig,
-  composePath = bundledComposePath()
+  composePath = bundledComposePath(),
+  services?: readonly ('db' | 'qdrant')[]
 ): void {
   if (!existsSync(composePath)) {
     throw new LocalRuntimeError(
@@ -394,7 +397,7 @@ export function runCompose(
     );
   }
   const args = ['compose', '-f', composePath, '-p', config.compose_project];
-  if (action === 'start') args.push('up', '-d');
+  if (action === 'start') args.push('up', '-d', ...(services ?? []));
   else if (action === 'stop') args.push('stop');
   else args.push('down', '--volumes', '--remove-orphans');
   const result = runCommand('docker', args, {

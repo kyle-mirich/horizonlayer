@@ -497,6 +497,23 @@ async function main(): Promise<void> {
     );
     appendedBlockRevision = getRevision(restoredBlock, 'page/block_restore');
     pageRevision = getPageRevision(restoreBlockMutation, 'page/block_restore');
+
+    const blockedArchive = await callToolEnvelope(client, 'page', {
+      action: 'archive', page_id: pageId, revision: pageRevision,
+    });
+    assert(!blockedArchive.ok && blockedArchive.error?.code === 'CONFLICT',
+      'page/archive must refuse active blocks with an actionable conflict');
+    const blocksToRestore = [];
+    for (const [blockId, revision] of [
+      [initialBlockId, initialBlockRevision], [appendedBlockId, appendedBlockRevision],
+    ] as const) {
+      const mutation = resultRecord((await callTool(client, 'page', {
+        action: 'block_archive', block_id: blockId, revision,
+      })).result, 'page/block_archive before page lifecycle');
+      const block = resultRecord(mutation.block, 'archived lifecycle block');
+      blocksToRestore.push({ id: blockId, revision: getRevision(block, 'archived lifecycle block') });
+      pageRevision = getPageRevision(mutation, 'page/block_archive before page lifecycle');
+    }
     page = resultRecord((await callTool(client, 'page', {
       action: 'archive',
       page_id: pageId,
@@ -509,6 +526,15 @@ async function main(): Promise<void> {
       revision: pageRevision,
     })).result, 'page/restore');
     pageRevision = getRevision(page, 'page/restore');
+    for (const block of blocksToRestore) {
+      const mutation = resultRecord((await callTool(client, 'page', {
+        action: 'block_restore', block_id: block.id, revision: block.revision,
+      })).result, 'page/block_restore after page lifecycle');
+      pageRevision = getPageRevision(mutation, 'page/block_restore after page lifecycle');
+      const restored = resultRecord(mutation.block, 'restored lifecycle block');
+      if (block.id === initialBlockId) initialBlockRevision = getRevision(restored, 'restored initial block');
+      else appendedBlockRevision = getRevision(restored, 'restored appended block');
+    }
 
     let database = resultRecord((await callTool(client, 'database', {
       action: 'create',

@@ -289,13 +289,17 @@ async function canConnect(url: string): Promise<boolean> {
   }
 }
 
-async function waitForLocalServices(config: LocalRuntimeConfig, timeoutMs = 90_000): Promise<void> {
+async function waitForLocalServices(
+  config: LocalRuntimeConfig,
+  ragEnabled: boolean,
+  timeoutMs = 90_000
+): Promise<void> {
   const environment = runtimeEnvironment(config);
   const databaseUrl = environment.DATABASE_URL!;
   const qdrantUrl = environment.QDRANT_URL!;
   const deadline = Date.now() + timeoutMs;
   let databaseReady = false;
-  let qdrantReady = false;
+  let qdrantReady = !ragEnabled;
 
   while (Date.now() < deadline) {
     if (!databaseReady) databaseReady = await canConnect(databaseUrl);
@@ -369,13 +373,15 @@ async function runSetup(projectOptions: import('./projectSetup.js').ProjectSetup
     await writeLocalRuntimeConfig(config, configPath);
     // Setup always manages the saved local runtime. Respecting a caller's DATABASE_URL here
     // could initialize an unrelated external database while the launcher starts local containers.
+    const ragOverride = process.env.RAG_ENABLED;
     applyLocalRuntimeEnvironment(config, process.env, true);
+    if (ragOverride != null && ragOverride !== '') process.env.RAG_ENABLED = ragOverride;
     const { reloadConfig } = await import('./config.js');
-    reloadConfig();
+    const { rag } = reloadConfig();
 
-    console.error('Starting HorizonLayer PostgreSQL and Qdrant services...');
-    runCompose('start', config);
-    await waitForLocalServices(config);
+    console.error(`Starting HorizonLayer ${rag.enabled ? 'PostgreSQL and Qdrant services' : 'PostgreSQL service'}...`);
+    runCompose('start', config, undefined, rag.enabled ? undefined : ['db']);
+    await waitForLocalServices(config, rag.enabled);
 
     console.error('Initializing the HorizonLayer database...');
     const [{ initializeDatabase }, { closePool }] = await Promise.all([
@@ -396,7 +402,7 @@ async function runSetup(projectOptions: import('./projectSetup.js').ProjectSetup
     }
     // The project configuration is durable before the optional embedding
     // warm-up, so a model download failure never loses the configured modules.
-    await warmLocalRagBestEffort();
+    if (rag.enabled) await warmLocalRagBestEffort();
     console.error(`HorizonLayer setup is complete. Configuration: ${configPath}`);
     console.error(`Project configuration: ${project.configPath}`);
     console.error(`Enabled modules: ${project.config.modules.join(', ')}`);
@@ -449,9 +455,11 @@ async function startSavedRuntimeForLaunch(): Promise<LocalRuntimeConfig> {
       );
     }
     applyLocalRuntimeEnvironment(config);
+    const { reloadConfig } = await import('./config.js');
+    const { rag } = reloadConfig();
     await ensureDockerDesktopReady();
-    runCompose('start', config);
-    await waitForLocalServices(config);
+    runCompose('start', config, undefined, rag.enabled ? undefined : ['db']);
+    await waitForLocalServices(config, rag.enabled);
     return config;
   }, configPath);
 }
@@ -467,8 +475,9 @@ async function runDoctor(): Promise<void> {
   }
   applyLocalRuntimeEnvironment(config);
   const { reloadConfig } = await import('./config.js');
+  let ragEnabled: boolean;
   try {
-    reloadConfig();
+    ragEnabled = reloadConfig().rag.enabled;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Configuration: invalid (${configPath})`);
@@ -481,12 +490,14 @@ async function runDoctor(): Promise<void> {
 
   const dockerReady = isDockerDaemonReady();
   const databaseReady = await canConnect(environment.DATABASE_URL!);
-  const qdrantReady = await isQdrantReady(environment.QDRANT_URL!);
+  const qdrantReady = !ragEnabled || await isQdrantReady(environment.QDRANT_URL!);
 
   console.error(`Configuration: ready (${configPath})`);
   console.error(`Docker Desktop: ${dockerReady ? 'ready' : 'unavailable'}`);
   console.error(`PostgreSQL: ${databaseReady ? 'ready' : 'unavailable'} (${redactDatabaseUrl(environment.DATABASE_URL!)})`);
-  console.error(`Qdrant: ${qdrantReady ? 'ready' : 'unavailable'} (${environment.QDRANT_URL})`);
+  console.error(ragEnabled
+    ? `Qdrant: ${qdrantReady ? 'ready' : 'unavailable'} (${environment.QDRANT_URL})`
+    : 'Qdrant: disabled (RAG_ENABLED=false)');
   for (const message of localRuntimeRecoveryGuidance({
     databaseReady,
     dockerReady,

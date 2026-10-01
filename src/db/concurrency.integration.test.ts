@@ -38,6 +38,8 @@ integrationDescribe('database concurrency invariants', () => {
   let createRow: typeof import('./queries/rows.js')['createRow'];
   let createPage: typeof import('./queries/pages.js')['createPage'];
   let archivePage: typeof import('./queries/pages.js')['archivePage'];
+  let getPage: typeof import('./queries/pages.js')['getPage'];
+  let restorePage: typeof import('./queries/pages.js')['restorePage'];
   let closeSession: typeof import('./queries/sessions.js')['closeSession'];
   let startRun: typeof import('./queries/runs.js')['startRun'];
   let checkpointRun: typeof import('./queries/runs.js')['checkpointRun'];
@@ -118,7 +120,7 @@ integrationDescribe('database concurrency invariants', () => {
     vi.resetModules();
     ({ closePool } = await import('./client.js'));
     ({ createRow } = await import('./queries/rows.js'));
-    ({ archivePage, createPage } = await import('./queries/pages.js'));
+    ({ archivePage, createPage, getPage, restorePage } = await import('./queries/pages.js'));
     ({ closeSession } = await import('./queries/sessions.js'));
     ({ checkpointRun, startRun } = await import('./queries/runs.js'));
     ({ archiveLink, createLink, restoreLink } = await import('./queries/links.js'));
@@ -399,6 +401,64 @@ integrationDescribe('database concurrency invariants', () => {
       if (archivePromise) await archivePromise.catch(() => undefined);
       if (childPromise) await childPromise.catch(() => undefined);
     }
+  });
+
+  it('refuses parent archival when an in-flight child creation commits first', async () => {
+    const parent = await createPage({ workspace_id: workspaceId, title: 'Child wins archive race' });
+    const blocker = await adminPool.connect();
+    await setTestSearchPath(blocker, schemaName);
+    let transactionOpen = false;
+    let child: ReturnType<typeof createPage> | undefined;
+    let archive: ReturnType<typeof archivePage> | undefined;
+    try {
+      await blocker.query('BEGIN');
+      transactionOpen = true;
+      await blocker.query('SELECT id FROM workspaces WHERE id = $1 FOR UPDATE', [workspaceId]);
+      child = createPage({ workspace_id: workspaceId, parent_page_id: parent.id, title: 'Committed child' });
+      const deadline = Date.now() + 2_000;
+      let parentLocked = false;
+      while (Date.now() < deadline && !parentLocked) {
+        const probe = await adminPool.connect();
+        try {
+          await setTestSearchPath(probe, schemaName);
+          await probe.query('SELECT id FROM pages WHERE id = $1 FOR UPDATE NOWAIT', [parent.id]);
+        } catch (error) {
+          if ((error as { code?: string }).code === '55P03') parentLocked = true;
+          else throw error;
+        } finally {
+          probe.release();
+        }
+        if (!parentLocked) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(parentLocked).toBe(true);
+      archive = archivePage(parent.id, parent.revision);
+      const rejectedArchive = expect(archive).rejects.toThrow('still has active child pages');
+      await expectStillPending(archive);
+      await blocker.query('COMMIT');
+      transactionOpen = false;
+      const created = await child;
+      await rejectedArchive;
+      expect(await getPage(parent.id)).toMatchObject({ archived_at: null });
+      expect(await getPage(created.id)).toMatchObject({ archived_at: null, parent_page_id: parent.id });
+    } finally {
+      if (transactionOpen) await blocker.query('ROLLBACK');
+      blocker.release();
+      if (child) await child.catch(() => undefined);
+      if (archive) await archive.catch(() => undefined);
+    }
+  });
+
+  it('requires an active parent before restoring a child page', async () => {
+    const parent = await createPage({ workspace_id: workspaceId, title: 'Restore parent first' });
+    const child = await createPage({ workspace_id: workspaceId, parent_page_id: parent.id, title: 'Child' });
+    const archivedChild = await archivePage(child.id, child.revision);
+    const archivedParent = await archivePage(parent.id, parent.revision);
+    await expect(restorePage(child.id, archivedChild!.revision)).rejects.toThrow(`Page ${parent.id} not found`);
+    expect(await getPage(child.id, { include_archived: true })).toMatchObject({
+      revision: archivedChild!.revision, archived_at: expect.anything(),
+    });
+    await restorePage(parent.id, archivedParent!.revision);
+    expect(await restorePage(child.id, archivedChild!.revision)).toMatchObject({ archived_at: null });
   });
 
   it('rejects link creation and restoration against archived endpoints', async () => {

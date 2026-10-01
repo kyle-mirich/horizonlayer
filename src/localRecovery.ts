@@ -506,13 +506,30 @@ async function clearDerivedSearchIndex(
 
   const collection = environment.QDRANT_COLLECTION?.trim() || DEFAULT_QDRANT_COLLECTION;
   const collectionUrl = new URL(`/collections/${encodeURIComponent(collection)}`, qdrantUrl);
-  const deleted = await fetcher(collectionUrl, { method: 'DELETE' });
+  const requestCollection = async (method: 'DELETE' | 'GET'): Promise<Response> => {
+    const remainingMs = deadline - clock();
+    if (remainingMs <= 0) {
+      throw new LocalRecoveryError('Managed Qdrant Derived Search Index invalidation timed out.');
+    }
+    const signal = AbortSignal.timeout(remainingMs);
+    try {
+      return await fetcher(collectionUrl, { method, signal });
+    } catch (error) {
+      throw new LocalRecoveryError(
+        signal.aborted
+          ? 'Managed Qdrant Derived Search Index invalidation timed out.'
+          : 'Managed Qdrant Derived Search Index invalidation request failed.',
+        errorMessage(error)
+      );
+    }
+  };
+  const deleted = await requestCollection('DELETE');
   if (!deleted.ok && deleted.status !== 404) {
     throw new LocalRecoveryError(
       `Managed Qdrant refused Derived Search Index deletion with HTTP ${deleted.status}.`
     );
   }
-  const verification = await fetcher(collectionUrl);
+  const verification = await requestCollection('GET');
   if (verification.status !== 404) {
     throw new LocalRecoveryError(
       'Managed Qdrant still exposes the Derived Search Index after deletion.'

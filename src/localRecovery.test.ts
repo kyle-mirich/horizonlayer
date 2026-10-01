@@ -734,11 +734,12 @@ describe('Runtime Recovery artifacts and process adapter', () => {
     expect(fetcher).toHaveBeenNthCalledWith(
       2,
       new URL('http://127.0.0.1:56333/collections/custom%20collection'),
-      { method: 'DELETE' }
+      { method: 'DELETE', signal: expect.any(AbortSignal) }
     );
     expect(fetcher).toHaveBeenNthCalledWith(
       3,
-      new URL('http://127.0.0.1:56333/collections/custom%20collection')
+      new URL('http://127.0.0.1:56333/collections/custom%20collection'),
+      { method: 'GET', signal: expect.any(AbortSignal) }
     );
     expect(calls.flatMap((call) => call.args)).not.toContain(config.database_password);
 
@@ -800,6 +801,48 @@ describe('Runtime Recovery artifacts and process adapter', () => {
         .mockResolvedValueOnce(new Response(null, { status: 404 }))
         .mockResolvedValueOnce(new Response(null, { status: 200 }))
     )).rejects.toThrow('still exposes');
+  });
+
+  it.each(['DELETE', 'GET'])('aborts a stalled Qdrant collection %s before recovery can hang', async (method) => {
+    const runner = vi.fn(async () => ({ stderr: '', stdout: '' }));
+    const fetcher: typeof fetch = async (url, options) => {
+      if (String(url).endsWith('/readyz')) return new Response(null, { status: 200 });
+      if ((options?.method ?? 'GET') !== method) return new Response(null, { status: 200 });
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+      });
+    };
+
+    await expect(localRecoveryInternals.clearDerivedSearchIndex(
+      config,
+      {},
+      runner,
+      fetcher,
+      20
+    )).rejects.toThrow('timed out');
+  }, 1_000);
+
+  it('shares one invalidation deadline and reports collection connection failures', async () => {
+    const runner = vi.fn(async () => ({ stderr: '', stdout: '' }));
+    let now = 0;
+    const fetcher = vi.fn(async (_url: unknown, options?: RequestInit) => {
+      if (options?.method === 'DELETE') now = 50;
+      return new Response(null, { status: 200 });
+    });
+
+    await expect(localRecoveryInternals.clearDerivedSearchIndex(
+      config, {}, runner, fetcher, 50, () => now
+    )).rejects.toThrow('timed out');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    await expect(localRecoveryInternals.clearDerivedSearchIndex(
+      config, {}, runner, vi.fn()
+        .mockResolvedValueOnce(new Response(null, { status: 200 }))
+        .mockRejectedValueOnce(new Error('connection reset'))
+    )).rejects.toMatchObject({
+      message: 'Managed Qdrant Derived Search Index invalidation request failed.',
+      details: 'connection reset',
+    });
   });
 
   it('times out isolated readiness deterministically', async () => {

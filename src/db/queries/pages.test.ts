@@ -122,23 +122,21 @@ describe('page persistence concurrency', () => {
   });
 
   it('reports stale and already-restored page archive transitions as conflicts', async () => {
-    poolQueryMock
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ revision: 3 }] });
+    clientQueryMock.mockImplementation(async (sql: string) => {
+      if (sql === 'BEGIN' || sql === 'ROLLBACK') return { rows: [] };
+      if (sql.includes('FOR UPDATE')) return { rows: [page({ revision: 3 })] };
+      throw new Error(`Unexpected query: ${sql}`);
+    });
 
     const { archivePage, restorePage } = await import('./pages.js');
     await expect(archivePage('page-1', 2)).rejects.toThrow(
       'Conflict: page page-1 is at revision 3, not 2'
     );
 
-    poolQueryMock
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ revision: 3, archived_at: null }] });
     await expect(restorePage('page-1', 3)).rejects.toThrow(
       'page page-1 is already restored'
     );
+    expect(clientQueryMock.mock.calls.filter(([sql]) => sql === 'ROLLBACK')).toHaveLength(2);
   });
 
   it('rolls back the parent page revision when a block update is stale', async () => {

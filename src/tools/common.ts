@@ -119,6 +119,9 @@ function classifyError(error: unknown): {
     || normalized.includes('can have only one')
     || normalized.includes('active property conflicts')
     || normalized.includes('closed and cannot be modified')
+    || normalized.includes('still has active blocks')
+    || normalized.includes('still has active child pages')
+    || normalized.includes('is not ready to claim')
   ) {
     return { code: 'CONFLICT', message, retryable: false };
   }
