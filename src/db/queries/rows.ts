@@ -736,6 +736,9 @@ export async function updateRow(
       `UPDATE database_rows
        SET ${sets.join(', ')}
        WHERE id = $${index++} AND revision = $${index} AND archived_at IS NULL
+         ${params.values !== undefined
+           ? "AND set_config('horizonlayer.revision_target', 'database_rows:' || id::text, true) IS NOT NULL"
+           : ''}
        RETURNING ${ROW_COLUMNS}`,
       values
     );

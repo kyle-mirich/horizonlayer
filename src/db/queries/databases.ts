@@ -449,6 +449,7 @@ export async function addDatabaseProperty(
       `UPDATE databases
        SET revision = revision + 1, updated_at = NOW()
        WHERE id = $1 AND revision = $2 AND archived_at IS NULL
+         AND set_config('horizonlayer.revision_target', 'databases:' || id::text, true) IS NOT NULL
        RETURNING id, revision`,
       [databaseId, params.database_revision]
     );
@@ -558,6 +559,7 @@ async function bumpParentDatabaseRevision(client: PoolClient, databaseId: string
     `UPDATE databases
      SET revision = revision + 1, updated_at = NOW()
      WHERE id = $1 AND archived_at IS NULL
+       AND set_config('horizonlayer.revision_target', 'databases:' || id::text, true) IS NOT NULL
      RETURNING revision`,
     [databaseId]
   );

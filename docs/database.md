@@ -22,4 +22,8 @@ For select and multi-select properties, configured choices are exact and case-se
 
 Existing workspace, database, property, page, row, project, Issue, dependency, and link mutations use optimistic revisions. Read the current entity before updating it, send its current `revision`, and retry only after rereading when the server returns a conflict. Issue assignment is exclusive: claim succeeds only for an unassigned, open, ready Issue at the supplied revision.
 
+Page block mutations advance the containing Page's revision, Database property mutations advance the Database's revision, and Row value patches advance the Row's revision. Use the returned `page_revision`, `database_revision`, or Row `revision` for subsequent writes. Each accepted aggregate mutation advances its token once, even when only child records are written; a failed child write rolls the token back with the transaction. PostgreSQL distinguishes these explicit aggregate writes from ordinary revision-only touches, which remain semantic no-ops.
+
+Archive a Page's active child Pages and Blocks before archiving the Page. Archival holds the Page lock while checking its children, so concurrent child creation or restoration either commits first and prevents archival, or observes the archived parent and fails. Restore parent Pages before their children.
+
 Archive and restore are the public lifecycle operations. Keep archived records out of normal queries unless you are auditing or restoring them. See the [quickstart](../README.md#local-quickstart) for a complete create/query example and the [local-reset guidance](../README.md#reset-local-development-data-safely) before removing local data.

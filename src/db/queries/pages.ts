@@ -132,10 +132,10 @@ async function assertPageRevision(
 async function assertPageArchiveTransition(
   id: string,
   revision: number,
-  archived: boolean
+  archived: boolean,
+  queryable: Pick<PoolClient, 'query'> = getPool()
 ): Promise<void> {
-  const pool = getPool();
-  const { rows } = await pool.query<{ revision: number; archived_at: string | null }>(
+  const { rows } = await queryable.query<{ revision: number; archived_at: string | null }>(
     'SELECT revision, archived_at FROM pages WHERE id = $1',
     [id]
   );
@@ -360,6 +360,7 @@ export async function appendPageBlocks(
        WHERE id = $1
          AND revision = $2
          AND archived_at IS NULL
+         AND set_config('horizonlayer.revision_target', 'pages:' || id::text, true) IS NOT NULL
        RETURNING revision`,
       [pageId, params.revision]
     );
@@ -476,6 +477,7 @@ async function mutatePageBlock(
            updated_at = NOW()
        WHERE id = $1
          AND archived_at IS NULL
+         AND set_config('horizonlayer.revision_target', 'pages:' || id::text, true) IS NOT NULL
        RETURNING revision`,
       [context.page_id]
     );
@@ -544,38 +546,52 @@ async function setPageArchived(
   archived: boolean
 ): Promise<Page | null> {
   assertRevision(revision);
-  await requirePage(id);
+  const context = await requirePage(id);
 
-  const pool = getPool();
-  if (archived) {
-    const { rows: childPages } = await pool.query<{ id: string }>(
-      `SELECT id FROM pages WHERE parent_page_id = $1 AND archived_at IS NULL LIMIT 1`,
+  return withTransaction(async (client, transaction) => {
+    // Restoring a child uses the same parent-before-child lock order as child
+    // creation, so parent archival cannot pass its checks concurrently.
+    if (!archived && context.parent_page_id) {
+      await lockActivePageForChildWrite(context.parent_page_id, client);
+    }
+    const { rows: currentPages } = await client.query<Page>(
+      `SELECT ${PAGE_COLUMNS} FROM pages WHERE id = $1 FOR UPDATE`,
       [id]
     );
-    if (childPages[0]) {
-      throw new Error(`Page ${id} still has active child pages`);
+    if (!currentPages[0]) {
+      await transaction.rollback();
+      return null;
     }
-    const { rows: childBlocks } = await pool.query<{ id: string }>(
-      `SELECT id FROM blocks WHERE page_id = $1 AND archived_at IS NULL LIMIT 1`,
-      [id]
+    assertArchiveTransition('page', id, revision, archived, currentPages[0]);
+
+    // Check after acquiring the parent lock. A preceding child writer may
+    // have committed while we waited; the next statement sees that commit.
+    if (archived) {
+      const { rows: childPages } = await client.query<{ id: string }>(
+        'SELECT id FROM pages WHERE parent_page_id = $1 AND archived_at IS NULL LIMIT 1',
+        [id]
+      );
+      if (childPages[0]) throw new Error(`Page ${id} still has active child pages`);
+      const { rows: childBlocks } = await client.query<{ id: string }>(
+        'SELECT id FROM blocks WHERE page_id = $1 AND archived_at IS NULL LIMIT 1',
+        [id]
+      );
+      if (childBlocks[0]) throw new Error(`Page ${id} still has active blocks`);
+    }
+    const { rows } = await client.query<Page>(
+      `UPDATE pages
+       SET archived_at = ${archived ? 'NOW()' : 'NULL'},
+           revision = revision + 1,
+           updated_at = NOW()
+       WHERE id = $1
+         AND revision = $2
+         AND archived_at IS ${archived ? 'NULL' : 'NOT NULL'}
+       RETURNING ${PAGE_COLUMNS}`,
+      [id, revision]
     );
-    if (childBlocks[0]) {
-      throw new Error(`Page ${id} still has active blocks`);
-    }
-  }
-  const { rows } = await pool.query<Page>(
-    `UPDATE pages
-     SET archived_at = ${archived ? 'NOW()' : 'NULL'},
-         revision = revision + 1,
-         updated_at = NOW()
-     WHERE id = $1
-       AND revision = $2
-       AND archived_at IS ${archived ? 'NULL' : 'NOT NULL'}
-     RETURNING ${PAGE_COLUMNS}`,
-    [id, revision]
-  );
-  if (!rows[0]) await assertPageArchiveTransition(id, revision, archived);
-  return rows[0] ?? null;
+    if (!rows[0]) await assertPageArchiveTransition(id, revision, archived, client);
+    return rows[0] ?? null;
+  });
 }
 
 export function archivePage(
