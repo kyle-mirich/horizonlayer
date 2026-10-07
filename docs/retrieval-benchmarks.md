@@ -143,8 +143,25 @@ Each report records the actual checked-out HEAD (including a pull-request merge
 commit when GitHub uses one), so a badge or old artifact must not be applied to a
 newer tree.
 
-The October 7 source audit found no GitHub workflow run for main
-`ae0650145f56d8f32a177d2eb8f96e60075827b3`; that commit contains `[skip ci]`. An old
-September green run is not current evidence. These added jobs have not run remotely
-until the changes are published with authorization. Local verification and live
-results are recorded separately in the delivered evidence bundle.
+The benchmark and recovery milestone merged in [PR #42](https://github.com/kyle-mirich/horizonlayer/pull/42)
+as [main commit `4367381312f2f30f099424c66cb6baaaa36af2bb`](https://github.com/kyle-mirich/horizonlayer/commit/4367381312f2f30f099424c66cb6baaaa36af2bb).
+Its [October 7 main CI run](https://github.com/kyle-mirich/horizonlayer/actions/runs/37578853237)
+passed all five jobs: verification/coverage/build, PostgreSQL integration, real
+retrieval/scaling, packed CLI recovery, and the non-blocking mutation report.
+The retrieval and recovery artifacts identify that exact clean main checkout.
+Earlier reports about the pre-milestone `[skip ci]` commit are historical; they do
+not describe this completed run. Later changes still require their own SHA-specific
+verification rather than inheriting this result.
+
+In that recorded run, the 40-query held-out split contained 32 positive queries
+and eight no-answer queries. Authored-synthetic **positive-query Recall@5** was
+0.1015625 for lexical search and 0.8046875 for semantic search; nDCG@5 was
+0.1836140 and 0.7029846 respectively. The labels were authored by an AI coding
+assistant, not independently reviewed human judgments. These results do not
+validate general retrieval accuracy. **All eight semantic no-answer queries
+returned results**, so the benchmark makes no calibrated-abstention claim.
+The defined lifecycle/index-fault/scaling probes observed zero canonical violations,
+and the packed journey passed all 16 recovery proofs. These are scoped observations,
+not universal correctness or multi-tenant security guarantees. Raw per-query
+results, machine/model configuration, measurement budgets, and recovery timings
+are retained in the linked run's artifacts and the delivered evidence bundle.
