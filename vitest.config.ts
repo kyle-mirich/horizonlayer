@@ -1,7 +1,13 @@
 import { availableParallelism } from 'node:os';
 import { defineConfig } from 'vitest/config';
 
-const maxWorkers = Math.max(1, Math.min(4, availableParallelism() - 1));
+const configuredWorkers = process.env.HORIZONLAYER_TEST_MAX_WORKERS;
+if (configuredWorkers !== undefined && (!/^\d+$/u.test(configuredWorkers)
+    || Number(configuredWorkers) < 1 || Number(configuredWorkers) > 32)) {
+  throw new Error('HORIZONLAYER_TEST_MAX_WORKERS must be an integer between 1 and 32');
+}
+const maxWorkers = configuredWorkers === undefined
+  ? Math.max(1, Math.min(4, availableParallelism() - 1)) : Number(configuredWorkers);
 
 export default defineConfig({
   test: {

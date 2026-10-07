@@ -68,7 +68,9 @@
     "start:dashboard": "node dist/launcher.js dashboard",
     "dev": "tsx src/launcher.ts",
     "dev:dashboard": "tsx src/launcher.ts dashboard",
-    "dev:dashboard:ui": "vite --config dashboard/vite.config.ts"
+    "dev:dashboard:ui": "vite --config dashboard/vite.config.ts",
+    "benchmark:retrieval": "node --import tsx src/testing/benchmarks/retrieval.ts",
+    "benchmark:recovery": "node --import tsx src/testing/benchmarks/recoveryEvidence.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
