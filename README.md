@@ -287,6 +287,8 @@ npm run test:smoke:recovery
 npm pack --dry-run
 ```
 
+Reproducible retrieval-quality, freshness, scaling, and timed packed-recovery evidence is available through `npm run benchmark:retrieval` and `npm run benchmark:recovery`. See the [benchmark guide](docs/retrieval-benchmarks.md) for disposable-service setup, the authored synthetic corpus, metrics, and evidence limits.
+
 The unit and coverage commands do not require Docker or external services. The integration command requires `HORIZONLAYER_INTEGRATION_DATABASE_URL`. `test:smoke:local` provisions an isolated Docker PostgreSQL instance; `test:smoke:recovery` packs the public CLI and proves the isolated A→B→A→safety-B, reset, corruption, interruption, MCP, dashboard, SQL, and semantic-search journey. See [CONTRIBUTING.md](CONTRIBUTING.md#postgresql-integration-tests) for setup details, [docs/engineering-notes.md](docs/engineering-notes.md) for design rationale, [CHANGELOG.md](CHANGELOG.md) for release history, and [SECURITY.md](SECURITY.md) for responsible disclosure.
 
 License: [MIT](LICENSE).

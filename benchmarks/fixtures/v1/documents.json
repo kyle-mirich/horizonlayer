@@ -1,0 +1,1506 @@
+[
+  {
+    "id": "payment-idempotency-d01",
+    "workspace": "primary",
+    "title": "Checkout retry idempotency decision",
+    "content": "The fictional Aster checkout service accepts a client operation key for each charge request. The approved retry policy stores the first completed response for 24 hours and returns that response for another request with the same key and identical payload. A reused key with a different amount is rejected. The database commits the operation key and charge together before the response is sent.",
+    "tags": [
+      "family:payment-idempotency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "payment-idempotency-d02",
+    "workspace": "primary",
+    "title": "Recover a checkout request after a timeout",
+    "content": "If a checkout client loses the response after submission, the operator must retry with the original operation key and unchanged amount. First inspect the operation record; if it is complete, return its saved response. An in-flight operation is polled rather than submitted as a new charge. Do not create a replacement key merely because the network timed out.",
+    "tags": [
+      "family:payment-idempotency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "payment-idempotency-d03",
+    "workspace": "primary",
+    "title": "Refund request identity is independent of charge identity",
+    "content": "The refund worker uses a distinct operation key for each approved refund, even when the original charge has already been retried. A refund is a new business operation and must not reuse the charge key. Refund response records remain for seven days. This policy does not specify how checkout clients recover a missing charge response.",
+    "tags": [
+      "family:payment-idempotency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "payment-idempotency-d04",
+    "workspace": "primary",
+    "title": "Sandbox payment simulator uses fresh keys",
+    "content": "In the isolated sandbox, repeated button clicks intentionally generate separate simulated charges with fresh operation keys so testers can exercise duplicate-payment alerts. No money is moved by this simulator. Its reset-on-each-click behavior must not be used by production checkout clients handling a timeout.",
+    "tags": [
+      "family:payment-idempotency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "payment-idempotency-d05",
+    "workspace": "primary",
+    "title": "Checkout duplicate-suppression monitoring",
+    "content": "The payments dashboard tracks reuse of completed operation keys, payload-conflict rejections, and operations left in flight for more than two minutes. A surge in conflict rejections often means clients are changing the amount while retrying. These counters help diagnose retries, but the dashboard is not the source of the approved charge-recovery procedure.",
+    "tags": [
+      "family:payment-idempotency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "payment-idempotency-d06",
+    "workspace": "primary",
+    "title": "Why checkout responses are stored for a day",
+    "content": "The retry design review found that mobile clients may reconnect hours after a charge request. Keeping the completed response for 24 hours covers the supported reconnect window. Recording the result in the same transaction as the operation key prevents a crash from leaving a successful charge without a reusable response.",
+    "tags": [
+      "family:payment-idempotency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "payment-idempotency-d07",
+    "workspace": "primary",
+    "title": "Receipt rendering failures do not resubmit charges",
+    "content": "The receipt renderer reads completed charge records and builds a printable confirmation. If rendering fails, the rendering job retries its own task identifier. It has no permission to invoke the charge endpoint and does not decide whether a checkout operation key should be reused.",
+    "tags": [
+      "family:payment-idempotency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "payment-idempotency-d08",
+    "workspace": "primary",
+    "title": "Invoice import duplicate detection",
+    "content": "The accounting importer detects duplicate invoice files using the supplier number and file checksum. A duplicate file is skipped before ledger rows are created. Invoice-file identity is unrelated to the client operation key used by the checkout charge endpoint, despite both processes reporting duplicate counts.",
+    "tags": [
+      "family:payment-idempotency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "tenant-routing-d01",
+    "workspace": "primary",
+    "title": "Tenant relocation reads require a routing epoch",
+    "content": "The fictional Cedar workspace service moves tenants between database shards. During relocation, every read carries the tenant routing epoch. A request with a stale epoch is redirected to the coordinator, which supplies the current shard and epoch. The old shard never falls back to searching other tenants when it cannot find the record.",
+    "tags": [
+      "family:tenant-routing",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "tenant-routing-d02",
+    "workspace": "primary",
+    "title": "Resume tenant reads after a relocation redirect",
+    "content": "When a workspace read receives a relocation redirect, discard the cached shard mapping, fetch the current mapping from the tenant coordinator, and retry once with the returned epoch. If another redirect occurs, stop and surface a transient relocation error. Keep the tenant identifier unchanged throughout the retry.",
+    "tags": [
+      "family:tenant-routing",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "tenant-routing-d03",
+    "workspace": "primary",
+    "title": "Analytics warehouse routing ignores live tenant epochs",
+    "content": "Nightly analytics selects a warehouse partition by reporting date, not by the live workspace routing epoch. A completed export remains in its original partition after a tenant relocates. Analysts must use the export manifest to locate historical data. This rule does not authorize live workspace reads on an old database shard.",
+    "tags": [
+      "family:tenant-routing",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "tenant-routing-d04",
+    "workspace": "primary",
+    "title": "Single-tenant staging has a fixed shard mapping",
+    "content": "The staging installation contains one synthetic tenant on a fixed database shard. It does not run the relocation coordinator and uses a constant routing epoch for load tests. A staging client that omits the epoch is accepted only by this test endpoint; production workspace reads require an epoch.",
+    "tags": [
+      "family:tenant-routing",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "tenant-routing-d05",
+    "workspace": "primary",
+    "title": "Relocation redirect and stale-mapping alerts",
+    "content": "The workspace team monitors stale-epoch redirects per tenant and the age of client shard caches. More than two redirects for one logical request indicates an unstable mapping or a client that ignored cache invalidation. The alert directs operators to the coordinator audit log without allowing cross-tenant lookup.",
+    "tags": [
+      "family:tenant-routing",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "tenant-routing-d06",
+    "workspace": "primary",
+    "title": "Isolation rationale for routing epoch enforcement",
+    "content": "A shard miss can mean a tenant has moved, not that its record exists in another tenant. The relocation design therefore requires the coordinator to refresh location and epoch. Searching all shards on a miss was rejected because it risks crossing workspace boundaries and masks stale routing state.",
+    "tags": [
+      "family:tenant-routing",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "tenant-routing-d07",
+    "workspace": "primary",
+    "title": "Static asset region selection",
+    "content": "The frontend downloads icons and styles from the closest asset region using latency probes. Assets are public and do not carry tenant routing epochs. Asset region selection cannot be used to determine the database shard or permissions of a workspace record.",
+    "tags": [
+      "family:tenant-routing",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "tenant-routing-d08",
+    "workspace": "primary",
+    "title": "Shard capacity planning thresholds",
+    "content": "Shard planning forecasts storage growth and connection occupancy for the next quarter. A shard exceeding the planning threshold becomes a relocation candidate after operator review. The planning report never changes a client mapping and contains no current routing epoch.",
+    "tags": [
+      "family:tenant-routing",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "credential-rotation-d01",
+    "workspace": "primary",
+    "title": "Service signing key rotation overlap decision",
+    "content": "The fictional Finch internal API rotates its service signing keys with a 30-minute overlap. Verifiers accept the previous and current public key during that interval, while signers switch immediately to the current private key. After the overlap, the previous public key is removed. Private keys never appear in configuration logs.",
+    "tags": [
+      "family:credential-rotation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "credential-rotation-d02",
+    "workspace": "primary",
+    "title": "Roll out a new internal service signing key",
+    "content": "Publish the new public verification key before switching signers to the new private key. Check that all verifier instances acknowledge the key set, switch signing traffic, and observe failures for 30 minutes. Remove the previous public key only after the overlap finishes. If verification fails, pause retirement and investigate the key-set rollout.",
+    "tags": [
+      "family:credential-rotation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "credential-rotation-d03",
+    "workspace": "primary",
+    "title": "User session tokens expire without a key overlap rule",
+    "content": "Browser session tokens expire after eight hours and are renewed through the session service. Logging a user out revokes that session identifier. Session expiry does not rotate the internal API service signing key and must not be interpreted as permission to remove an old verification key immediately.",
+    "tags": [
+      "family:credential-rotation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "credential-rotation-d04",
+    "workspace": "primary",
+    "title": "One-shot build artifact signature checking",
+    "content": "The offline release verifier loads one pinned public key from the release manifest and checks a completed artifact. It never accepts a second key from the running internal API key set. This deliberate single-key workflow protects immutable release artifacts and is not the live service key-rotation procedure.",
+    "tags": [
+      "family:credential-rotation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "credential-rotation-d05",
+    "workspace": "primary",
+    "title": "Signing key rollout verification signals",
+    "content": "The API team observes unknown-key errors, signature failures, and verifier key-set acknowledgement age during rotation. A rising unknown-key count usually means signers advanced before verifiers received the new public key. Metrics identify rollout health without exposing either private key.",
+    "tags": [
+      "family:credential-rotation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "credential-rotation-d06",
+    "workspace": "primary",
+    "title": "Reason for the thirty-minute verification overlap",
+    "content": "Internal requests may wait in a retry buffer before reaching a verifier. Keeping both public keys for 30 minutes allows those previously signed requests to complete while signers use only the new key. The overlap is longer than the maximum supported buffer age and does not extend user session lifetime.",
+    "tags": [
+      "family:credential-rotation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "credential-rotation-d07",
+    "workspace": "primary",
+    "title": "Secrets inventory ownership labels",
+    "content": "The secrets inventory records owning teams, rotation dates, and references to protected storage. It contains no secret values. Inventory completeness is reviewed monthly; an inventory label alone does not trigger a signing key change or establish verifier readiness.",
+    "tags": [
+      "family:credential-rotation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "credential-rotation-d08",
+    "workspace": "primary",
+    "title": "Developer workstation SSH key maintenance",
+    "content": "Engineers can replace a workstation SSH public key through the access portal after proving ownership. Removing an old workstation key terminates that machine access path. SSH maintenance is separate from service signature verification and has no 30-minute public-key overlap.",
+    "tags": [
+      "family:credential-rotation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "ledger-reconciliation-d01",
+    "workspace": "primary",
+    "title": "Daily settlement reconciliation requires immutable corrections",
+    "content": "The fictional Moss settlement ledger reconciles daily totals against the processor settlement file. A mismatch freezes that settlement batch for review. Approved corrections are appended as new adjustment entries linked to the original entry; existing ledger amounts are never overwritten. A second reviewer approves release of the frozen batch.",
+    "tags": [
+      "family:ledger-reconciliation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "ledger-reconciliation-d02",
+    "workspace": "primary",
+    "title": "Investigate and release a mismatched settlement batch",
+    "content": "Compare the processor settlement file with the ledger batch, including fees and timezone boundaries. Record the discrepancy, request a reviewer, and append any approved adjustment with a link to the original entry. Recompute totals and obtain the second reviewer approval before unfreezing the batch. Preserve the original amount and audit trail.",
+    "tags": [
+      "family:ledger-reconciliation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "ledger-reconciliation-d03",
+    "workspace": "primary",
+    "title": "Shopping cart totals may be recomputed in place",
+    "content": "Before a purchase is submitted, the cart service recalculates prices and discounts in place whenever a customer changes quantities. The draft cart is not a settled ledger. Replacing a draft cart total does not authorize overwriting an amount in a daily settlement reconciliation entry.",
+    "tags": [
+      "family:ledger-reconciliation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "ledger-reconciliation-d04",
+    "workspace": "primary",
+    "title": "Reconciliation training worksheet permits edits",
+    "content": "The training worksheet uses invented settlement rows to teach fee arithmetic. Trainees may overwrite cells and rerun formulas freely because the sheet is discarded after the exercise. No worksheet edits affect the canonical settlement ledger or release a frozen production batch.",
+    "tags": [
+      "family:ledger-reconciliation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "ledger-reconciliation-d05",
+    "workspace": "primary",
+    "title": "Settlement reconciliation mismatch dashboard",
+    "content": "The finance operations dashboard reports frozen batch count, mismatch amount, adjustment count, and reviewer wait time. A balanced total can still require reviewer approval if an adjustment was added. Dashboard totals are diagnostic views; they do not replace the immutable entries or approve batch release.",
+    "tags": [
+      "family:ledger-reconciliation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "ledger-reconciliation-d06",
+    "workspace": "primary",
+    "title": "Why settlement adjustments append instead of overwrite",
+    "content": "Appending a correction preserves what the processor originally reported and what the team later changed. The review rejected in-place amount edits because an overwritten value makes discrepancies harder to reconstruct. The linked adjustment and second approval provide an audit trail before funds are reported as settled.",
+    "tags": [
+      "family:ledger-reconciliation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "ledger-reconciliation-d07",
+    "workspace": "primary",
+    "title": "Ledger export file naming convention",
+    "content": "Settlement exports use the batch date and a monotonically increasing export revision in their filenames. A regenerated export creates a new file rather than replacing the prior file. Filename revision does not approve a financial adjustment or resolve a reconciliation mismatch.",
+    "tags": [
+      "family:ledger-reconciliation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "ledger-reconciliation-d08",
+    "workspace": "primary",
+    "title": "Forecast model rounding assumptions",
+    "content": "The forecasting spreadsheet rounds monthly projected fees to whole units to simplify planning. Forecasts are estimates and are not processor settlement files. Forecast rounding tolerances must not be applied to daily ledger reconciliation differences.",
+    "tags": [
+      "family:ledger-reconciliation",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "cache-consistency-d01",
+    "workspace": "primary",
+    "title": "Profile cache invalidation follows committed version numbers",
+    "content": "The fictional Lark profile service assigns a monotonic version to each committed profile update. Cache invalidation events carry the profile identifier and new version. A cache node discards an entry only when the incoming version is newer than its stored version; a delayed older event cannot replace a newer profile. Reads may fall back to the primary database on a cache miss.",
+    "tags": [
+      "family:cache-consistency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "cache-consistency-d02",
+    "workspace": "primary",
+    "title": "Recover profile cache nodes after missed invalidations",
+    "content": "When a profile cache node reconnects after missing invalidation events, mark local entries untrusted and reload them from the primary database on demand. Compare each loaded version before accepting a later event. Never repopulate the cache from an older event payload simply because that event arrived last.",
+    "tags": [
+      "family:cache-consistency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "cache-consistency-d03",
+    "workspace": "primary",
+    "title": "Search suggestion cache is time based",
+    "content": "The search suggestion cache contains aggregated popular phrases and expires every fifteen minutes. It does not store individual profile records or their version numbers. Serving slightly old suggestions is allowed by its separate freshness contract and is not evidence that stale profile writes may win.",
+    "tags": [
+      "family:cache-consistency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "cache-consistency-d04",
+    "workspace": "primary",
+    "title": "Training cache uses last-arrival-wins updates",
+    "content": "A demonstration application shows why last-arrival-wins caching is unsafe by delivering profile events out of order. Its toy cache deliberately replaces a value with whatever message arrived last. This demonstration is active teaching material, not an approved production profile-cache consistency policy.",
+    "tags": [
+      "family:cache-consistency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "cache-consistency-d05",
+    "workspace": "primary",
+    "title": "Profile cache version-lag measurements",
+    "content": "The profile team measures invalidation delay, cache reload failures, and rejected older-version events. Frequent rejection of old events can occur during broker replay and does not imply the cache must accept them. Sampling compares stored profile versions with the primary database to detect missed invalidations.",
+    "tags": [
+      "family:cache-consistency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "cache-consistency-d06",
+    "workspace": "primary",
+    "title": "Out-of-order delivery rationale for profile versions",
+    "content": "Broker retries may deliver an older invalidation after a newer profile update. Monotonic committed versions make the ordering check deterministic across cache nodes. Timestamp-only comparisons were rejected because node clocks can drift; arrival order was rejected because delivery retries reorder messages.",
+    "tags": [
+      "family:cache-consistency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "cache-consistency-d07",
+    "workspace": "primary",
+    "title": "Frontend image cache dimensions",
+    "content": "Profile avatar thumbnails are cached by immutable image digest and requested dimensions. Changing the displayed biography does not alter a thumbnail cache key. Image digest selection is separate from the committed profile version used for profile-record invalidation.",
+    "tags": [
+      "family:cache-consistency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "cache-consistency-d08",
+    "workspace": "primary",
+    "title": "Profile cache capacity budget",
+    "content": "Capacity planning reserves memory for active profile entries and tracks eviction frequency during peak read traffic. An eviction simply causes a database reload. Increasing the memory budget reduces misses but cannot correct a cache node that accepts an older committed profile version.",
+    "tags": [
+      "family:cache-consistency",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "canary-rollout-d01",
+    "workspace": "primary",
+    "title": "API canary rollback uses error-budget burn gates",
+    "content": "The fictional Birch API release begins at five percent of eligible traffic. Promotion is blocked when the canary error-budget burn exceeds twice the stable cohort for ten consecutive minutes, or when latency breaches the published limit. A failed gate routes traffic back to the stable revision. Operators compare cohorts before attributing a fleet-wide outage to the canary.",
+    "tags": [
+      "family:canary-rollout",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "canary-rollout-d02",
+    "workspace": "primary",
+    "title": "Operate a failing API canary release",
+    "content": "On a canary gate failure, stop promotion and route the canary traffic back to the stable revision. Preserve cohort metrics and release identifiers for investigation. If both cohorts degrade equally, coordinate with incident response rather than repeatedly switching revisions. Resume only after a fresh observation window passes all gates.",
+    "tags": [
+      "family:canary-rollout",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "canary-rollout-d03",
+    "workspace": "primary",
+    "title": "Offline batch rollout checks output checksums",
+    "content": "The nightly data exporter releases a new batch executable by comparing output checksums on a fixed input set. It has no live traffic cohorts or error-budget burn metric. Matching exporter checksums cannot approve an API canary promotion when its live error or latency gate fails.",
+    "tags": [
+      "family:canary-rollout",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "canary-rollout-d04",
+    "workspace": "primary",
+    "title": "Load laboratory canary runs intentionally stress errors",
+    "content": "The load laboratory injects failures into a canary revision to validate dashboards. Laboratory experiments may reach one hundred percent synthetic traffic even while the injected error rate is high. This experiment setting is isolated and never authorizes promotion of a live API revision.",
+    "tags": [
+      "family:canary-rollout",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "canary-rollout-d05",
+    "workspace": "primary",
+    "title": "Canary cohort burn and latency dashboard",
+    "content": "The release dashboard displays the stable and canary cohorts separately, including ten-minute burn ratios and latency percentiles. Aggregate fleet metrics can hide a small failing cohort. Dashboard snapshots accompany rollback investigations but the approved gate values are maintained in the release decision.",
+    "tags": [
+      "family:canary-rollout",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "canary-rollout-d06",
+    "workspace": "primary",
+    "title": "Why API release gates compare stable and canary cohorts",
+    "content": "A database outage can raise errors in both revisions simultaneously. Comparing the canary with the stable cohort reduces false attribution while retaining an absolute latency limit. The ten-minute sustained burn gate avoids promotion based on a single quiet sample after a release regression.",
+    "tags": [
+      "family:canary-rollout",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "canary-rollout-d07",
+    "workspace": "primary",
+    "title": "Release note publication workflow",
+    "content": "The documentation job publishes release notes after a revision is tagged. Notes list changes and known issues and may appear before the live rollout finishes. A published note or tag does not prove that an API canary passed its traffic promotion gates.",
+    "tags": [
+      "family:canary-rollout",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "canary-rollout-d08",
+    "workspace": "primary",
+    "title": "Stable revision retention after promotion",
+    "content": "The release service retains the previous stable artifact for seven days after a successful promotion. Artifact retention enables a later operational rollback but does not extend or weaken the canary error-budget observation window.",
+    "tags": [
+      "family:canary-rollout",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "backup-restoration-d01",
+    "workspace": "primary",
+    "title": "Backup restoration requires a quarantine validation stage",
+    "content": "The fictional Rowan document store restores backups into an isolated quarantine database before changing the live service. Operators verify the manifest checksum, schema version, row counts, and sampled document relationships. Only a validated restore is eligible for a planned cutover. Backup existence alone does not prove recoverability.",
+    "tags": [
+      "family:backup-restoration",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "backup-restoration-d02",
+    "workspace": "primary",
+    "title": "Validate a document-store restore before cutover",
+    "content": "Create a disposable quarantine database with no application writers. Restore the selected backup, verify its manifest and schema compatibility, compare declared row counts, and sample parent-child document relationships. Record the checks and obtain cutover approval. Keep the live database untouched if any validation fails.",
+    "tags": [
+      "family:backup-restoration",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "backup-restoration-d03",
+    "workspace": "primary",
+    "title": "Search index rebuild uses canonical live records",
+    "content": "The search index is a derived store and can be rebuilt from active canonical document records. Rebuilding it discards index contents without replacing the live database. A successful index rebuild does not validate a database backup manifest, its schema compatibility, or restored relationships.",
+    "tags": [
+      "family:backup-restoration",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "backup-restoration-d04",
+    "workspace": "primary",
+    "title": "Disposable workshop restores skip cutover review",
+    "content": "A classroom exercise restores tiny invented data sets to disposable local databases. Participants may skip row-count review to practice command syntax, because no live service uses the result. This training shortcut is not the production document-store recovery procedure.",
+    "tags": [
+      "family:backup-restoration",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "backup-restoration-d05",
+    "workspace": "primary",
+    "title": "Restore validation evidence checklist",
+    "content": "Each recovery drill records backup digest, schema compatibility, expected and observed row counts, sampled relationship results, and elapsed restore time. A missing checklist item leaves the quarantine restore unapproved. Evidence is retained so the team can distinguish a present backup file from a recoverable backup.",
+    "tags": [
+      "family:backup-restoration",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "backup-restoration-d06",
+    "workspace": "primary",
+    "title": "Rationale for quarantine rather than direct live restore",
+    "content": "A backup may be incomplete or use an incompatible schema even if the file opens successfully. Restoring away from writers allows integrity checks without damaging the live service. Direct live replacement was rejected because discovering a bad backup after cutover would compound the original outage.",
+    "tags": [
+      "family:backup-restoration",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "backup-restoration-d07",
+    "workspace": "primary",
+    "title": "Backup retention inventory",
+    "content": "The backup scheduler lists available artifacts, creation times, sizes, and retention deadlines. Old artifacts are removed after the retention window. The inventory confirms which files exist, but does not claim any particular artifact has passed quarantine restoration validation.",
+    "tags": [
+      "family:backup-restoration",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "backup-restoration-d08",
+    "workspace": "primary",
+    "title": "Document attachment export procedure",
+    "content": "The attachment exporter copies original uploaded files into an archive for user portability. It contains neither the document-store schema nor all relationship rows. A portable attachment archive is not a database backup and cannot satisfy the recovery validation checklist.",
+    "tags": [
+      "family:backup-restoration",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "message-ordering-d01",
+    "workspace": "primary",
+    "title": "Order state events use per-order sequence guards",
+    "content": "The fictional Spruce order processor requires a monotonically increasing sequence for each order. A consumer applies only the next expected sequence, buffers a later sequence briefly, and requests the missing event if the gap persists. Duplicate sequences are acknowledged without reapplying their effect. There is no ordering guarantee across different orders.",
+    "tags": [
+      "family:message-ordering",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "message-ordering-d02",
+    "workspace": "primary",
+    "title": "Recover a gap in an order event stream",
+    "content": "If the consumer receives a later order sequence before its predecessor, buffer it for up to thirty seconds and request replay of the missing sequence from the order log. Apply the recovered predecessor first, then drain contiguous buffered events. Do not advance the order state merely because the later event arrived sooner.",
+    "tags": [
+      "family:message-ordering",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "message-ordering-d03",
+    "workspace": "primary",
+    "title": "Telemetry stream accepts arrival-order aggregation",
+    "content": "The telemetry pipeline counts page views independently and aggregates them by ingestion minute. Individual views have no order state transition dependency. It tolerates out-of-order delivery and does not request missing sequence numbers. This telemetry behavior cannot be used for order fulfillment events.",
+    "tags": [
+      "family:message-ordering",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "message-ordering-d04",
+    "workspace": "primary",
+    "title": "Cross-order report sorts by wall-clock time",
+    "content": "The reporting interface sorts completed orders by their display timestamp for users. This is presentation order across unrelated orders. Clock-based sorting does not define how a consumer should apply successive state changes within one order and cannot repair a missing sequence.",
+    "tags": [
+      "family:message-ordering",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "message-ordering-d05",
+    "workspace": "primary",
+    "title": "Order event gap and duplicate measurements",
+    "content": "The order processor monitors buffered gap age, replay requests, duplicate acknowledgements, and per-order sequence lag. A persistent gap pages the owning team. These measurements distinguish harmless redelivery from a missing predecessor; a high arrival rate does not justify skipping a state transition.",
+    "tags": [
+      "family:message-ordering",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "message-ordering-d06",
+    "workspace": "primary",
+    "title": "Reason ordering is scoped to a single order",
+    "content": "Fulfillment transitions depend on previous transitions for the same order, while different orders can progress independently. A per-order sequence guard preserves that dependency without forcing all orders through one global lock. Consumer arrival timestamps were rejected as a source of business ordering.",
+    "tags": [
+      "family:message-ordering",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "message-ordering-d07",
+    "workspace": "primary",
+    "title": "Order notification email retries",
+    "content": "The email notification worker uses a delivery identifier to suppress duplicate customer messages. It reads an already committed order transition and does not mutate order state. Email delivery order and retry count do not determine the next expected order event sequence.",
+    "tags": [
+      "family:message-ordering",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "message-ordering-d08",
+    "workspace": "primary",
+    "title": "Order-log storage partition sizing",
+    "content": "The event log is partitioned by order identifier to spread storage load while retaining each order history together. Partition size alerts help schedule capacity expansion. Moving a storage partition does not change the sequence values or permit the consumer to skip a gap.",
+    "tags": [
+      "family:message-ordering",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "certificate-renewal-d01",
+    "workspace": "primary",
+    "title": "Public TLS certificate renewal requires challenge readiness",
+    "content": "The fictional Hazel gateway renews public TLS certificates seven days before expiration. Before requesting a replacement, the operator verifies that the domain challenge route reaches the renewal worker on every public ingress address. The old certificate remains served until the replacement has passed a handshake probe on all gateway nodes.",
+    "tags": [
+      "family:certificate-renewal",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "certificate-renewal-d02",
+    "workspace": "primary",
+    "title": "Recover a failed public gateway certificate renewal",
+    "content": "If renewal fails, inspect domain challenge reachability from each public ingress address and repair routing before retrying the request. Keep serving the still-valid certificate. After issuance, install the replacement on all nodes and verify a public TLS handshake before switching the active certificate reference.",
+    "tags": [
+      "family:certificate-renewal",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "certificate-renewal-d03",
+    "workspace": "primary",
+    "title": "Internal mesh certificates use workload attestation",
+    "content": "The internal mesh issues short-lived workload certificates after attesting the service identity. It does not use a public domain challenge route. Mesh identity renewal cannot demonstrate that a publicly reachable gateway is ready for a public TLS certificate renewal.",
+    "tags": [
+      "family:certificate-renewal",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "certificate-renewal-d04",
+    "workspace": "primary",
+    "title": "Development TLS uses a local self-signed certificate",
+    "content": "The development server generates a self-signed certificate at startup and developers explicitly trust its local test root. This server is never exposed as the public gateway. Generating a fresh local certificate does not solve public domain challenge failures or prove gateway handshake readiness.",
+    "tags": [
+      "family:certificate-renewal",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "certificate-renewal-d05",
+    "workspace": "primary",
+    "title": "Gateway certificate expiry and challenge probes",
+    "content": "Gateway monitoring checks days to certificate expiry, challenge route reachability, and the certificate presented by each ingress node. An issued replacement is not considered deployed until all public handshakes show it. The probes provide renewal evidence without changing active gateway certificate references.",
+    "tags": [
+      "family:certificate-renewal",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "certificate-renewal-d06",
+    "workspace": "primary",
+    "title": "Why gateway renewal keeps the old certificate active",
+    "content": "A renewal request can succeed while distribution to one gateway node fails. Keeping the old certificate until all replacement handshakes pass prevents partial installation from causing client failures. Starting seven days early leaves time to repair challenge routing before the valid certificate expires.",
+    "tags": [
+      "family:certificate-renewal",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "certificate-renewal-d07",
+    "workspace": "primary",
+    "title": "Public domain ownership contact maintenance",
+    "content": "The domain inventory tracks registrar contacts and owning teams. Updating those contacts can help route renewal incidents to the correct people but does not publish a domain challenge response or install a TLS certificate on gateway nodes.",
+    "tags": [
+      "family:certificate-renewal",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "query-planning-d01",
+    "workspace": "primary",
+    "title": "Activity feed queries require a tenant-leading composite index",
+    "content": "The fictional Ivy activity feed filters by tenant identifier and pages by creation time plus record identifier. The approved database index orders columns as tenant identifier, creation time descending, and record identifier descending. Pagination uses the last visible tuple rather than a large offset. Global time-only indexes are not sufficient for tenant-scoped feeds.",
+    "tags": [
+      "family:query-planning",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "query-planning-d02",
+    "workspace": "primary",
+    "title": "Diagnose a slow tenant activity feed",
+    "content": "Inspect the query plan for an index scan constrained by tenant identifier and the pagination tuple. If the plan uses a large offset or sorts all tenant rows, compare the deployed index with the approved composite column order. Test on a representative large tenant before changing production queries.",
+    "tags": [
+      "family:query-planning",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "query-planning-d03",
+    "workspace": "primary",
+    "title": "Global audit report uses a time-leading index",
+    "content": "The compliance export scans events across all tenants within a fixed time range. Its separate index leads with creation time because the report has no tenant filter. That global report index is not the approved path for an interactive feed restricted to one tenant.",
+    "tags": [
+      "family:query-planning",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "query-planning-d04",
+    "workspace": "primary",
+    "title": "Small fixture pagination uses offsets for readability",
+    "content": "The developer tutorial pages over twelve invented feed rows with an offset to illustrate SQL syntax. It does not model a large tenant or concurrent inserts. The tutorial explicitly makes no latency guarantee and is not a production activity-feed pagination recommendation.",
+    "tags": [
+      "family:query-planning",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "query-planning-d05",
+    "workspace": "primary",
+    "title": "Activity feed query plan regression signals",
+    "content": "The database team samples examined rows, sort spills, and latency for tenant activity feed queries. An increasing ratio of examined to returned rows may indicate an offset path or a missing tenant-leading index. Metrics are grouped by tenant size so tiny fixtures do not hide large-tenant regressions.",
+    "tags": [
+      "family:query-planning",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "query-planning-d06",
+    "workspace": "primary",
+    "title": "Why feed pagination uses a stable tuple cursor",
+    "content": "Creation timestamps can collide, so the activity feed cursor includes record identifier as a deterministic tie breaker. The matching composite index avoids skipping a large prefix on deep pages. A time-only cursor or offset page can duplicate or omit records when new activity is inserted.",
+    "tags": [
+      "family:query-planning",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "query-planning-d07",
+    "workspace": "primary",
+    "title": "Database maintenance window scheduling",
+    "content": "The maintenance scheduler records permitted times for vacuuming and statistics refresh. Fresh statistics may improve estimates, but a maintenance window entry does not define the composite index or cursor contract required by tenant activity-feed queries.",
+    "tags": [
+      "family:query-planning",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "object-lifecycle-d01",
+    "workspace": "primary",
+    "title": "Uploaded object deletion waits for reference clearance",
+    "content": "The fictional Maple attachment store marks an object pending deletion when its last visible document reference is removed. The sweeper waits 48 hours, rechecks active references and legal holds, and deletes only if both checks allow it. Restoring a document during the delay cancels pending deletion of its attachment.",
+    "tags": [
+      "family:object-lifecycle",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "object-lifecycle-d02",
+    "workspace": "primary",
+    "title": "Recover an attachment marked for delayed deletion",
+    "content": "Before the 48-hour grace period ends, restore the document reference and clear the attachment pending-deletion mark. If a legal hold exists, retain the object regardless of reference count. The sweeper must recheck current references immediately before removal rather than trust the original mark.",
+    "tags": [
+      "family:object-lifecycle",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "object-lifecycle-d03",
+    "workspace": "primary",
+    "title": "Temporary upload fragments expire after one hour",
+    "content": "Uncommitted multipart upload fragments expire after one hour to avoid abandoned staging storage. A fragment has never been attached to a visible document and is not covered by the 48-hour deletion grace period. Its expiration rule cannot be applied to committed attachments.",
+    "tags": [
+      "family:object-lifecycle",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "object-lifecycle-d04",
+    "workspace": "primary",
+    "title": "Preview thumbnail cache can be removed immediately",
+    "content": "Generated preview thumbnails are disposable copies that can be regenerated from the original attachment. The preview cache evicts entries immediately under storage pressure. Eviction does not remove the original uploaded object or override legal holds on that original.",
+    "tags": [
+      "family:object-lifecycle",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "object-lifecycle-d05",
+    "workspace": "primary",
+    "title": "Attachment sweeper safety counters",
+    "content": "The attachment dashboard records pending-deletion age, removals skipped for active references, removals skipped for legal holds, and canceled marks after document restoration. A growing pending set may indicate blocked holds rather than a broken sweeper. Counters do not replace the final reference recheck.",
+    "tags": [
+      "family:object-lifecycle",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "object-lifecycle-d06",
+    "workspace": "primary",
+    "title": "Reason for delayed original-object deletion",
+    "content": "Users can restore a recently removed document and expect its original files to remain available. The 48-hour delay permits restoration, while a final reference recheck handles concurrent document edits. The design deliberately separates disposable preview eviction from deletion of irreplaceable uploaded originals.",
+    "tags": [
+      "family:object-lifecycle",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "object-lifecycle-d07",
+    "workspace": "primary",
+    "title": "Attachment download bandwidth accounting",
+    "content": "Download metering records transferred bytes and region for original files and previews separately. High bandwidth can trigger delivery optimization work. Metering does not change retention state, remove document references, or authorize deletion of uploaded originals.",
+    "tags": [
+      "family:object-lifecycle",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "incident-handoff-d01",
+    "workspace": "primary",
+    "title": "Production incident handoff requires acknowledged ownership",
+    "content": "The fictional Alder operations team transfers an active incident only after the incoming commander explicitly acknowledges ownership. The outgoing commander remains responsible until that acknowledgement is recorded. The handoff includes current impact, mitigations attempted, unresolved risks, and the next scheduled update. A shift calendar entry alone does not transfer command.",
+    "tags": [
+      "family:incident-handoff",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "incident-handoff-d02",
+    "workspace": "primary",
+    "title": "Perform an active incident commander handoff",
+    "content": "The outgoing commander posts a concise impact and mitigation summary, open risks, and the time of the next stakeholder update in the incident record. Ask the incoming commander to acknowledge ownership there. Remain available and continue required updates until acknowledgement appears; escalate if the incoming commander cannot take over.",
+    "tags": [
+      "family:incident-handoff",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "incident-handoff-d03",
+    "workspace": "primary",
+    "title": "Routine on-call shift changes use the rota",
+    "content": "For a quiet service with no active incident, the scheduled on-call shift begins at the rota boundary and normal alert routing changes automatically. This routine shift policy does not transfer command of an ongoing production incident, which requires a separate acknowledged handoff.",
+    "tags": [
+      "family:incident-handoff",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "incident-handoff-d04",
+    "workspace": "primary",
+    "title": "Training incident exercise rotates roles on a timer",
+    "content": "A tabletop exercise swaps incident roles every fifteen minutes to expose participants to different responsibilities. The timer is part of the classroom game and all customer impact is simulated. Production incident command is not transferred merely because an exercise-style timer elapsed.",
+    "tags": [
+      "family:incident-handoff",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "incident-handoff-d05",
+    "workspace": "primary",
+    "title": "Incident ownership and update-gap dashboard",
+    "content": "The operations dashboard flags incidents with an unacknowledged proposed commander change or an overdue stakeholder update. The outgoing commander remains listed as owner while acknowledgement is missing. This view helps detect handoff gaps but cannot itself acknowledge a new commander.",
+    "tags": [
+      "family:incident-handoff",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "incident-handoff-d06",
+    "workspace": "primary",
+    "title": "Why active incident ownership must be explicit",
+    "content": "Past simulated drills showed that both commanders can assume the other is updating stakeholders when a shift ends. Requiring explicit acknowledgement closes that gap. Including impact, failed mitigations, and open risks reduces repeated experiments and keeps the incoming commander aware of the current situation.",
+    "tags": [
+      "family:incident-handoff",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "incident-handoff-d07",
+    "workspace": "primary",
+    "title": "Post-incident review facilitator assignment",
+    "content": "After the service is stable and the incident is closed, the review coordinator assigns a facilitator to collect lessons. Review facilitation is a separate role from active incident command. Assigning a facilitator does not relieve an outgoing commander during an unresolved incident.",
+    "tags": [
+      "family:incident-handoff",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "schema-contracts-d01",
+    "workspace": "primary",
+    "title": "Public event schema changes use additive compatibility",
+    "content": "The fictional Willow event API changes public event schemas by adding optional fields first. Publishers keep existing field names and meanings while subscribers adopt the new field. Removing an old field requires a new event major version and a completed consumer migration. A producer-only deployment cannot approve a breaking change.",
+    "tags": [
+      "family:schema-contracts",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "schema-contracts-d02",
+    "workspace": "primary",
+    "title": "Retire a field from a public event contract",
+    "content": "Inventory subscribing consumers, publish a new major event version, and run old and new versions during migration. Confirm each consumer has switched before stopping the old version. Keep the previous field semantics intact while any subscriber still depends on that contract. Record consumer acknowledgements in the migration checklist.",
+    "tags": [
+      "family:schema-contracts",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "schema-contracts-d03",
+    "workspace": "primary",
+    "title": "Internal analytics columns can be renamed in a scheduled rebuild",
+    "content": "The isolated analytics table is rebuilt nightly and has one owned query consumer. Its coordinated rebuild may rename columns after that consumer changes. This private table workflow does not govern public events with independently deployed subscribers.",
+    "tags": [
+      "family:schema-contracts",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "schema-contracts-d04",
+    "workspace": "primary",
+    "title": "Contract tutorial uses destructive sample edits",
+    "content": "The event-schema tutorial invites learners to remove sample fields so validation failures are visible. The exercise uses an in-memory publisher and subscriber and has no external consumers. Tutorial edits are examples of breaking changes, not the approved migration procedure for public events.",
+    "tags": [
+      "family:schema-contracts",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "schema-contracts-d05",
+    "workspace": "primary",
+    "title": "Public event consumer compatibility report",
+    "content": "The compatibility report lists subscriber versions, optional-field adoption, and acknowledgement of new major versions. A zero producer error count does not prove every subscriber migrated. The report is checked before old event versions are retired and points to any still-dependent consumer.",
+    "tags": [
+      "family:schema-contracts",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "schema-contracts-d06",
+    "workspace": "primary",
+    "title": "Reason public events retain field meaning during migration",
+    "content": "Subscribers may deploy days after the publisher and can replay older events. Keeping field meanings stable avoids silently misinterpreting replayed payloads. Optional additions provide a safe overlap; removing or repurposing a field requires a major version with an explicit consumer migration.",
+    "tags": [
+      "family:schema-contracts",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "schema-contracts-d07",
+    "workspace": "primary",
+    "title": "Schema registry display labels",
+    "content": "The registry UI permits changing a human-readable display label without altering the serialized event field name. Display labels improve documentation and do not change wire contracts. Renaming a display label must not be mistaken for retiring a required field from a public payload.",
+    "tags": [
+      "family:schema-contracts",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "feature-entitlements-d01",
+    "workspace": "primary",
+    "title": "Paid export entitlement is checked at execution time",
+    "content": "The fictional Elm reporting service checks the workspace paid-export entitlement when an export job begins execution, not just when the job is scheduled. A workspace that lost the entitlement while queued receives a denied job result without generating the export. User interface visibility and a feature rollout flag cannot grant the paid entitlement.",
+    "tags": [
+      "family:feature-entitlements",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "feature-entitlements-d02",
+    "workspace": "primary",
+    "title": "Handle an export queued before entitlement removal",
+    "content": "When a queued export reaches a worker, fetch the current workspace entitlement from the authoritative entitlement service. If paid export is no longer allowed, mark the job denied and record the policy reason. Do not use the scheduler cached plan snapshot or a visible export button as authorization to generate the file.",
+    "tags": [
+      "family:feature-entitlements",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "feature-entitlements-d03",
+    "workspace": "primary",
+    "title": "Beta feature rollout flag controls interface exposure",
+    "content": "The export beta flag determines whether selected workspaces see a new export interface. It is a product rollout control and does not encode paid access rights. Enabling the beta flag for a workspace cannot override the reporting worker entitlement check.",
+    "tags": [
+      "family:feature-entitlements",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "feature-entitlements-d04",
+    "workspace": "primary",
+    "title": "Sales demonstration exports use isolated sample workspaces",
+    "content": "The sales demo has a synthetic workspace with preloaded sample reports and no connection to customer billing. Presenters may show an export button regardless of plan changes in the demo. This isolated demonstration does not establish export rights for a queued customer job.",
+    "tags": [
+      "family:feature-entitlements",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "feature-entitlements-d05",
+    "workspace": "primary",
+    "title": "Export entitlement denial audit",
+    "content": "The reporting audit log records the workspace identifier, entitlement decision version, and reason for jobs denied at execution time. It compares scheduled and executed plan state to explain changes while queued. The log records decisions but cannot itself grant a workspace the paid export entitlement.",
+    "tags": [
+      "family:feature-entitlements",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "feature-entitlements-d06",
+    "workspace": "primary",
+    "title": "Why scheduled plan snapshots cannot authorize exports",
+    "content": "Jobs may remain queued after a workspace changes subscription or access rights. Rechecking the authoritative entitlement at execution prevents an old scheduling snapshot from granting a feature the workspace no longer has. Rollout flags and button visibility are intentionally separate from paid authorization.",
+    "tags": [
+      "family:feature-entitlements",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "feature-entitlements-d07",
+    "workspace": "primary",
+    "title": "Export worker concurrency limits",
+    "content": "The reporting scheduler limits simultaneous jobs per workspace to protect CPU and storage capacity. A concurrency slot determines when a job runs, not whether the workspace is entitled to export. Waiting longer in the queue never bypasses the execution-time access check.",
+    "tags": [
+      "family:feature-entitlements",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "edge-rate-limiting-d01",
+    "workspace": "primary",
+    "title": "Public API rate limits use authenticated workspace identity",
+    "content": "The fictional Juniper edge gateway applies the public API request budget to the authenticated workspace identifier. Multiple users and source addresses from the same workspace share that budget. Source address is used only for a separate unauthenticated abuse guard. Exceeding the workspace budget returns a retry-after delay and does not spill requests into another workspace bucket.",
+    "tags": [
+      "family:edge-rate-limiting",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "edge-rate-limiting-d02",
+    "workspace": "primary",
+    "title": "Investigate a workspace API rate-limit response",
+    "content": "For a signed API request receiving a retry-after response, inspect the authenticated workspace budget and its recent request count. Ask clients to wait for the indicated delay and coordinate their retries. Changing source addresses does not create a new paid workspace budget. Verify identity extraction before increasing any configured limit.",
+    "tags": [
+      "family:edge-rate-limiting",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "edge-rate-limiting-d03",
+    "workspace": "primary",
+    "title": "Anonymous login abuse guard keys on source address",
+    "content": "Before login identifies a workspace, the abuse guard limits attempts by source address and risk signal. This coarse guard protects the authentication endpoint only. Its source-address bucket is not the approved metering key for authenticated public API requests.",
+    "tags": [
+      "family:edge-rate-limiting",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "edge-rate-limiting-d04",
+    "workspace": "primary",
+    "title": "Internal load generator uses a dedicated unlimited route",
+    "content": "The isolated load laboratory grants its synthetic traffic generator an unlimited test route to measure gateway capacity. That route has no access to customer data and is unavailable on public ingress. Its bypass cannot be used by a production API client receiving a workspace budget response.",
+    "tags": [
+      "family:edge-rate-limiting",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "edge-rate-limiting-d05",
+    "workspace": "primary",
+    "title": "Workspace request-budget observability",
+    "content": "The gateway dashboard reports consumed budget, throttled request count, and retry-after distribution by authenticated workspace. Anonymous login abuse metrics are displayed separately. Aggregating only by address can hide a customer that sends requests from many machines and must not drive paid API budget decisions.",
+    "tags": [
+      "family:edge-rate-limiting",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "edge-rate-limiting-d06",
+    "workspace": "primary",
+    "title": "Reason API budgets follow workspace rather than address",
+    "content": "A workspace may have many employees and outbound addresses, while unrelated customers can share one network address. Using authenticated workspace identity aligns the request budget with the service contract. Address-based quotas were rejected for signed API traffic because changing networks should not change customer capacity.",
+    "tags": [
+      "family:edge-rate-limiting",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "edge-rate-limiting-d07",
+    "workspace": "primary",
+    "title": "Edge response compression policy",
+    "content": "The gateway compresses large JSON responses when clients advertise a supported encoding. Compression reduces bandwidth but does not change how requests are authenticated or counted against a workspace budget. A smaller response remains one request for rate-limit accounting.",
+    "tags": [
+      "family:edge-rate-limiting",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "queue-fairness-d01",
+    "workspace": "primary",
+    "title": "Bulk task queue uses weighted workspace round robin",
+    "content": "The fictional Ash bulk processor chooses ready tasks with weighted round robin across workspaces. Each workspace has a bounded number of concurrent workers, so one large submission cannot occupy the entire fleet. Within a workspace, ready tasks retain submission order. A task blocked on a dependency is skipped until it becomes ready.",
+    "tags": [
+      "family:queue-fairness",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "queue-fairness-d02",
+    "workspace": "primary",
+    "title": "Respond to a noisy workspace in the bulk task queue",
+    "content": "Inspect per-workspace ready depth, running tasks, and assigned weight. Confirm the scheduler rotates among ready workspaces and respects each concurrency bound. A growing queue from one workspace should wait its turn rather than force every other workspace behind it. Keep blocked tasks out of the ready set.",
+    "tags": [
+      "family:queue-fairness",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "queue-fairness-d03",
+    "workspace": "primary",
+    "title": "Single-workspace maintenance queue is strict FIFO",
+    "content": "The maintenance tool runs tasks for one isolated workspace in submission order and has no cross-workspace fairness requirement. Strict global first-in-first-out behavior from this tool cannot be applied to the shared bulk fleet, where a large customer batch could starve other workspaces.",
+    "tags": [
+      "family:queue-fairness",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "queue-fairness-d04",
+    "workspace": "primary",
+    "title": "Emergency operator tasks have a separate queue",
+    "content": "Emergency repair jobs use a small operator-only queue with reserved workers. They do not consume the customer bulk queue weights and cannot be submitted by workspaces. The emergency priority route does not grant an ordinary large customer batch priority over other workspaces.",
+    "tags": [
+      "family:queue-fairness",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "queue-fairness-d05",
+    "workspace": "primary",
+    "title": "Bulk queue fairness monitoring",
+    "content": "The bulk dashboard records oldest ready task age and active worker count per workspace, plus dependency-blocked task counts. Unequal queue lengths alone do not prove unfairness because submissions differ. Persistent ready wait for a small workspace while a larger one consumes every worker indicates a scheduling or concurrency-bound defect.",
+    "tags": [
+      "family:queue-fairness",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "queue-fairness-d06",
+    "workspace": "primary",
+    "title": "Why the bulk scheduler avoids one global FIFO",
+    "content": "A customer may submit thousands of independent tasks at once. A global FIFO would put smaller customer jobs behind the entire large batch. Weighted workspace round robin and concurrency bounds preserve shared access while maintaining local submission order for ready tasks inside each workspace.",
+    "tags": [
+      "family:queue-fairness",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "queue-fairness-d07",
+    "workspace": "primary",
+    "title": "Bulk task payload storage format",
+    "content": "Task payloads are stored separately from scheduling metadata and retrieved when a worker starts. Changing payload compression can reduce storage cost but does not assign a workspace weight, unblock dependencies, or determine the next ready workspace selected by the scheduler.",
+    "tags": [
+      "family:queue-fairness",
+      "synthetic-v1",
+      "engineering-operations"
+    ]
+  },
+  {
+    "id": "payment-idempotency-foreign",
+    "workspace": "foreign",
+    "title": "Other workspace: Checkout retry idempotency decision",
+    "content": "This is a fictional independent workspace policy and must not answer primary workspace questions. The fictional Aster checkout service accepts a client operation key for each charge request. The approved retry policy stores the first completed response for 24 hours and returns that response for another request with the same key and identical payload. A reused key with a different amount is rejected. The database commits the operation key and charge together before the response is sent. Its owners make their own operating decisions; matching words do not grant access across the workspace boundary.",
+    "tags": [
+      "family:payment-idempotency",
+      "synthetic-v1",
+      "scope-distractor"
+    ]
+  },
+  {
+    "id": "tenant-routing-foreign",
+    "workspace": "foreign",
+    "title": "Other workspace: Tenant relocation reads require a routing epoch",
+    "content": "This is a fictional independent workspace policy and must not answer primary workspace questions. The fictional Cedar workspace service moves tenants between database shards. During relocation, every read carries the tenant routing epoch. A request with a stale epoch is redirected to the coordinator, which supplies the current shard and epoch. The old shard never falls back to searching other tenants when it cannot find the record. Its owners make their own operating decisions; matching words do not grant access across the workspace boundary.",
+    "tags": [
+      "family:tenant-routing",
+      "synthetic-v1",
+      "scope-distractor"
+    ]
+  },
+  {
+    "id": "credential-rotation-foreign",
+    "workspace": "foreign",
+    "title": "Other workspace: Service signing key rotation overlap decision",
+    "content": "This is a fictional independent workspace policy and must not answer primary workspace questions. The fictional Finch internal API rotates its service signing keys with a 30-minute overlap. Verifiers accept the previous and current public key during that interval, while signers switch immediately to the current private key. After the overlap, the previous public key is removed. Private keys never appear in configuration logs. Its owners make their own operating decisions; matching words do not grant access across the workspace boundary.",
+    "tags": [
+      "family:credential-rotation",
+      "synthetic-v1",
+      "scope-distractor"
+    ]
+  },
+  {
+    "id": "ledger-reconciliation-foreign",
+    "workspace": "foreign",
+    "title": "Other workspace: Daily settlement reconciliation requires immutable corrections",
+    "content": "This is a fictional independent workspace policy and must not answer primary workspace questions. The fictional Moss settlement ledger reconciles daily totals against the processor settlement file. A mismatch freezes that settlement batch for review. Approved corrections are appended as new adjustment entries linked to the original entry; existing ledger amounts are never overwritten. A second reviewer approves release of the frozen batch. Its owners make their own operating decisions; matching words do not grant access across the workspace boundary.",
+    "tags": [
+      "family:ledger-reconciliation",
+      "synthetic-v1",
+      "scope-distractor"
+    ]
+  },
+  {
+    "id": "cache-consistency-foreign",
+    "workspace": "foreign",
+    "title": "Other workspace: Profile cache invalidation follows committed version numbers",
+    "content": "This is a fictional independent workspace policy and must not answer primary workspace questions. The fictional Lark profile service assigns a monotonic version to each committed profile update. Cache invalidation events carry the profile identifier and new version. A cache node discards an entry only when the incoming version is newer than its stored version; a delayed older event cannot replace a newer profile. Reads may fall back to the primary database on a cache miss. Its owners make their own operating decisions; matching words do not grant access across the workspace boundary.",
+    "tags": [
+      "family:cache-consistency",
+      "synthetic-v1",
+      "scope-distractor"
+    ]
+  },
+  {
+    "id": "canary-rollout-foreign",
+    "workspace": "foreign",
+    "title": "Other workspace: API canary rollback uses error-budget burn gates",
+    "content": "This is a fictional independent workspace policy and must not answer primary workspace questions. The fictional Birch API release begins at five percent of eligible traffic. Promotion is blocked when the canary error-budget burn exceeds twice the stable cohort for ten consecutive minutes, or when latency breaches the published limit. A failed gate routes traffic back to the stable revision. Operators compare cohorts before attributing a fleet-wide outage to the canary. Its owners make their own operating decisions; matching words do not grant access across the workspace boundary.",
+    "tags": [
+      "family:canary-rollout",
+      "synthetic-v1",
+      "scope-distractor"
+    ]
+  },
+  {
+    "id": "backup-restoration-foreign",
+    "workspace": "foreign",
+    "title": "Other workspace: Backup restoration requires a quarantine validation stage",
+    "content": "This is a fictional independent workspace policy and must not answer primary workspace questions. The fictional Rowan document store restores backups into an isolated quarantine database before changing the live service. Operators verify the manifest checksum, schema version, row counts, and sampled document relationships. Only a validated restore is eligible for a planned cutover. Backup existence alone does not prove recoverability. Its owners make their own operating decisions; matching words do not grant access across the workspace boundary.",
+    "tags": [
+      "family:backup-restoration",
+      "synthetic-v1",
+      "scope-distractor"
+    ]
+  },
+  {
+    "id": "message-ordering-foreign",
+    "workspace": "foreign",
+    "title": "Other workspace: Order state events use per-order sequence guards",
+    "content": "This is a fictional independent workspace policy and must not answer primary workspace questions. The fictional Spruce order processor requires a monotonically increasing sequence for each order. A consumer applies only the next expected sequence, buffers a later sequence briefly, and requests the missing event if the gap persists. Duplicate sequences are acknowledged without reapplying their effect. There is no ordering guarantee across different orders. Its owners make their own operating decisions; matching words do not grant access across the workspace boundary.",
+    "tags": [
+      "family:message-ordering",
+      "synthetic-v1",
+      "scope-distractor"
+    ]
+  },
+  {
+    "id": "certificate-renewal-archived",
+    "workspace": "primary",
+    "title": "Archived proposal: Public TLS certificate renewal requires challenge readiness",
+    "content": "This proposal was archived before approval and must not answer requests for current active workspace policy. The fictional Hazel gateway renews public TLS certificates seven days before expiration. Before requesting a replacement, the operator verifies that the domain challenge route reaches the renewal worker on every public ingress address. The old certificate remains served until the replacement has passed a handshake probe on all gateway nodes. The archived draft is retained as historical material only; the active decision and runbook govern current operation.",
+    "tags": [
+      "family:certificate-renewal",
+      "synthetic-v1",
+      "scope-distractor"
+    ],
+    "archived": true
+  },
+  {
+    "id": "query-planning-archived",
+    "workspace": "primary",
+    "title": "Archived proposal: Activity feed queries require a tenant-leading composite index",
+    "content": "This proposal was archived before approval and must not answer requests for current active workspace policy. The fictional Ivy activity feed filters by tenant identifier and pages by creation time plus record identifier. The approved database index orders columns as tenant identifier, creation time descending, and record identifier descending. Pagination uses the last visible tuple rather than a large offset. Global time-only indexes are not sufficient for tenant-scoped feeds. The archived draft is retained as historical material only; the active decision and runbook govern current operation.",
+    "tags": [
+      "family:query-planning",
+      "synthetic-v1",
+      "scope-distractor"
+    ],
+    "archived": true
+  },
+  {
+    "id": "object-lifecycle-archived",
+    "workspace": "primary",
+    "title": "Archived proposal: Uploaded object deletion waits for reference clearance",
+    "content": "This proposal was archived before approval and must not answer requests for current active workspace policy. The fictional Maple attachment store marks an object pending deletion when its last visible document reference is removed. The sweeper waits 48 hours, rechecks active references and legal holds, and deletes only if both checks allow it. Restoring a document during the delay cancels pending deletion of its attachment. The archived draft is retained as historical material only; the active decision and runbook govern current operation.",
+    "tags": [
+      "family:object-lifecycle",
+      "synthetic-v1",
+      "scope-distractor"
+    ],
+    "archived": true
+  },
+  {
+    "id": "incident-handoff-archived",
+    "workspace": "primary",
+    "title": "Archived proposal: Production incident handoff requires acknowledged ownership",
+    "content": "This proposal was archived before approval and must not answer requests for current active workspace policy. The fictional Alder operations team transfers an active incident only after the incoming commander explicitly acknowledges ownership. The outgoing commander remains responsible until that acknowledgement is recorded. The handoff includes current impact, mitigations attempted, unresolved risks, and the next scheduled update. A shift calendar entry alone does not transfer command. The archived draft is retained as historical material only; the active decision and runbook govern current operation.",
+    "tags": [
+      "family:incident-handoff",
+      "synthetic-v1",
+      "scope-distractor"
+    ],
+    "archived": true
+  },
+  {
+    "id": "schema-contracts-archived",
+    "workspace": "primary",
+    "title": "Archived proposal: Public event schema changes use additive compatibility",
+    "content": "This proposal was archived before approval and must not answer requests for current active workspace policy. The fictional Willow event API changes public event schemas by adding optional fields first. Publishers keep existing field names and meanings while subscribers adopt the new field. Removing an old field requires a new event major version and a completed consumer migration. A producer-only deployment cannot approve a breaking change. The archived draft is retained as historical material only; the active decision and runbook govern current operation.",
+    "tags": [
+      "family:schema-contracts",
+      "synthetic-v1",
+      "scope-distractor"
+    ],
+    "archived": true
+  },
+  {
+    "id": "feature-entitlements-archived",
+    "workspace": "primary",
+    "title": "Archived proposal: Paid export entitlement is checked at execution time",
+    "content": "This proposal was archived before approval and must not answer requests for current active workspace policy. The fictional Elm reporting service checks the workspace paid-export entitlement when an export job begins execution, not just when the job is scheduled. A workspace that lost the entitlement while queued receives a denied job result without generating the export. User interface visibility and a feature rollout flag cannot grant the paid entitlement. The archived draft is retained as historical material only; the active decision and runbook govern current operation.",
+    "tags": [
+      "family:feature-entitlements",
+      "synthetic-v1",
+      "scope-distractor"
+    ],
+    "archived": true
+  },
+  {
+    "id": "edge-rate-limiting-archived",
+    "workspace": "primary",
+    "title": "Archived proposal: Public API rate limits use authenticated workspace identity",
+    "content": "This proposal was archived before approval and must not answer requests for current active workspace policy. The fictional Juniper edge gateway applies the public API request budget to the authenticated workspace identifier. Multiple users and source addresses from the same workspace share that budget. Source address is used only for a separate unauthenticated abuse guard. Exceeding the workspace budget returns a retry-after delay and does not spill requests into another workspace bucket. The archived draft is retained as historical material only; the active decision and runbook govern current operation.",
+    "tags": [
+      "family:edge-rate-limiting",
+      "synthetic-v1",
+      "scope-distractor"
+    ],
+    "archived": true
+  },
+  {
+    "id": "queue-fairness-archived",
+    "workspace": "primary",
+    "title": "Archived proposal: Bulk task queue uses weighted workspace round robin",
+    "content": "This proposal was archived before approval and must not answer requests for current active workspace policy. The fictional Ash bulk processor chooses ready tasks with weighted round robin across workspaces. Each workspace has a bounded number of concurrent workers, so one large submission cannot occupy the entire fleet. Within a workspace, ready tasks retain submission order. A task blocked on a dependency is skipped until it becomes ready. The archived draft is retained as historical material only; the active decision and runbook govern current operation.",
+    "tags": [
+      "family:queue-fairness",
+      "synthetic-v1",
+      "scope-distractor"
+    ],
+    "archived": true
+  }
+]

@@ -7,6 +7,7 @@ PACK_DIR="$WORKSPACE/packed"
 RUNTIME_DIR="$WORKSPACE/runtime"
 mkdir -p "$PACK_DIR"
 
+
 cleanup() {
   local exit_code=$?
   local cleanup_failed=0
@@ -55,6 +56,15 @@ cleanup() {
   exit "$exit_code"
 }
 trap cleanup EXIT
+
+if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+  if [[ -n "${HORIZONLAYER_RECOVERY_REPORT:-}" ]]; then
+    node --input-type=module -e 'import {readFileSync,writeFileSync} from "node:fs"; const p=process.env.HORIZONLAYER_RECOVERY_REPORT; const r=JSON.parse(readFileSync(p,"utf8")); r.status="blocked"; r.blocker="A running Docker Engine with Compose is required; no packed recovery stages ran"; writeFileSync(p,JSON.stringify(r,null,2)+"\n",{mode:0o600});'
+  fi
+  echo "Recovery smoke requires a running Docker Engine with Compose" >&2
+  exit 2
+fi
+
 
 cd "$PROJECT_DIR"
 echo "Packing the public CLI for recovery smoke..."

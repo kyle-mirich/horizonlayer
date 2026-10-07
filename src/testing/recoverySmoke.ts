@@ -3,6 +3,7 @@ import { createConnection, createServer } from 'node:net';
 import { lstat, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { performance } from 'node:perf_hooks';
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import pg from 'pg';
@@ -24,6 +25,7 @@ import {
   type JsonObject,
 } from './mcpClient.js';
 import type { LocalRuntimeConfig } from '../localRuntime.js';
+import { sourceEvidence, writeEvidence } from './benchmarks/evidence.js';
 
 const { Client: PostgresClient } = pg;
 function requiredEnvironment(name: string): string {
@@ -45,6 +47,20 @@ const restoreFailurePayload = join(smokeRoot, 'restore-failure.dump');
 const collisionProbe = join(smokeRoot, 'lock-probe.hlbackup');
 const tokenA = `cedarharbor${process.pid}a`;
 const tokenB = `violetforge${process.pid}b`;
+const commandMeasurements: Array<{ command: string; elapsed_ms: number; exit_code: number }> = [];
+const recoverySource = sourceEvidence();
+const recoveryStartedAt = new Date().toISOString();
+
+async function saveRecoveryEvidence(status: 'passed' | 'failed', proofs?: Record<string, boolean>): Promise<void> {
+  const reportPath = process.env.HORIZONLAYER_RECOVERY_REPORT;
+  if (!reportPath) return;
+  await writeEvidence(reportPath, {
+    format_version: 1, source: recoverySource, status, started_at: recoveryStartedAt,
+    implementation: 'packed public CLI; real Docker-managed PostgreSQL/Qdrant/local embeddings',
+    command_measurements: commandMeasurements, proofs: proofs ?? null,
+    note: 'Expected nonzero preview/refusal commands are asserted by the smoke; paths, credentials, and backup bytes are excluded',
+  });
+}
 
 interface CommandResult {
   code: number;
@@ -90,6 +106,7 @@ function collect(stream: NodeJS.ReadableStream | null): Promise<string> {
 }
 
 async function runCli(args: string[], expectedCode = 0): Promise<CommandResult> {
+  const start = performance.now();
   const child = spawn(process.execPath, [launcher, ...args], {
     cwd: smokeRoot,
     env: cleanEnvironment(),
@@ -102,6 +119,7 @@ async function runCli(args: string[], expectedCode = 0): Promise<CommandResult> 
     child.once('close', (value) => resolve(value ?? 1));
   });
   const result = { code, stderr: await stderr, stdout: await stdout };
+  commandMeasurements.push({ command: `${args[0]}${args.includes('--yes') ? ' --yes' : ''}`, elapsed_ms: performance.now() - start, exit_code: code });
   assert(
     code === expectedCode,
     `horizonlayer ${args.join(' ')} exited ${code}, expected ${expectedCode}\n${result.stderr}`
@@ -775,6 +793,7 @@ async function observeRecovery(path: string): Promise<{
   result: CommandResult;
   sawUnavailable: boolean;
 }> {
+  const start = performance.now();
   const config = await runtimeConfig();
   assert(await portOpen(config.database_port), 'published PostgreSQL was not reachable before recovery');
   const child = spawn(process.execPath, [launcher, 'recover', path, '--yes'], {
@@ -797,6 +816,8 @@ async function observeRecovery(path: string): Promise<{
     await sleep(50);
   }
   const result = { code: await exit, stderr: await stderr, stdout: await stdout };
+  commandMeasurements.push({ command: `recover --yes observed-${commandMeasurements.filter((item) => item.command.startsWith('recover --yes observed-')).length + 1}`,
+    elapsed_ms: performance.now() - start, exit_code: result.code });
   assert(
     await waitForPortOpen(config.database_port),
     `recovery did not restore published PostgreSQL\n${result.stderr}`
@@ -1105,6 +1126,25 @@ async function main(): Promise<void> {
   await runCli(['reset', '--yes']);
   await assertManagedDockerResourcesRemoved(finalComposeProject);
 
+  const proofs = {
+    artifact_permissions_and_collision: true,
+    canonical_sql_mcp_dashboard: true,
+    checksum_refusal_preserves_runtime: true,
+    concurrent_snapshot_invariant: true,
+    derived_index_rebuilt_from_canonical: true,
+    lifecycle_lock_refusal: true,
+    packed_public_cli: true,
+    packaged_selected_module_mcp: true,
+    postgres_owner_normalization: true,
+    recovery_port_isolation: true,
+    reset_survival: true,
+    safety_backup_round_trip: true,
+    signal_safe_backup_and_recovery: true,
+    issues_and_cross_domain_links: true,
+    transactional_restore_failure_preserves_state: true,
+    zero_leaked_docker_resources: true,
+  };
+  await saveRecoveryEvidence('passed', proofs);
   console.log(JSON.stringify({
     artifacts: { defaultA, explicitBackup, preResetBackup, safetyBackup },
     packedLauncher: launcher,
@@ -1132,5 +1172,5 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.error(`Recovery smoke failed: ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
+  saveRecoveryEvidence('failed').finally(() => { process.exit(1); });
 });

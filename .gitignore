@@ -7,3 +7,7 @@ dist/
 .opencode/
 .stryker-tmp/
 reports/
+
+.benchmark-model-cache/
+benchmarks/results/
+coverage/
