@@ -2,7 +2,7 @@
 
 ## Matt Pocock engineering skills
 
-The following bundled workflow skill directories are adapted from [Matt Pocock's skills repository](https://github.com/mattpocock/skills): `code-review`, `codebase-design`, `diagnosing-bugs`, `domain-modeling`, `grill-me`, `grill-with-docs`, `grilling`, `implement`, `improve-codebase-architecture`, `prototype`, `research`, `resolving-merge-conflicts`, `tdd`, `to-spec`, `to-tickets`, `triage`, and `wayfinder`. Copyright (c) 2026 Matt Pocock. The source repository is available under the MIT License.
+The following bundled workflow skill directories are adapted from [Matt Pocock's skills repository](https://github.com/mattpocock/skills): `code-review`, `codebase-design`, `diagnosing-bugs`, `domain-modeling`, `grill-with-docs`, `implement`, `improve-codebase-architecture`, `prototype`, `research`, `resolving-merge-conflicts`, `tdd`, `to-spec`, `to-tickets`, `triage`, and `wayfinder`. Copyright (c) 2026 Matt Pocock. The source repository is available under the MIT License.
 
 The `using-horizonlayer`, `knowledge`, and `issues` skills are HorizonLayer-authored integration and product guidance and are not part of this third-party attribution.
 

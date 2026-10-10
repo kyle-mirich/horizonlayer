@@ -76,7 +76,7 @@ describe('HomeView', () => {
 
     expect(screen.getByRole('heading', { name: 'Research garden' })).toBeTruthy();
     expect(screen.getByText('Shared context for agents')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'This workspace is ready.' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'No recent pages or databases.' })).toBeTruthy();
     await user.click(screen.getByRole('button', { name: /Create the first page/ }));
     expect(onCreatePage).toHaveBeenCalledTimes(1);
   });

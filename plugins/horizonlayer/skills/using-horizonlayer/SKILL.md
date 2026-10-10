@@ -51,11 +51,11 @@ HorizonLayer is a local-first MCP server for durable coding-agent context and wo
 - Use **To Spec** when the conversation is understood and needs a durable specification.
 - Use **To Tickets** when the plan is understood and needs independently verifiable implementation slices.
 - Use **Implement** when a specification or build ticket is ready; drive TDD at an agreed seam and finish with code review.
-- Use **Diagnosing Bugs** when the work starts from a failure or regression and needs a red-capable feedback loop.
+- Use **Diagnosing Bugs** when the work starts from a failure or regression and needs a reproducible failure and a regression test.
 - Use **Improve Codebase Architecture** when the question is where to deepen a shallow module or improve locality and leverage.
 
-## Honest boundaries
+## Limits
 
 HorizonLayer provides context storage, retrieval, issue coordination, MCP integration, and local runtime lifecycle. It does not itself generate code, call an LLM, automatically complete Issues, provide hosted multi-tenant authorization, or replace a project's CI/CD system. Archive and restore are the public record lifecycle; Runtime Recovery is the separate operation that recreates the managed local database from a trusted Backup.
 
-When explaining a workflow, name the scope, the MCP tool/action, the expected result, and the verification step. Prefer a small concrete path over a catalog dump, and say when a capability is optional, local-only, or outside the current product.
+When explaining a workflow, show one concrete path with its scope, MCP tool/action, expected result, and verification step. Say when a capability is optional, local-only, or outside the current product.

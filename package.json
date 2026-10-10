@@ -49,6 +49,7 @@
     "build:server": "tsc",
     "build:dashboard": "vite build --config dashboard/vite.config.ts",
     "demo:agent": "tsx src/testing/agentDemo.ts",
+    "demo:handoff": "bash scripts/demo-handoff.sh",
     "lint": "eslint . --max-warnings=0",
     "test": "npm run test:unit",
     "test:unit": "vitest run --exclude \"**/*.integration.test.ts\"",

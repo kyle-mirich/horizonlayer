@@ -10,7 +10,7 @@
 6. Confirmed recovery keeps a safety Backup, restores PostgreSQL atomically, validates canonical data, clears Qdrant, and restarts the services.
 7. To erase this managed runtime, first run `npx -y horizonlayer@latest backup` and `npx -y horizonlayer@latest doctor`, then confirm with `npx -y horizonlayer@latest reset --yes`. It removes that runtime's services, volumes, and saved configuration; the host-side `backups/` directory survives.
 
-See the [README quickstart](../README.md#local-quickstart) for complete setup and recovery guidance.
+See the [README quickstart](../README.md#local-quickstart) for setup and the [backup and recovery guide](backup-and-recovery.md) for recovery guidance.
 
 ## Typed knowledge workflow
 

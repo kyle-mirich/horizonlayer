@@ -76,7 +76,6 @@ export function HomeView({
       <header className="home-view__header">
         <span className="workspace-mark workspace-mark--page" aria-hidden="true">{workspaceMark(workspace)}</span>
         <div>
-          <p className="eyebrow">Workspace</p>
           <h1>{workspace.name}</h1>
           {workspace.description ? <p>{workspace.description}</p> : null}
         </div>
@@ -113,7 +112,6 @@ export function HomeView({
       <section className="recent-section" aria-labelledby="recent-heading">
         <header className="section-heading">
           <div>
-            <p className="eyebrow">Workspace index</p>
             <h2 id="recent-heading">Recently changed</h2>
           </div>
           {!loading ? (
@@ -128,7 +126,7 @@ export function HomeView({
         {!loading && recent.length === 0 ? (
           <div className="empty-invitation">
             <div className="empty-invitation__rings" aria-hidden="true"><i /><i /><i /></div>
-            <h3>This workspace is ready.</h3>
+            <h3>No recent pages or databases.</h3>
             <p>Create a page for open-ended context or a database for typed records.</p>
             <button className="button button--primary" onClick={() => void onCreatePage()} type="button">
               <Icon name="plus" size={16} /> Create the first page

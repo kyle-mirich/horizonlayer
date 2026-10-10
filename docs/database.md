@@ -2,7 +2,7 @@
 
 ## Canonical storage
 
-HorizonLayer uses PostgreSQL as its canonical local store. Every MCP and dashboard launch re-applies the canonical [`schema.sql`](../schema.sql) schema under an advisory lock. There is no migration or compatibility layer because HorizonLayer has no supported legacy installations yet. Docker-managed setup runs PostgreSQL locally, while the advanced path in the [README](../README.md#advanced-use-an-existing-postgresql-instance) can use a PostgreSQL instance you operate.
+HorizonLayer uses PostgreSQL as its canonical local store. Every MCP and dashboard launch re-applies the canonical [`schema.sql`](../schema.sql) schema under an advisory lock. There is no migration or compatibility layer because HorizonLayer has no supported legacy installations yet. Docker-managed setup runs PostgreSQL locally, while the advanced path in the [configuration guide](configuration.md#advanced-use-an-existing-postgresql-instance) can use a PostgreSQL instance you operate.
 
 Qdrant is optional and local by default. It holds a derived, rebuildable semantic index only; PostgreSQL remains authoritative. HorizonLayer does not provide hosted or multi-user database infrastructure.
 
@@ -28,4 +28,4 @@ Archive a Page's active child Pages and Blocks before archiving the Page. Archiv
 
 Issue creation, reparenting, project changes, and dependency changes serialize through an internal PostgreSQL coordination row held until the transaction ends so concurrent writes cannot create a parent or blocking cycle. Ordinary Issue title, status, and assignment updates do not acquire that guard. Transactions using an older repeatable-read or serializable snapshot can receive a retryable conflict; retry the whole transaction after rereading. An existing dependency can be archived to remove an edge from a stored cycle, and a parent can be detached to repair a stored ancestry cycle. Existing cycles are not repaired automatically.
 
-Archive and restore are the public lifecycle operations. Keep archived records out of normal queries unless you are auditing or restoring them. See the [quickstart](../README.md#local-quickstart) for a complete create/query example and the [local-reset guidance](../README.md#reset-local-development-data-safely) before removing local data.
+Archive and restore are the public lifecycle operations. Keep archived records out of normal queries unless you are auditing or restoring them. See the [quickstart](../README.md#local-quickstart) for a complete create/query example and the [local-reset guidance](configuration.md#reset-local-development-data-safely) before removing local data.
