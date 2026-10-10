@@ -62,7 +62,7 @@ afterEach(() => cleanup());
 describe('WorkspaceContent', () => {
   it('passes active resources into the home view and preserves its actions', () => {
     const { onCreatePage, onOpenSearch } = renderContent({ name: 'home' });
-    expect(screen.getByRole('heading', { name: 'This workspace is ready.' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'No recent pages or databases.' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Create the first page/ }));
     fireEvent.click(screen.getByRole('button', { name: /Search/ }));
     expect(onCreatePage).toHaveBeenCalledTimes(1);

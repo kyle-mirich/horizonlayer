@@ -1,0 +1,15 @@
+HorizonLayer / recorded MCP session handoff
+Scripted clients | PostgreSQL 17 | no LLM or embeddings
+
+SESSION A / capture a decision
+Saved decision: Use PostgreSQL as the source of truth
+Linked task: DEMO-1 / Document the search rebuild procedure
+Session A disconnected; its MCP process stopped.
+
+SESSION B / retrieve context in a fresh MCP process
+Found decision: Use PostgreSQL as the source of truth
+Read rationale: Keep canonical records in PostgreSQL. Rebuild the search index from those records.
+Claimed DEMO-1: in_progress / session-b
+Ready queue after claim: 0 tasks
+
+PASS / decision, rationale, and task link survived the process restart.

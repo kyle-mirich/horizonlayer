@@ -130,7 +130,7 @@ export function ArchiveView(props: ArchiveViewProps) {
     <main className="workspace-canvas archive-view" id="main-content">
       <header className="plain-page-header">
         <span className="entity-glyph entity-glyph--archive"><Icon name="archive" /></span>
-        <div><p className="eyebrow">Workspace</p><h1>Archive</h1><p>Restore anything you want back in circulation.</p></div>
+        <div><h1>Archive</h1><p>Archived pages and databases can be restored to the workspace.</p></div>
       </header>
 
       {props.loading ? <div className="home-skeleton"><i /><i /><i /></div> : null}
@@ -138,7 +138,7 @@ export function ArchiveView(props: ArchiveViewProps) {
         <div className="archive-empty">
           <Icon name="archive" size={24} />
           <h2>{canLoadOlder ? 'No recent items are archived' : 'Nothing archived'}</h2>
-          <p>{canLoadOlder ? 'Older items are loaded only when you ask.' : 'Archived pages and databases will wait here.'}</p>
+          <p>{canLoadOlder ? 'Older items are loaded only when you ask.' : 'Pages and databases you archive appear here.'}</p>
           {canLoadOlder ? (
             <button className="button button--quiet button--small" disabled={loadingOlder} onClick={() => void loadOlder()} type="button">
               {loadingOlder ? 'Checking…' : 'Check older items'}

@@ -1,23 +1,32 @@
 # HorizonLayer
 
-[![CI](https://github.com/kyle-mirich/horizonlayer/actions/workflows/ci.yml/badge.svg)](https://github.com/kyle-mirich/horizonlayer/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/horizonlayer)](https://www.npmjs.com/package/horizonlayer)
-[![license](https://img.shields.io/npm/l/horizonlayer)](LICENSE)
-[![node](https://img.shields.io/node/v/horizonlayer)](package.json)
+![HorizonLayer — Persistent knowledge. Shared work.](https://raw.githubusercontent.com/kyle-mirich/horizonlayer/main/docs/assets/horizonlayer-banner.png)
 
-HorizonLayer is a local PostgreSQL MCP server for coding-agent knowledge and issue tracking. PostgreSQL is canonical; Qdrant is an optional derived index for semantic retrieval.
+[![CI](https://github.com/kyle-mirich/horizonlayer/actions/workflows/ci.yml/badge.svg)](https://github.com/kyle-mirich/horizonlayer/actions/workflows/ci.yml) [![npm version](https://img.shields.io/npm/v/horizonlayer)](https://www.npmjs.com/package/horizonlayer) [![license](https://img.shields.io/npm/l/horizonlayer)](LICENSE) [![node](https://img.shields.io/node/v/horizonlayer)](package.json)
 
-> **Status:** Early release on the 0.x line. Bundled plugin manifests pin the exact package version for reproducible agent configurations; the commands below track `@latest`.
+HorizonLayer is a local MCP server for project knowledge and issue tracking. It stores data in PostgreSQL on your machine and exposes it through `knowledge` and `issues` MCP tools. Optional Qdrant-backed semantic search and a React dashboard are included for retrieval, inspection, and editing.
 
-## Why HorizonLayer exists
+Coding sessions end; project decisions and unfinished work should survive them. HorizonLayer lets the next session retrieve the rationale and claim a ready task through the same MCP connection.
 
-Coding agents lose context between sessions and coordinate poorly with each other. HorizonLayer gives them durable memory and shared work management through one MCP server:
+Explore the [engineering decisions](docs/engineering-notes.md), [retrieval and recovery evidence](docs/retrieval-benchmarks.md#ci-and-evidence-boundaries), or [reproducible session demo](docs/session-handoff.md).
 
-- **A compact MCP surface.** One `knowledge` tool and one `issues` tool instead of dozens of narrow endpoints, so agents spend their context budget on work rather than tool descriptions. Module selection (`HORIZONLAYER_MODULES`) trims the catalog to what a project actually uses.
-- **Canonical data with a disposable retrieval index.** PostgreSQL 17 stores pages, blocks, typed databases, rows, issues, comments, dependencies, and links. The optional Qdrant-backed RAG index is fully derived: drop it, and it rebuilds from canonical records.
-- **Safe concurrent mutation.** Every mutation carries the record's revision; conflicts return a structured `CONFLICT` envelope agents can reconcile and retry. Lifecycle operations are archive and restore — there is no accidental hard delete.
-- **Disaster recovery as a first-class flow.** Checksummed `.hlbackup` artifacts, a read-only recovery preview, atomic restore in an isolated container, schema validation, and an automatic safety backup before any recovery touches data.
-- **Agent guidance bundled with the tools.** Per-module skill libraries stage into Codex and Claude Code so agents learn the query language and mutation protocol without trial and error.
+> **Status:** Early release on the 0.x line. This README describes the current source checkout; commands using `@latest` run the published npm version. See [CHANGELOG.md](CHANGELOG.md) for unreleased changes. Bundled plugin manifests pin the published package version.
+
+## What it provides
+
+- **Two MCP tools.** One `knowledge` tool and one `issues` tool group the available operations. Module selection (`HORIZONLAYER_MODULES`) trims the catalog to what a project actually uses.
+- **PostgreSQL storage with a rebuildable search index.** PostgreSQL 17 stores pages, blocks, typed databases, rows, issues, comments, dependencies, and links. The optional Qdrant-backed RAG index is fully derived: it rebuilds from canonical records.
+- **Optimistic revisions.** Updates to revisioned records carry the revision the client read. Stale writes return a retryable `CONFLICT`; other refusals identify the condition to resolve. Archive and restore are the public lifecycle operations.
+- **Backup and recovery.** Checksummed `.hlbackup` artifacts, a read-only recovery preview, atomic restore in an isolated container, schema validation, and an automatic safety backup before any recovery touches data.
+- **Bundled agent skills.** Per-module skill libraries stage into Codex and Claude Code covering the query language and mutation protocol.
+
+## See a handoff between sessions
+
+One session saves the decision “Use PostgreSQL as the source of truth” and creates a related task. A fresh MCP process then finds the decision, reads its rationale, and claims the task using its current revision.
+
+![Recorded MCP session handoff: save a decision, restart, retrieve it, and claim work](https://raw.githubusercontent.com/kyle-mirich/horizonlayer/main/docs/assets/session-handoff.gif)
+
+[Read the recorded transcript and reproduce the demo](docs/session-handoff.md). The recording uses scripted MCP clients against a disposable PostgreSQL database; it demonstrates persistence and task coordination, not an LLM benchmark.
 
 ## Architecture
 
@@ -50,11 +59,11 @@ Deeper design writeups live in [docs/engineering-notes.md](docs/engineering-note
 
 `horizonlayer dashboard --open` serves a read-and-edit view of canonical knowledge on loopback only — workspaces, pages and blocks, typed databases with schema editing, archive, and search.
 
-![HorizonLayer dashboard showing a Platform Engineering workspace](docs/assets/dashboard-home.png)
+![HorizonLayer dashboard showing a Platform Engineering workspace](https://raw.githubusercontent.com/kyle-mirich/horizonlayer/main/docs/assets/dashboard-home.png)
 
 Typed databases render as tables with select, number, date, text, and checkbox properties:
 
-![Decision Log typed database in the HorizonLayer dashboard](docs/assets/dashboard-database.png)
+![Decision Log typed database in the HorizonLayer dashboard](https://raw.githubusercontent.com/kyle-mirich/horizonlayer/main/docs/assets/dashboard-database.png)
 
 ## Local quickstart
 
@@ -130,132 +139,14 @@ npx -y horizonlayer@latest dashboard --open
 
 The dashboard listens only on `http://127.0.0.1:4317` by default. This command stays in the foreground; press `Ctrl-C` to stop it without deleting data.
 
-## Docker-managed local runtime
+## Configuration, backup, and troubleshooting
 
-Use this path for the standard local installation. `setup` reuses the saved configuration and Docker volumes. A first `mcp` or `dashboard` launch without saved configuration or an explicit runtime override provisions the same managed runtime. After setup, explicit `DATABASE_URL`, `QDRANT_URL`, and `RAG_ENABLED` values take precedence. For an override on first launch, run `setup` first or use the external PostgreSQL path below.
-
-| What | Location |
-| --- | --- |
-| Runtime configuration (macOS) | `~/Library/Application Support/HorizonLayer/runtime.json` |
-| Runtime configuration (Windows) | `%LOCALAPPDATA%\HorizonLayer\runtime.json` |
-| Runtime configuration (Linux) | `$XDG_CONFIG_HOME/horizonlayer/runtime.json`, or `~/.config/horizonlayer/runtime.json` |
-| Configuration override | Set `HORIZONLAYER_HOME` to a dedicated HorizonLayer directory before its first setup. Relative paths resolve from the current working directory. New runtimes receive a dedicated Docker Compose project based on the normalized absolute directory, so `.` and `..` path aliases share one runtime and equal relative paths in different directories stay separate. Existing saved project names are reused from `runtime.json`. |
-| PostgreSQL and Qdrant data | Docker named volumes. The default runtime uses `horizonlayer_postgres-data` and `horizonlayer_qdrant-data`; an overridden home uses the project prefix recorded in its `runtime.json`. |
-| Downloaded embedding model | `$XDG_CACHE_HOME/horizonlayer/models`, or `~/.cache/horizonlayer/models` |
-
-Stop the managed services while keeping configuration and data:
-
-```bash
-npx -y horizonlayer@latest stop
-```
-
-### Back up and recover canonical data
-
-Create a private, point-in-time Backup of the saved managed runtime:
-
-```bash
-npx -y horizonlayer@latest backup
-npx -y horizonlayer@latest backup /path/to/horizonlayer-data.hlbackup
-```
-
-Without `FILE`, HorizonLayer writes a collision-safe `.hlbackup` file under the runtime's `backups/` directory. The receipt reports its absolute path, snapshot interval, size, checksum, and compatibility versions. A Backup contains the complete PostgreSQL Knowledge and Issue store and must be handled as sensitive data. It excludes Qdrant because the Derived Search Index is rebuilt from PostgreSQL after recovery.
-
-Recovery is deliberately two-step. First preview the exact managed target; preview makes no changes and exits nonzero so it cannot be mistaken for completion:
-
-```bash
-npx -y horizonlayer@latest recover /path/to/horizonlayer-data.hlbackup
-npx -y horizonlayer@latest recover /path/to/horizonlayer-data.hlbackup --yes
-```
-
-Only use `--yes` after checking the artifact path, saved configuration path, Compose project, compatibility, checksum, and trust warning. Confirmed recovery validates the archive, retains a safety Backup of the current database, stops published services, restores atomically in an isolated PostgreSQL container, validates the canonical schema, clears the derived Qdrant collection, and restarts healthy services. It never targets an explicit `DATABASE_URL` and never deletes Docker volumes. Keep the reported safety Backup until the recovered state has been inspected through MCP or the dashboard. See the [Backup and Runtime Recovery guide](docs/backup-and-recovery.md) for the failure model and troubleshooting workflow.
-
-### Reset local development data safely
-
-Resetting is destructive: it permanently removes the managed local PostgreSQL knowledge, Qdrant index, containers, volumes, and saved `runtime.json`. First create and inspect a `.hlbackup`, then run `doctor` and confirm the configuration path is the local runtime you intend to erase. The default `backups/` directory is outside Docker volumes and survives reset.
-
-```bash
-npx -y horizonlayer@latest backup
-npx -y horizonlayer@latest doctor
-npx -y horizonlayer@latest reset --yes
-```
-
-The command uses the saved Compose project, so it removes only that managed runtime. It never targets an external `DATABASE_URL`. Run `setup` again, then recover the retained Backup to return its canonical data to the fresh runtime.
-
-## Advanced: use an existing PostgreSQL instance
-
-This path is for a PostgreSQL instance you operate yourself. It does not start Docker-managed services. The database role must be allowed to apply the canonical schema on first connection.
-
-```bash
-DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/DATABASE' \
-  RAG_ENABLED=false \
-  npx -y horizonlayer@latest mcp
-```
-
-The MCP server uses stdio. To use the dashboard against that same database instead, run:
-
-```bash
-DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/DATABASE' \
-  RAG_ENABLED=false \
-  npx -y horizonlayer@latest dashboard --open
-```
-
-Set `RAG_ENABLED=true` and `QDRANT_URL` only when you also operate a compatible Qdrant instance. Do not run `setup`, `stop`, or `reset` to manage an external PostgreSQL instance.
-
-## Environment variable reference
-
-Source of truth: `src/config.ts` (`loadConfig`) for defaults, `src/localRuntime.ts` (`hasExplicitRuntimeOverride`) for provisioning. Only `DATABASE_URL` suppresses managed provisioning; `RAG_ENABLED` and `QDRANT_URL` never do — they refine the managed runtime instead of replacing its PostgreSQL connection.
-
-| Variable | Default | Scope | Provisioning and lifecycle effect |
-| --- | --- | --- | --- |
-| `DATABASE_URL` | (none) | `mcp`, `dashboard`, `backup`, `recover` | Suppresses managed provisioning and first-launch setup. Managed Backup and Runtime Recovery refuse it. |
-| `DB_HOST` | `localhost` | `mcp`, `dashboard` (external PostgreSQL path) | None. Explicit values take precedence over managed values after setup. |
-| `DB_PORT` | `5432` | `mcp`, `dashboard` (external PostgreSQL path) | None. |
-| `DB_NAME` | `horizon_layer` | `mcp`, `dashboard` (external PostgreSQL path) | None. |
-| `DB_USER` | `postgres` | `mcp`, `dashboard` (external PostgreSQL path) | None. |
-| `DB_PASSWORD` | (empty) | `mcp`, `dashboard` (external PostgreSQL path) | None. |
-| `DB_SSL_MODE` | `disable` | `mcp`, `dashboard` (external PostgreSQL path) | None. |
-| `DB_SSL_REJECT_UNAUTHORIZED` | `true` | `mcp`, `dashboard` (external PostgreSQL path) | None. |
-| `DB_POOL_MAX` | `10` | `mcp`, `dashboard` | None. |
-| `DB_IDLE_TIMEOUT_MS` | `30000` | `mcp`, `dashboard` | None. |
-| `DB_CONNECTION_TIMEOUT_MS` | `10000` | `mcp`, `dashboard` | None. |
-| `DB_STATEMENT_TIMEOUT_MS` | `30000` | `mcp`, `dashboard` | None. |
-| `DASHBOARD_PORT` | `4317` | `dashboard` (`--port` overrides it per run) | None. |
-| `RAG_ENABLED` | `false` (external); `true` (managed) | `mcp`, `dashboard`, `setup`, `doctor` | Never suppresses PostgreSQL provisioning. When false, managed launches start only PostgreSQL and setup skips embedding warm-up. Allowed for Backup and Recovery; Recovery still clears and verifies Qdrant. |
-| `QDRANT_URL` | `http://127.0.0.1:6333` | `mcp`, `setup` | Never suppresses provisioning. Allowed for Backup; Runtime Recovery refuses it. |
-| `QDRANT_API_KEY` | (none) | `mcp`, `setup` | None. Requires `https` on non-loopback hosts. |
-| `QDRANT_COLLECTION` | `horizonlayer_rag` | `mcp`, `setup` | None. |
-| `QDRANT_TIMEOUT_MS` | `5000` | `mcp` | None. |
-| `EMBEDDING_MODEL` | `onnx-community/all-MiniLM-L6-v2-ONNX` | `mcp`, `setup` (warm-up) | None. |
-| `EMBEDDING_REVISION` | `aff7a1dc4e8a1ea593e6ea21e95c22ef0a25966f` | `mcp`, `setup` (warm-up) | None. |
-| `EMBEDDING_DTYPE` | `fp32` | `mcp`, `setup` (warm-up) | None. |
-| `EMBEDDING_ALLOW_DOWNLOAD` | `true` | `setup` (warm-up) | None. |
-| `EMBEDDING_CACHE_DIR` | `$XDG_CACHE_HOME/horizonlayer/models`, or `~/.cache/horizonlayer/models` | `mcp`, `setup` (warm-up) | None. |
-| `APP_NAME` | `Horizon Layer` | `mcp` (server display name) | None. |
-| `HORIZONLAYER_HOME` | (none) | `setup`, launcher | Selects a dedicated runtime directory and stable dedicated Docker Compose project. |
-| `HORIZONLAYER_MODULES` | (both modules) | `setup`, `mcp` | Selects the `knowledge`, `issues`, or `both` tool catalog. |
-| `HORIZONLAYER_INTEGRATION_DATABASE_URL` | (none) | Integration tests only | Never read by the launcher or MCP server. |
-
-## Troubleshooting
-
-| Symptom | Recovery |
-| --- | --- |
-| `doctor` says configuration is missing | Run `setup` first. |
-| `doctor` says configuration is invalid | Fix the named variable values against the [environment variable reference](#environment-variable-reference), then run `doctor` again. |
-| `mcp` or `dashboard` reports no PostgreSQL connection | Run `setup` for the managed runtime, or set `DATABASE_URL` to an existing PostgreSQL instance. |
-| `install` cannot stage the plugin | Check the reported host path for a conflicting file or directory, remove or rename it, then rerun `install`. Restart the agent client after installing. |
-| Setup warns the embedding model could not load | Expected degradation: setup continues with RAG disabled. Rerun `setup` to retry the warm-up. |
-| Docker is missing or its daemon is unavailable | Install or start Docker Desktop (macOS/Windows), or start Docker Engine (Linux), then rerun `setup`. |
-| PostgreSQL or Qdrant is unavailable | Run `doctor`, inspect Docker Desktop or the local containers, then rerun `setup`. The launcher reports the failed dependency and recovery direction. |
-| No candidate local port is available | Free one of the reported loopback ports, then rerun `setup`. Setup chooses an available supported port automatically. |
-| Another HorizonLayer lifecycle command is already running | Let it finish, then rerun the command. If it was interrupted and no lifecycle command remains, remove the reported `.setup.lock` file and retry. |
-| Backup refuses an existing destination | Choose a new `.hlbackup` path. HorizonLayer never overwrites an existing file. |
-| Recovery preview exits with status 1 | Expected: preview is read-only. Review its output, then append `--yes` to the exact displayed command only if the target and artifact are correct. |
-| Backup validation or compatibility fails | Keep the current runtime running. Use an intact HorizonLayer `.hlbackup` produced by a compatible PostgreSQL 17 managed runtime; do not edit or rename another archive format. |
-| Confirmed recovery fails | Read whether the receipt says the original state was preserved, the safety Backup was restored, or valid recovered data was retained. Keep both artifact paths, run `doctor`, and follow [recovery troubleshooting](docs/backup-and-recovery.md#failure-outcomes-and-troubleshooting). |
-| `runtime.json` is invalid or unreadable | Restore a backup to retain existing data. For a disposable development runtime, inspect the saved project/volume names from that backup before manually removing only those resources and the invalid config; then run `setup`. |
-| An external database cannot connect | Check `DATABASE_URL`, network access, and the role's schema permissions; then launch `mcp` or `dashboard` with the corrected environment. |
-
-Run `npx -y horizonlayer@latest help` for the complete command list. Help prints to stdout; `npx -y horizonlayer@latest --version` prints the package version.
+- [Runtime locations and lifecycle](docs/configuration.md#docker-managed-local-runtime)
+- [Existing PostgreSQL instances](docs/configuration.md#advanced-use-an-existing-postgresql-instance)
+- [Environment variables](docs/configuration.md#environment-variable-reference)
+- [Backup and recovery](docs/backup-and-recovery.md), including failure outcomes
+- [Resetting development data](docs/configuration.md#reset-local-development-data-safely)
+- [Troubleshooting](docs/configuration.md#troubleshooting)
 
 ## Data model and behavior
 
@@ -271,6 +162,12 @@ Issue queries use a compact, AND-only Jira-style language. Supported filters are
 Existing integrations can temporarily launch `horizonlayer legacy-mcp` to expose the former `workspace`, `session`, `page`, `database`, `row`, `link`, `search`, and `run` catalog. This mode is explicitly opt-in. Search responses there retain compact, lossless typed references by default.
 
 Read [the database guide](docs/database.md) for the typed model, [the flow guide](docs/flows.md) for the startup and MCP journeys, and [the glossary](docs/glossary.md) for the exact vocabulary the code and docs share.
+
+## Contributing and releases
+
+Bug reports and feature requests are welcome through [GitHub Issues](https://github.com/kyle-mirich/horizonlayer/issues/new/choose). You do not need access to the maintainer's local tracker. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, contribution ideas, and the review workflow.
+
+Read the [release notes](https://github.com/kyle-mirich/horizonlayer/releases) for shipped versions and [CHANGELOG.md](CHANGELOG.md) for upcoming changes. Report vulnerabilities privately using [GitHub's security reporting form](https://github.com/kyle-mirich/horizonlayer/security/advisories/new).
 
 ## Development and verification
 

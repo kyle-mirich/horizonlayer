@@ -2,6 +2,14 @@
 
 HorizonLayer is a local PostgreSQL MCP server. Changes must preserve workspace isolation, the canonical PostgreSQL model, optimistic revisions, archive/restore lifecycle, and local runtime behavior. The normative vocabulary lives in [docs/glossary.md](docs/glossary.md); design rationale for the main seams lives in [docs/engineering-notes.md](docs/engineering-notes.md).
 
+## Bugs, ideas, and first contributions
+
+Use [GitHub Issues](https://github.com/kyle-mirich/horizonlayer/issues/new/choose) to report a bug or propose a feature. Include a minimal reproduction, expected behavior, and your Node.js version, operating system, and runtime configuration. Remove credentials and private knowledge from logs before sharing them. Report vulnerabilities through [SECURITY.md](SECURITY.md).
+
+Documentation corrections, reproducible bug reports, and focused regression tests are useful first contributions. For a larger change, open a feature request before implementing it so we can agree on scope. You may submit a small documentation fix directly as a pull request.
+
+The maintainer uses HorizonLayer locally for implementation planning. Contributors do not need to install that tracker or access the maintainer's database. Public reports and pull requests remain the place for contributor discussion and user-visible status. When a public report leads to internal work, the maintainer links the original report in the internal ticket and posts the outcome on GitHub.
+
 ## Local setup
 
 Use Node.js 22 or later. Docker is required for launcher-backed local smoke tests.
@@ -16,7 +24,7 @@ npm run test:smoke:recovery
 npm pack --dry-run
 ```
 
-`npm run verify` runs linting, type checks, and unit tests. `npm test` and `npm run test:coverage` explicitly exclude `*.integration.test.ts`, so these ordinary local checks stay fast and never require Docker, PostgreSQL, Qdrant, or another external service. Vitest also turns React “not wrapped in act(...)” warnings into test failures without hiding the original warning. Coverage enforces the repository's configured branch, function, line, and statement thresholds. Run the focused test suite that covers a change, then run the full verification and coverage gates before opening a pull request. Changes to launcher, installer, runtime configuration, or package contents also need a clean-environment and packed-artifact check.
+`npm run verify` runs linting, type checks, and unit tests. `npm test` and `npm run test:coverage` exclude `*.integration.test.ts`, so these checks stay fast and never require Docker, PostgreSQL, Qdrant, or another external service. Vitest turns React “not wrapped in act(...)” warnings into test failures without hiding the original warning. Coverage enforces the repository's configured branch, function, line, and statement thresholds. Run the focused test suite that covers a change, then the full verification and coverage gates before opening a pull request. Changes to launcher, installer, runtime configuration, or package contents also need a clean-environment and packed-artifact check.
 
 ### Mutation testing
 
@@ -75,4 +83,8 @@ Keep each commit focused on one change; the subject line should complete "this c
 - Preserve user data: public lifecycle operations are archive and restore, not broad destructive deletion.
 - Describe verification performed and any Docker, platform, or external-service assumptions in the pull request.
 
-For a bug or feature discussion, file it in the local HorizonLayer MCP issue tracker (see [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)) instead of opening a GitHub issue. For a security-sensitive issue, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
+Link a relevant public issue in your pull request when one exists. The maintainer reviews behavior, data-safety implications, documentation, and verification results; a passing check alone does not imply acceptance. See [the internal tracker guide](docs/agents/issue-tracker.md) only if you are working inside the maintainer's configured environment.
+
+## Release maintenance
+
+Record user-visible changes under `Unreleased` in [CHANGELOG.md](CHANGELOG.md). When publishing a version, move those entries into a dated version section and publish matching GitHub release notes for the verified version tag. Keep npm versions, bundled plugin pins, and release notes aligned. Describe compatibility limits and required operator steps explicitly; do not list unreleased changes as available in the current npm package.

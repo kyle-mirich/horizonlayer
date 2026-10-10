@@ -15,10 +15,7 @@ The repository does not currently ship hosted auth, SSO, or a multi-tenant produ
 
 Please do not open public GitHub issues for suspected security vulnerabilities.
 
-Prefer one of these private channels:
-
-- GitHub Security Advisories for this repository, if enabled
-- direct contact with the repository owner through GitHub
+Use the [private vulnerability reporting form](https://github.com/kyle-mirich/horizonlayer/security/advisories/new) for this repository. GitHub private vulnerability reporting is enabled; the report is shared privately with repository maintainers.
 
 Please include:
 

@@ -1,6 +1,6 @@
 # Issue tracker: HorizonLayer MCP
 
-This repository uses the local HorizonLayer MCP as its issue tracker for engineering work. Use the `issues` tool for plans, decision tickets, implementation tickets, comments, status, ownership, and dependencies. Use the `knowledge` tool for durable research, specifications, decisions, and other context. Do not use GitHub Issues as the workflow state for this repository.
+This repository uses the local HorizonLayer MCP as its issue tracker for engineering work. Use the `issues` tool for plans, decision tickets, implementation tickets, comments, status, ownership, and dependencies. Use the `knowledge` tool for durable research, specifications, decisions, and other context. GitHub Issues is the public intake and discussion channel for external contributors; the local tracker holds internal implementation state. Contributors do not need access to the local tracker. Include the public issue URL in internal tickets created from a report, and keep user-visible outcomes on the public issue. Creating internal work does not authorize an agent to post to GitHub; follow the user's communication instructions.
 
 ## Configuration
 
