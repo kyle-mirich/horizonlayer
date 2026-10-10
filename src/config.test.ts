@@ -1,7 +1,10 @@
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { config, configIssueToEnvVar, formatConfigError, loadConfig, reloadConfig } from './config.js';
+
+const packageVersion = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 
 describe('environment configuration', () => {
   it('refreshes the live binding after the launcher applies runtime values', () => {
@@ -42,7 +45,7 @@ describe('environment configuration', () => {
       },
       server: {
         name: 'Horizon Layer',
-        version: '0.1.1',
+        version: packageVersion,
       },
     });
   });
@@ -95,7 +98,7 @@ describe('environment configuration', () => {
         qdrant_url: 'https://qdrant.internal:7443',
         timeout_ms: 7500,
       },
-      server: { name: 'Agent Knowledge', version: '0.1.1' },
+      server: { name: 'Agent Knowledge', version: packageVersion },
     });
   });
 

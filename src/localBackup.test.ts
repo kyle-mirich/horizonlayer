@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +16,7 @@ import {
 import type { LocalRuntimeConfig } from './localRuntime.js';
 
 const temporaryPaths: string[] = [];
+const packageVersion = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 
 async function temporaryDirectory(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'horizonlayer-managed-backup-'));
@@ -124,7 +126,7 @@ describe('managed runtime Backup', () => {
       configurationPath: join(home, 'runtime.json'),
       manifest: {
         completed_at: '2026-08-10T20:00:01.000Z',
-        horizonlayer_version: '0.1.1',
+        horizonlayer_version: packageVersion,
         postgresql: {
           pg_dump_version: 'pg_dump (PostgreSQL) 17.6',
           server_major: 17,
