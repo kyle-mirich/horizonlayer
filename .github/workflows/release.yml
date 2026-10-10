@@ -1,0 +1,96 @@
+name: Publish package and release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+      - name: Validate release tag and source
+        run: |
+          git merge-base --is-ancestor HEAD origin/main
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)
+            || process.env.GITHUB_REF_NAME !== `v${version}`) {
+            throw new Error('A stable vX.Y.Z tag must match package.json exactly.');
+          }
+          JS
+      - name: Install publishing CLI and locked dependencies
+        run: |
+          npm install --global npm@11.15.0
+          npm ci
+      - name: Build and pack the release artifact
+        id: package
+        run: |
+          npm run build
+          npm pack --ignore-scripts --json > release-package.json
+          node --input-type=module <<'JS'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const [artifact] = JSON.parse(readFileSync('release-package.json', 'utf8'));
+          if (!/^horizonlayer-\d+\.\d+\.\d+\.tgz$/.test(artifact.filename)) {
+            throw new Error('Unexpected release artifact filename.');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `tarball=${artifact.filename}\n`);
+          JS
+      - name: Check for an identical published version
+        id: registry
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const [artifact] = JSON.parse(readFileSync('release-package.json', 'utf8'));
+          const response = await fetch(`https://registry.npmjs.org/horizonlayer/${artifact.version}`);
+          let published = false;
+          if (response.ok) {
+            const existing = await response.json();
+            if (existing.dist?.integrity !== artifact.integrity) {
+              throw new Error('This npm version already contains a different artifact. Release a new version.');
+            }
+            published = true;
+          } else if (response.status !== 404) {
+            throw new Error(`npm registry lookup failed: HTTP ${response.status}`);
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `published=${published}\n`);
+          JS
+      - name: Publish to npm through trusted publishing
+        if: steps.registry.outputs.published != 'true'
+        env:
+          RELEASE_TARBALL: ${{ steps.package.outputs.tarball }}
+        run: npm publish "$RELEASE_TARBALL" --access public --ignore-scripts
+      - name: Create or complete the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TARBALL: ${{ steps.package.outputs.tarball }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$RELEASE_TARBALL" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$RELEASE_TARBALL" \
+              --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+              --title "HorizonLayer $GITHUB_REF_NAME"
+          fi
