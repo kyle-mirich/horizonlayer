@@ -4,6 +4,10 @@ All notable changes to HorizonLayer are documented here.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-09
+
+Existing plugin installations keep their previous package pin. Run `npx -y horizonlayer@latest install all` (or `install codex` / `install claude` for one host), then restart the agent to use v0.1.2. Replace the removed `grill-me` and `grilling` commands with `grill-with-docs`.
+
 ### Added
 
 - A reproducible session-handoff demo using two separate MCP processes and an isolated PostgreSQL database, with a recorded walkthrough.
@@ -52,6 +56,7 @@ All notable changes to HorizonLayer are documented here.
 - Engineering notes ([docs/engineering-notes.md](docs/engineering-notes.md)) and project glossary ([docs/glossary.md](docs/glossary.md)).
 - Verification gates: 657 unit tests, 90% coverage thresholds, PostgreSQL integration suites, and Docker-backed smoke journeys for the packed CLI.
 
-[Unreleased]: https://github.com/kyle-mirich/horizonlayer/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/kyle-mirich/horizonlayer/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/kyle-mirich/horizonlayer/releases/tag/v0.1.2
 [0.1.1]: https://github.com/kyle-mirich/horizonlayer/releases/tag/v0.1.1
 [0.1.0]: https://github.com/kyle-mirich/horizonlayer/releases/tag/v0.1.0

@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -7,6 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installAgentPlugins, adaptMcpServersForPlatform, parseInstallTarget } from './install.js';
 
 const pluginSource = fileURLToPath(new URL('../plugins/horizonlayer/', import.meta.url));
+const packageVersion = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+  version: string;
+}).version;
 const marketplaceSource = fileURLToPath(new URL('../', import.meta.url));
 const temporaryHomes: string[] = [];
 const spawnSyncMock = vi.mocked(spawnSync);
@@ -77,7 +81,7 @@ describe('plugin installer', () => {
     await expect(readFile(join(target, '.horizonlayer-managed-marketplace.json'), 'utf8'))
       .resolves.toContain('"kind":"claude-marketplace"');
     await expect(readFile(join(target, 'plugins', 'horizonlayer', '.mcp.json'), 'utf8'))
-      .resolves.toContain('horizonlayer@0.1.1');
+      .resolves.toContain(`horizonlayer@${packageVersion}`);
   });
 
   it('does not overwrite an unmanaged Claude marketplace target', async () => {
@@ -664,7 +668,7 @@ describe('plugin installer', () => {
       platform: 'win32',
       runCommand: vi.fn(),
     });
-    const expectedArgs = ['/c', 'npx', '-y', 'horizonlayer@0.1.1', 'mcp'];
+    const expectedArgs = ['/c', 'npx', '-y', `horizonlayer@${packageVersion}`, 'mcp'];
 
     for (const stagedPath of [
       join(codexPluginTarget(home), '.mcp.json'),
