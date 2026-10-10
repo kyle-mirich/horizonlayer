@@ -2,13 +2,13 @@
 
 ![HorizonLayer — Persistent knowledge. Shared work.](https://raw.githubusercontent.com/kyle-mirich/horizonlayer/main/docs/assets/horizonlayer-banner.png)
 
-[![CI](https://github.com/kyle-mirich/horizonlayer/actions/workflows/ci.yml/badge.svg)](https://github.com/kyle-mirich/horizonlayer/actions/workflows/ci.yml) [![npm version](https://img.shields.io/npm/v/horizonlayer)](https://www.npmjs.com/package/horizonlayer) [![license](https://img.shields.io/npm/l/horizonlayer)](LICENSE) [![node](https://img.shields.io/node/v/horizonlayer)](package.json)
+[![npm version](https://img.shields.io/npm/v/horizonlayer)](https://www.npmjs.com/package/horizonlayer) [![license](https://img.shields.io/npm/l/horizonlayer)](LICENSE) [![node](https://img.shields.io/node/v/horizonlayer)](package.json)
 
 HorizonLayer is a local MCP server for project knowledge and issue tracking. It stores data in PostgreSQL on your machine and exposes it through `knowledge` and `issues` MCP tools. Optional Qdrant-backed semantic search and a React dashboard are included for retrieval, inspection, and editing.
 
 Coding sessions end; project decisions and unfinished work should survive them. HorizonLayer lets the next session retrieve the rationale and claim a ready task through the same MCP connection.
 
-Explore the [engineering decisions](docs/engineering-notes.md), [retrieval and recovery evidence](docs/retrieval-benchmarks.md#ci-and-evidence-boundaries), or [reproducible session demo](docs/session-handoff.md).
+Explore the [engineering decisions](docs/engineering-notes.md), [retrieval and recovery evidence](docs/retrieval-benchmarks.md#local-verification-and-historical-evidence), or [reproducible session demo](docs/session-handoff.md).
 
 > **Status:** Early release on the 0.x line. This README describes the current source checkout; commands using `@latest` run the published npm version. See [CHANGELOG.md](CHANGELOG.md) for unreleased changes. Bundled plugin manifests pin the published package version.
 
@@ -87,7 +87,7 @@ Setup searches the whole catalog when reusing matching workspaces and projects. 
 
 A PostgreSQL-only first setup records port `6333` for future Qdrant startup without checking its availability. Before enabling RAG later, ensure that the Qdrant port saved in `runtime.json` is free. Existing runtime ports are reused; a conflict is reported by Docker Compose without changing the saved configuration.
 
-For scripts or CI, provide every choice without prompts:
+For unattended setup, provide every choice without prompts:
 
 ```bash
 npx -y horizonlayer@latest setup --non-interactive --modules both --skills none

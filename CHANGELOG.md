@@ -13,6 +13,8 @@ All notable changes to HorizonLayer are documented here.
 
 ### Changed
 
+- Verification now runs locally under the required `AGENTS.md` policy; GitHub Actions CI and its README badge have been removed. Actions is reserved for release/deployment.
+- A delivery-only workflow publishes stable version tags to npm and creates matching GitHub releases, using npm trusted publishing and preserving the packed artifact on retries.
 - Consolidated the interview workflow into `grill-with-docs`; removed the bundled `grill-me` and `grilling` commands and updated their callers.
 - Shared the managed-directory staging and rollback implementation between Codex and Claude plugin installs.
 - Simplified dashboard home, archive, and error-state copy.
@@ -24,7 +26,7 @@ All notable changes to HorizonLayer are documented here.
 - First-run setup, invalid-configuration errors, and dependency-failure messages that identify recovery steps.
 - Self-contained references in installed plugins and usable dashboard copy-and-paste instructions.
 - Cross-platform `npm ci` compatibility by regenerating the lockfile with npm 10.
-- PostgreSQL CI coverage now includes the issue-blocker integration suite.
+- PostgreSQL integration coverage includes the issue-blocker suite.
 - Documentation now distinguishes public GitHub reports from internal planning, links directly to private vulnerability reporting, and describes embedding downloads and recovery failure outcomes precisely.
 - Aggregate revision and archive invariants, queued dashboard edits, stable catalog pagination, canonical search results, and concurrent Issue graph writes.
 - PostgreSQL-only launches honor disabled RAG, and relative runtime homes retain separate managed services.

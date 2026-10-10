@@ -28,7 +28,7 @@ npm pack --dry-run
 
 ### Mutation testing
 
-`npm run test:mutation` runs StrykerJS with the Vitest runner over a focused, local-only scope (`src/references.ts`, `src/tools/common.ts`, `src/tools/issueQuery.ts`, `src/tools/searchFormat.ts`; see `stryker.config.mjs`). It needs no Docker, PostgreSQL, Qdrant, or external service. The HTML report lands in `reports/mutation/` (gitignored). Thresholds are advisory (`high: 80, low: 60, break: null`): a low score never fails local runs or CI — treat surviving mutants as test-gap signals, strengthen the co-located `*.test.ts`, and re-run the focused scope. The initial baseline is 83.80% overall (`common.ts` 87.56, `issueQuery.ts` 79.19, `searchFormat.ts` 90.12, `references.ts` 78.08). Widen `mutate` only after the baseline is green, keeping new entries to fast pure modules so the suite stays practical.
+`npm run test:mutation` runs StrykerJS with the Vitest runner over a focused, local-only scope (`src/references.ts`, `src/tools/common.ts`, `src/tools/issueQuery.ts`, `src/tools/searchFormat.ts`; see `stryker.config.mjs`). It needs no Docker, PostgreSQL, Qdrant, or external service. The HTML report lands in `reports/mutation/` (gitignored). Thresholds are advisory (`high: 80, low: 60, break: null`): a low score never fails the run — treat surviving mutants as test-gap signals, strengthen the co-located `*.test.ts`, and re-run the focused scope. The initial baseline is 83.80% overall (`common.ts` 87.56, `issueQuery.ts` 79.19, `searchFormat.ts` 90.12, `references.ts` 78.08). Widen `mutate` only after the baseline is green, keeping new entries to fast pure modules so the suite stays practical.
 
 ### PostgreSQL integration tests
 
@@ -41,7 +41,7 @@ HORIZONLAYER_INTEGRATION_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:54
 
 The database role must be able to create and drop schemas and install the `pgcrypto` and `pg_trgm` extensions. The suites create unique schemas, apply the canonical `schema.sql`, run serially, and remove their schemas afterward. The command fails when `HORIZONLAYER_INTEGRATION_DATABASE_URL` is unset so an integration run cannot silently report only skipped tests. Do not point it at a database whose availability or contents matter.
 
-The GitHub Actions workflow defines five Node.js 22 jobs: verification, a non-blocking mutation report, PostgreSQL integration, a real retrieval benchmark, and packed CLI recovery. The verification job has no service containers and runs linting, typechecking, unit tests, coverage, and the production build. The integration job starts a fresh PostgreSQL 17 service, sets `HORIZONLAYER_INTEGRATION_DATABASE_URL`, and executes all nine PostgreSQL suites. The retrieval job additionally provisions Qdrant and uses the pinned local embedding model; the packed recovery job exercises an isolated Docker-managed runtime. Both new jobs retain machine-readable evidence artifacts for the exact checked-out commit. See [the benchmark guide](docs/retrieval-benchmarks.md) for reproduction and evidence limits.
+Verification runs locally; this repository does not use GitHub Actions for CI. Before pushing or merging, run the focused tests, `npm run verify`, `npm run test:coverage`, `npm run build`, and `git diff --check`, and record the results in the PR. Run the PostgreSQL suites for database changes, Docker smoke and packed-artifact checks for runtime/installer/package changes, and real retrieval benchmarks for search changes. GitHub Actions is reserved for release/deployment (CD). See [AGENTS.md](https://github.com/kyle-mirich/horizonlayer/blob/main/AGENTS.md#local-verification-and-delivery) for the agent policy and [the benchmark guide](docs/retrieval-benchmarks.md) for local reproduction and evidence limits.
 
 ### Managed recovery smoke test
 
@@ -70,7 +70,7 @@ Use concise, imperative commit messages with a type prefix:
 - `test:` test-only change
 - `refactor:` behavior-preserving restructuring
 - `docs:` documentation only
-- `chore:` tooling, CI, dependencies
+- `chore:` tooling, delivery, dependencies
 - `release:` version preparation
 
 Keep each commit focused on one change; the subject line should complete "this commit will …".
@@ -88,3 +88,7 @@ Link a relevant public issue in your pull request when one exists. The maintaine
 ## Release maintenance
 
 Record user-visible changes under `Unreleased` in [CHANGELOG.md](CHANGELOG.md). When publishing a version, move those entries into a dated version section and publish matching GitHub release notes for the verified version tag. Keep npm versions, bundled plugin pins, and release notes aligned. Describe compatibility limits and required operator steps explicitly; do not list unreleased changes as available in the current npm package.
+
+After local verification and merging the version changes into `main`, push a stable `vX.Y.Z` tag matching `package.json`. The delivery-only [release workflow](https://github.com/kyle-mirich/horizonlayer/blob/main/.github/workflows/release.yml) builds and packs that source, publishes the tarball to npm, and creates a GitHub release with generated notes and the same tarball attached. It runs no tests or benchmarks. If publishing succeeds but creating the release fails, rerun the workflow: an identical npm artifact is reused; a different artifact at the same version is refused.
+
+Before the first automated release, configure [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) for the existing `horizonlayer` package with GitHub user `kyle-mirich`, repository `horizonlayer`, workflow filename `release.yml`, no environment name, and direct `npm publish` allowed. The workflow uses OIDC rather than an npm token secret. Newly configured publishers must complete a successful publish within two days, so configure this when preparing the next release. Merging the workflow does not publish a version or create a tag.

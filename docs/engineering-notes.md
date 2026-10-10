@@ -54,7 +54,7 @@ The installer stages per-module skill libraries (`plugins/horizonlayer/skills/{k
 
 ## Tests
 
-- **Unit tests across server and dashboard**, with v8 coverage gates at 90% for branches, functions, lines, and statements enforced in CI.
+- **Unit tests across server and dashboard**, with local v8 coverage gates at 90% for branches, functions, lines, and statements.
 - **Contract tests** pin cross-layer agreements: emitted SQL vs `schema.sql` table sets, MCP envelope shapes, compact-reference grammar, and query-language parsing.
 - **PostgreSQL integration suites** run real concurrency, optimistic-revision, and RAG-generation scenarios against disposable schemas, failing hard (not skipping) when the database variable is unset.
 - **Docker-backed smoke journeys** drive the packed CLI exactly as users do: setup → MCP → dashboard → backup → recover, in isolated temporary homes.

@@ -57,7 +57,7 @@ that interactive deadlines always succeed.
 Missing the disposable database URL exits 2 with a blocked report. Unavailable
 semantic dependencies are reported as blocked, never silently replaced by mocks
 or lexical search. Correctness, unexpected execution, and cleanup failures exit 1.
-Poor relevance scores are recorded without failing CI against an invented quality
+Poor relevance scores are recorded without failing the run against an invented quality
 threshold. Normal no-answer retrieval has no calibrated abstention threshold.
 
 On memory-constrained machines, set `HORIZONLAYER_TEST_MAX_WORKERS=1` for
@@ -133,15 +133,15 @@ running any recovery stage. A nonzero preview/refusal command is expected only
 when the existing smoke explicitly asserts it. The wrapper's total duration
 includes packing/build; `smoke_started_at` marks the later journey start.
 
-## CI and evidence boundaries
+## Local verification and historical evidence
 
-[CI](../.github/workflows/ci.yml) keeps unit/coverage/build and real PostgreSQL
-integration checks, and adds two bounded jobs: real PostgreSQL/Qdrant retrieval and
-packed public CLI recovery. Both always upload their JSON evidence using the exact
-checkout SHA in the artifact name. Model assets are cached by pinned revision.
-Each report records the actual checked-out HEAD (including a pull-request merge
-commit when GitHub uses one), so a badge or old artifact must not be applied to a
-newer tree.
+Verification and benchmarks run locally. GitHub Actions is reserved for delivery;
+the previous CI workflow has been removed. Follow the commands above and retain
+their JSON reports with the exact checked-out HEAD, source-tree digest, and model
+revision. A report from an older commit must not be applied to a newer tree.
+
+The GitHub Actions run below is historical benchmark evidence from the former CI
+workflow, rather than the current verification policy.
 
 The benchmark and recovery milestone merged in [PR #42](https://github.com/kyle-mirich/horizonlayer/pull/42)
 as [main commit `4367381312f2f30f099424c66cb6baaaa36af2bb`](https://github.com/kyle-mirich/horizonlayer/commit/4367381312f2f30f099424c66cb6baaaa36af2bb).
