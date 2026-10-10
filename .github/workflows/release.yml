@@ -81,7 +81,7 @@ jobs:
         if: steps.registry.outputs.published != 'true'
         env:
           RELEASE_TARBALL: ${{ steps.package.outputs.tarball }}
-        run: npm publish "$RELEASE_TARBALL" --access public --ignore-scripts
+        run: npm publish "./$RELEASE_TARBALL" --access public --ignore-scripts --tag latest
       - name: Create or complete the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
