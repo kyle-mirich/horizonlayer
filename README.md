@@ -121,6 +121,8 @@ npx -y horizonlayer@latest install all
 
 Any other MCP-capable agent works without the plugin: register a stdio MCP server whose command is `npx` with args `-y horizonlayer@latest mcp`. On Windows the installer writes the equivalent `cmd /c npx ...` launch into staged configurations automatically, because Windows cannot spawn `npx` directly; the portable `mcp.json` keeps the bare `npx` token as the Agent Plugins specification requires.
 
+The Codex plugin includes HorizonLayer artwork for its composer icon and logo. The MCP server also advertises the HorizonLayer mark and distinct Knowledge and Issues icons as self-contained image data, so supported clients can display them without a network request. Clients control where icons appear and how tool loading is animated. After updating the plugin, reinstall it and restart Codex to refresh cached artwork; MCP metadata comes from the server version configured by the client.
+
 ### 4. Create and query your first typed record
 
 After restarting the agent, paste this into its chat. It uses the installed HorizonLayer MCP tools and returns the identifiers and query result in the chat:

@@ -2,6 +2,7 @@ import { config } from './config.js';
 import { registerCoreTools } from './tools/core.js';
 import { MODULES, registerModuleTools, type HorizonModule, type ToolCatalogMode } from './tools/modules.js';
 import { AppServer } from './mcp.js';
+import { horizonLayerIcons } from './branding.js';
 
 export interface CreateAppServerOptions {
   catalogMode?: ToolCatalogMode;
@@ -36,6 +37,9 @@ export function createAppServer(options: CreateAppServerOptions = {}): AppServer
       'Mutations require the latest revision; archive and restore replace public hard deletes.',
     ];
   const server = new AppServer({
+    title: 'HorizonLayer',
+    websiteUrl: 'https://github.com/kyle-mirich/horizonlayer',
+    icons: horizonLayerIcons,
     instructions: instructions.join(' '),
     name: config.server.name,
     version: config.server.version,

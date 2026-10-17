@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AppServer, AppToolDefinition } from '../mcp.js';
+import { issuesIcons, knowledgeIcons } from '../branding.js';
 import {
   archiveIssueProject,
   createIssueProject,
@@ -75,6 +76,8 @@ function invalidInput(label: string, error: z.ZodError): Error {
 function knowledgeDefinition(): AppToolDefinition<typeof KnowledgeSchema> {
   return {
     name: 'knowledge',
+    title: 'HorizonLayer Knowledge',
+    icons: knowledgeIcons,
     description: 'Use durable workspaces, pages, typed databases, search, runs, and explicit links. Content is expanded only when requested.',
     parameters: KnowledgeSchema,
     outputSchema: ModuleOutputSchema,
@@ -237,6 +240,8 @@ async function executeIssueAction(action: z.infer<typeof IssueAction>, input: Re
 function issuesDefinition(): AppToolDefinition<typeof IssuesSchema> {
   return {
     name: 'issues',
+    title: 'HorizonLayer Issues',
+    icons: issuesIcons,
     description: 'Manage Jira-style projects, Issues, comments, subtasks, dependencies, claims, compact queries, and explicit knowledge links.',
     parameters: IssuesSchema,
     outputSchema: ModuleOutputSchema,

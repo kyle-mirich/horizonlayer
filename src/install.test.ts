@@ -196,6 +196,14 @@ describe('plugin installer', () => {
     );
     await expect(readFile(join(target, '.horizonlayer-managed-plugin.json'), 'utf8'))
       .resolves.toContain('"kind":"codex-plugin"');
+    const manifest = await readJson(join(target, '.codex-plugin', 'plugin.json'));
+    const artwork = manifest.interface as { composerIcon: string; logo: string };
+    for (const path of [artwork.composerIcon, artwork.logo]) {
+      expect(path).toMatch(/^\.\/assets\//u);
+      const image = await readFile(join(target, path));
+      expect(image.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+      expect(image).toEqual(await readFile(join(pluginSource, path)));
+    }
   });
 
   it('installs only the bundled skills selected for the project modules', async () => {

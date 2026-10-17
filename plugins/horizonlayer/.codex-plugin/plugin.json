@@ -28,6 +28,8 @@
       "Plan uncertain work with Wayfinder, then hand clear work to Implement.",
       "Find and claim the next ready HorizonLayer Issue."
     ],
-    "brandColor": "#2E6256"
+    "brandColor": "#2E6256",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/logo.png"
   }
 }

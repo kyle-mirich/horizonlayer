@@ -8,6 +8,7 @@ import {
   ListToolsRequestSchema,
   McpError,
   type CallToolResult,
+  type Implementation,
   type Tool,
   type ToolAnnotations,
 } from '@modelcontextprotocol/sdk/types.js';
@@ -16,6 +17,8 @@ import type { z } from 'zod';
 
 export interface AppToolDefinition<Schema extends z.ZodTypeAny> {
   name: string;
+  title?: Tool['title'];
+  icons?: Tool['icons'];
   description?: string;
   annotations?: ToolAnnotations;
   parameters: Schema;
@@ -23,14 +26,14 @@ export interface AppToolDefinition<Schema extends z.ZodTypeAny> {
   execute: (parameters: z.infer<Schema>) => CallToolResult | Promise<CallToolResult>;
 }
 
-export interface AppServerOptions {
-  name: string;
-  version: string;
+export interface AppServerOptions extends Implementation {
   instructions?: string;
 }
 
 interface StoredTool {
   name: string;
+  title?: Tool['title'];
+  icons?: Tool['icons'];
   description?: string;
   annotations?: ToolAnnotations;
   parameters: z.ZodTypeAny;
@@ -74,11 +77,12 @@ export class AppServer extends EventEmitter {
 
   constructor(options: AppServerOptions) {
     super();
+    const { instructions, ...serverInfo } = options;
     this.server = new Server(
-      { name: options.name, version: options.version },
+      serverInfo,
       {
         capabilities: { tools: {} },
-        instructions: options.instructions,
+        instructions,
       }
     );
 
@@ -90,6 +94,8 @@ export class AppServer extends EventEmitter {
       tools: await Promise.all(
         [...this.tools.values()].map(async (tool) => ({
           name: tool.name,
+          title: tool.title,
+          icons: tool.icons,
           description: tool.description,
           annotations: tool.annotations,
           inputSchema: await this.inputSchema(tool.parameters),
